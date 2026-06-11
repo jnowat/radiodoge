@@ -68,6 +68,9 @@ pub struct AppState {
     /// Used to synthesize `radio-stats-update` events so the Dashboard packet
     /// counters and NavBar signal bars stay current on mobile USB/BLE.
     pub mobile_packets_rx: Arc<Mutex<u32>>,
+    /// Running count of packets sent via the Android mobile path.
+    /// Incremented by mobile_emit_debug_tx (USB) and mobile_ble_write_characteristic (BLE).
+    pub mobile_packets_tx: Arc<Mutex<u32>>,
     /// v0.3.15 — Last known RSSI seen on the mobile path.
     /// Always 0 on USB (RSSI is not available over serial); may be non-zero
     /// in a future BLE path that reports received signal strength.
@@ -88,6 +91,7 @@ impl AppState {
             mobile_fw_version: Arc::new(Mutex::new(None)),
             ble_device_address: Arc::new(Mutex::new(None)),
             mobile_packets_rx: Arc::new(Mutex::new(0)),
+            mobile_packets_tx: Arc::new(Mutex::new(0)),
             mobile_last_rssi: Arc::new(Mutex::new(0)),
         }
     }
@@ -117,7 +121,13 @@ async fn load_history_from_disk(app: &AppHandle) -> Vec<TxHistoryEntry> {
         Err(_) => return vec![],
     };
     match tokio::fs::read_to_string(&path).await {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("[history] tx_history.json parse failed ({}), starting fresh", e);
+                vec![]
+            }
+        },
         Err(_) => vec![],
     }
 }
@@ -314,6 +324,10 @@ async fn connect_port(
                 }
             });
 
+            // Re-check the flag after building the callback — disconnect_port may have
+            // been called in the narrow window between the check above and here.
+            if !reconnect_enabled_wr.load(Ordering::Relaxed) { break; }
+
             match serial_wr.connect(&port_wr, on_pkt).await {
                 Ok(_) => {
                     *current_port_wr.lock().await = Some(port_wr.clone());
@@ -413,8 +427,8 @@ async fn ping_device(state: State<'_, AppState>, app: AppHandle) -> Result<bool,
     let ok = state.serial.ping().await;
     emit_debug_traffic(
         &app, "RX", "",
-        if ok { "✅ PONG — device responded within 500 ms 🐕" }
-        else  { "❌ No PONG within 500 ms — firmware may be busy" },
+        if ok { "✅ PONG — device responded within 1500 ms 🐕" }
+        else  { "❌ No PONG within 1500 ms — firmware may be busy" },
     );
     Ok(ok)
 }
@@ -432,13 +446,52 @@ async fn import_wif(wif: String) -> Result<WalletInfo, String> {
     wallet::import_wif(&wif).map_err(|e| e.to_string())
 }
 
+/// v0.3.16 — Generate a new wallet with a 12-word BIP39 recovery phrase.
+/// Returns the mnemonic alongside the derived WalletInfo.
+/// The mnemonic is NOT stored — the caller must back it up before it disappears.
+#[tauri::command]
+async fn generate_mnemonic_wallet() -> Result<serde_json::Value, String> {
+    let mnemonic = wallet::generate_mnemonic().map_err(|e| e.to_string())?;
+    let phrase = mnemonic.to_string();
+    let info = wallet::wallet_from_mnemonic(&phrase).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "mnemonic": phrase,
+        "address": info.address,
+        "publicKeyHex": info.public_key_hex,
+        "privateKeyWif": info.private_key_wif,
+    }))
+}
+
+/// v0.3.16 — Import a wallet from a BIP39 mnemonic phrase.
+/// Derives the key at m/44'/3'/0'/0/0 (Dogecoin BIP44 path).
+#[tauri::command]
+async fn import_mnemonic_wallet(phrase: String) -> Result<WalletInfo, String> {
+    wallet::wallet_from_mnemonic(&phrase).map_err(|e| e.to_string())
+}
+
+/// v0.3.16 — Query the confirmed Dogecoin balance for an address via Trezor Blockbook.
+/// Returns the balance as a floating-point DOGE amount.
+#[tauri::command]
+async fn get_balance(address: String) -> Result<f64, String> {
+    if !wallet::is_valid_address(&address) {
+        return Err("Invalid Dogecoin address".to_string());
+    }
+    let koinus = wallet::fetch_balance_blockbook(&address)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(koinus as f64 / 1e8)
+}
+
 #[tauri::command]
 async fn send_transaction(
     tx: TransactionRequest,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    if !state.serial.is_connected() {
+    // On Android the JS bridge owns the USB/BLE port, so serial.is_connected() is
+    // always false.  Allow the send when mobile is connected (current_port is set).
+    let is_mobile = state.current_port.lock().await.is_some() && !state.serial.is_connected();
+    if !is_mobile && !state.serial.is_connected() {
         return Err("Not connected to a Heltec device. Please connect first.".to_string());
     }
 
@@ -453,35 +506,74 @@ async fn send_transaction(
         return Err("Amount must be greater than 0 DOGE".to_string());
     }
 
-    let payload = wallet::encode_transaction_payload(
-        &tx.to_address,
-        tx.amount_doge,
-        tx.memo.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    // Build payload: real signed transaction when WIF is available, legacy stub otherwise.
+    let payload = if let Some(ref wif) = tx.from_private_key_wif {
+        wallet::build_signed_transaction(
+            wif,
+            &tx.to_address,
+            tx.amount_doge,
+            wallet::DEFAULT_TX_FEE_DOGE,
+        )
+        .await
+        .map_err(|e| format!("Transaction signing failed: {}", e))?
+    } else {
+        wallet::encode_transaction_payload(
+            &tx.to_address,
+            tx.amount_doge,
+            tx.memo.as_deref(),
+        )
+        .map_err(|e| e.to_string())?
+    };
 
     let src = state.serial.get_node_address().await;
     let dst = NodeAddress::broadcast();
 
-    if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
+    if is_mobile {
+        // Mobile path: the JS bridge owns the port; emit packet bytes via a
+        // Tauri event so the connection-bridge session listener can write them.
+        let signed_label = tx.from_private_key_wif.is_some();
+        let packets = if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
+            vec![radio::build_doge_tx(&src, &dst, &payload)]
+        } else {
+            radio::build_multipart_packets(&src, &dst, radio::CMD_DOGE_TX, &payload)
+        };
+        for (i, pkt) in packets.iter().enumerate() {
+            let label = if signed_label {
+                format!("CMD_DOGE_TX signed (mobile {}/{})", i + 1, packets.len())
+            } else {
+                format!("CMD_DOGE_TX (mobile {}/{})", i + 1, packets.len())
+            };
+            emit_debug_traffic(&app, "TX", &hex::encode(pkt), &label);
+        }
+        let _ = app.emit("mobile-tx-packets", &packets);
+    } else if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
         let pkt = radio::build_doge_tx(&src, &dst, &payload);
         let pkt_hex = hex::encode(&pkt);
-        emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_DOGE_TX (single packet)");
+        let label = if tx.from_private_key_wif.is_some() { "CMD_DOGE_TX signed (single)" } else { "CMD_DOGE_TX (single packet)" };
+        emit_debug_traffic(&app, "TX", &pkt_hex, label);
         state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
     } else {
         let pkts = radio::build_multipart_packets(&src, &dst, radio::CMD_DOGE_TX, &payload);
+        let label = if tx.from_private_key_wif.is_some() { "CMD_DOGE_TX signed" } else { "CMD_DOGE_TX" };
         for (i, pkt) in pkts.iter().enumerate() {
             let pkt_hex = hex::encode(pkt);
-            emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_DOGE_TX (multipart {}/{})", i + 1, pkts.len()));
+            emit_debug_traffic(&app, "TX", &pkt_hex, &format!("{} (multipart {}/{})", label, i + 1, pkts.len()));
             state.serial.send_raw(pkt.clone()).await.map_err(|e| e.to_string())?;
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
-    let msg = format!(
-        "Broadcast {:.8} DOGE → {} via LoRa! 🐕🌙",
-        tx.amount_doge, tx.to_address
-    );
+    let msg = if tx.from_private_key_wif.is_some() {
+        format!(
+            "Signed tx broadcast: {:.8} DOGE → {} via LoRa! 🐕🌙",
+            tx.amount_doge, tx.to_address
+        )
+    } else {
+        format!(
+            "Broadcast {:.8} DOGE → {} via LoRa! 🐕🌙",
+            tx.amount_doge, tx.to_address
+        )
+    };
 
     let _ = app.emit("transaction-sent", &msg);
 
@@ -545,7 +637,7 @@ async fn update_lora_settings(
     );
     state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
 
-    let freq_khz = (settings.frequency_mhz * 1000.0) as u32;
+    let freq_khz = (settings.frequency_mhz * 1000.0).round() as u32;
     let bw_idx: u8 = match settings.bandwidth_khz as u32 {
         250 => 1,
         500 => 2,
@@ -611,9 +703,27 @@ async fn get_board_settings(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Option<BoardSettings>, String> {
+    // Android mobile path: the serial port is owned by the JS bridge, not by
+    // the Rust SerialManager.  is_connected() is always false on mobile.
+    // Return the board settings cached by mobile_push_bytes when CMD_GET_SETTINGS
+    // last arrived — this is the same data the frontend already has from board-sync.
+    let is_mobile_connected = state.current_port.lock().await.is_some()
+        && !state.serial.is_connected();
+
+    if is_mobile_connected {
+        let cached = state.serial.get_board_settings().await;
+        emit_debug_traffic(
+            &app, "INFO", "",
+            "get_board_settings: Android path — returning cached settings from last board-sync",
+        );
+        return Ok(cached);
+    }
+
     if !state.serial.is_connected() {
         return Ok(None);
     }
+
+    // Desktop path: actively query the board over the Rust-owned serial port.
     let src = state.serial.get_node_address().await;
     let pkt = radio::build_get_settings(&src);
     let pkt_hex = hex::encode(&pkt);
@@ -823,49 +933,88 @@ async fn query_battery(state: State<'_, AppState>, app: AppHandle) -> Result<Opt
 /// Returns the WiFi station MAC as a colon-separated hex string, or None if unavailable.
 #[tauri::command]
 async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<String>, String> {
+    // Android mobile path: MAC is cached by mobile_push_bytes on CMD_GET_MAC arrival.
+    // Return the cached value immediately; the JS caller writes GET_MAC via bridge first.
+    let is_mobile_connected = state.current_port.lock().await.is_some()
+        && !state.serial.is_connected();
+    if is_mobile_connected {
+        return Ok(state.serial.get_board_mac().await);
+    }
+
     if !state.serial.is_connected() {
         return Ok(None);
     }
+
+    // Desktop path: send CMD_GET_MAC via Rust-owned serial port and wait for response.
     let src = state.serial.get_node_address().await;
     let pkt = radio::build_get_mac(&src);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_GET_MAC (0x27)");
     state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;  // raised from 400ms (too tight)
     Ok(state.serial.get_board_mac().await)
 }
 
 // ─── v0.3.8: Persistent Wallet ───────────────────────────────────────────────
 
-/// v0.3.8 — Persist the current wallet to app-local storage (best-effort, unencrypted).
-/// ⚠️ This is a HOT wallet — only use for small test amounts!
-/// The user must confirm with the phrase "THIS IS MUCH INSECURE" in the UI before calling this.
+/// v0.3.16 — Encrypt and persist the wallet to app-local storage.
+/// The WIF private key is encrypted with ChaCha20-Poly1305 (argon2id KDF, 64 MiB).
 #[tauri::command]
-async fn save_wallet(wallet_info: WalletInfo, app: AppHandle) -> Result<(), String> {
+async fn save_wallet(wallet_info: WalletInfo, passphrase: String, app: AppHandle) -> Result<(), String> {
+    if passphrase.len() < 8 {
+        return Err("Passphrase must be at least 8 characters.".to_string());
+    }
+    let encrypted = wallet::encrypt_wallet(&wallet_info, &passphrase)
+        .map_err(|e| e.to_string())?;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let path = dir.join("wallet.json");
-    let json = serde_json::to_string_pretty(&wallet_info).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&encrypted).map_err(|e| e.to_string())?;
     tokio::fs::write(&path, json).await.map_err(|e| e.to_string())?;
-    log::warn!("Wallet saved to disk — hot wallet, use with care!");
+    log::info!("Encrypted wallet saved to disk.");
     Ok(())
 }
 
-/// v0.3.8 — Load a previously saved wallet from app-local storage.
-/// Returns None if no wallet has been saved.
+/// Returns true if a wallet.json exists on disk (so the frontend can show a passphrase prompt).
 #[tauri::command]
-async fn load_saved_wallet(app: AppHandle) -> Result<Option<WalletInfo>, String> {
+async fn wallet_needs_passphrase(app: AppHandle) -> bool {
+    let path = match app.path().app_data_dir() {
+        Ok(p) => p.join("wallet.json"),
+        Err(_) => return false,
+    };
+    tokio::fs::metadata(&path).await.is_ok()
+}
+
+/// v0.3.16 — Load and decrypt a wallet from disk.
+/// - Encrypted format (v0.3.16+): requires a non-empty passphrase.
+/// - Legacy plaintext format (pre-v0.3.16): loaded directly; the caller should prompt
+///   the user to re-save with a passphrase.
+/// Returns `Err("passphrase_required")` if the file is encrypted but no passphrase was supplied.
+#[tauri::command]
+async fn load_saved_wallet(passphrase: Option<String>, app: AppHandle) -> Result<Option<WalletInfo>, String> {
     let path = match app.path().app_data_dir() {
         Ok(p) => p.join("wallet.json"),
         Err(_) => return Ok(None),
     };
-    match tokio::fs::read_to_string(&path).await {
-        Ok(json) => {
-            let w: WalletInfo = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            Ok(Some(w))
-        }
-        Err(_) => Ok(None), // File doesn't exist
+    let json = match tokio::fs::read_to_string(&path).await {
+        Ok(j) => j,
+        Err(_) => return Ok(None),
+    };
+    // Try encrypted format first (v0.3.16+).
+    if let Ok(enc) = serde_json::from_str::<wallet::EncryptedWalletFile>(&json) {
+        let pp = match &passphrase {
+            Some(p) if !p.is_empty() => p.as_str(),
+            _ => return Err("passphrase_required".to_string()),
+        };
+        let info = wallet::decrypt_wallet(&enc, pp).map_err(|e| e.to_string())?;
+        return Ok(Some(info));
     }
+    // Legacy plaintext format (pre-v0.3.16) — load directly.
+    if let Ok(w) = serde_json::from_str::<WalletInfo>(&json) {
+        log::warn!("Loaded legacy plaintext wallet — user should re-save with encryption.");
+        return Ok(Some(w));
+    }
+    Err("wallet file is corrupted or in an unrecognised format".to_string())
 }
 
 /// v0.3.8 — Delete the saved wallet from disk (user explicitly cleared it).
@@ -890,7 +1039,13 @@ async fn load_address_book(app: AppHandle) -> Result<Vec<serde_json::Value>, Str
         Err(_) => return Ok(vec![]),
     };
     match tokio::fs::read_to_string(&path).await {
-        Ok(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+        Ok(json) => match serde_json::from_str::<Vec<serde_json::Value>>(&json) {
+            Ok(entries) => Ok(entries),
+            Err(e) => {
+                eprintln!("[addrbook] address_book.json parse failed ({}), starting fresh", e);
+                Ok(vec![])
+            }
+        },
         Err(_) => Ok(vec![]),
     }
 }
@@ -953,6 +1108,7 @@ async fn mobile_set_disconnected(
     *state.mobile_fw_version.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
     *state.mobile_packets_rx.lock().await = 0;
+    *state.mobile_packets_tx.lock().await = 0;
     *state.mobile_last_rssi.lock().await = 0;
     let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
     log::info!("mobile_set_disconnected");
@@ -993,11 +1149,21 @@ async fn mobile_push_bytes(
     const KNOWN_CMDS: &[u8] = &[
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
         0x10, 0x11,
-        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, // 0x28 = CMD_BLE_TOGGLE (v0.3.16)
         0x3F, 0x62, 0x64, 0x68, 0x6D, 0xFE,
     ];
 
+    // Guard against unbounded accumulator growth from a misbehaving or spamming board.
+    // In normal operation the packet-drain loop below keeps the accumulator small
+    // (a few hundred bytes at most).  If the board enters a debug-print loop or sends
+    // malformed data that never forms complete packets, the accumulator would otherwise
+    // grow until the process is OOM-killed (especially risky on Android).
+    const MOBILE_ACCUMULATOR_CAP: usize = 8 * 1024;
     let mut acc = state.mobile_accumulator.lock().await;
+    if acc.len() + bytes.len() > MOBILE_ACCUMULATOR_CAP {
+        eprintln!("[mobile_push_bytes] accumulator overflow ({} bytes) — discarding stale data", acc.len());
+        acc.clear();
+    }
     acc.extend_from_slice(&bytes);
 
     let mut packets_extracted: u32 = 0;
@@ -1012,12 +1178,44 @@ async fn mobile_push_bytes(
             break; // Need more bytes
         }
 
-        let packet = match radio::parse_incoming(&acc, rssi) {
+        // Peek the command byte so we can determine the packet length BEFORE
+        // calling parse_incoming.  This ensures parse_incoming receives exactly
+        // the bytes belonging to one packet, giving a clean payload_hex and
+        // preventing the next packet from being swallowed as spurious payload
+        // when two packets arrive in a single USB read callback.
+        let cmd = acc[0];
+
+        // Determine the byte count for this packet.
+        let packet_len = match radio::exact_packet_len(cmd) {
+            Some(n) => n,
+            None => {
+                // Variable-length packet.  For CMD_GET_FIRMWARE_VERSION the
+                // board sends a null-terminated ASCII string — scan for the
+                // '\0' so a GET_SETTINGS reply that immediately follows is not
+                // consumed as part of the firmware-version payload.
+                // For all other variable-length commands fall back to consuming
+                // the header + all available payload bytes (up to MAX).
+                let after_hdr = acc.get(radio::SINGLE_HDR_LEN..).unwrap_or(&[]);
+                let payload_len = if cmd == radio::CMD_GET_FIRMWARE_VERSION {
+                    after_hdr
+                        .iter()
+                        .position(|&b| b == 0)
+                        .map(|i| i + 1) // include the '\0'
+                        .unwrap_or_else(|| after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN))
+                } else {
+                    after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN)
+                };
+                radio::SINGLE_HDR_LEN + payload_len
+            }
+        };
+        let packet_len = packet_len.min(acc.len());
+
+        // Parse exactly the bytes for this packet so payload_hex is clean.
+        let packet = match radio::parse_incoming(&acc[..packet_len], rssi) {
             Some(p) => p,
-            None => break,
+            None => break, // shouldn't happen: len is guaranteed >= SINGLE_HDR_LEN
         };
 
-        let cmd = packet.command;
         packets_extracted += 1;
 
         // Emit to UI (same event as desktop)
@@ -1063,6 +1261,11 @@ async fn mobile_push_bytes(
                             gateway_mode: gw,
                             wifi_enabled: wifi,
                         };
+
+                        // Cache board settings in SerialManager so `get_board_settings()`
+                        // returns the right value on Android (without the desktop read loop).
+                        state.serial.update_board_settings(bs.clone()).await;
+
                         let _ = app.emit("board-sync", &bs);
 
                         // Now emit "connected" — we have everything we need.
@@ -1097,18 +1300,28 @@ async fn mobile_push_bytes(
                 }));
             }
 
+            radio::CMD_GET_MAC => {
+                // Cache the board MAC so query_mac() works on Android (same as desktop
+                // serial.rs read loop).  Emit "mobile-board-mac" so SettingsTab can
+                // update the UI without polling.
+                if let Ok(payload) = hex::decode(&packet.payload_hex) {
+                    if payload.len() >= 6 {
+                        let mac = format!(
+                            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                            payload[0], payload[1], payload[2],
+                            payload[3], payload[4], payload[5]
+                        );
+                        state.serial.update_board_mac(mac.clone()).await;
+                        let _ = app.emit("mobile-board-mac", &mac);
+                    }
+                }
+            }
+
             _ => {}
         }
 
-        // Advance the accumulator by exactly the right number of bytes.
-        // For fixed-size commands use the precise length; for variable-length
-        // commands consume the header + up to MAX_SINGLE_PAYLOAD_LEN bytes.
-        let consumed = radio::exact_packet_len(cmd).unwrap_or_else(|| {
-            radio::SINGLE_HDR_LEN
-                + (acc.len() - radio::SINGLE_HDR_LEN).min(radio::MAX_SINGLE_PAYLOAD_LEN)
-        });
-        let consumed = consumed.min(acc.len());
-        acc.drain(..consumed);
+        // Advance the accumulator past the consumed packet.
+        acc.drain(..packet_len);
     }
 
     // v0.3.15 — Emit radio-stats-update so the Dashboard packet counters and
@@ -1127,6 +1340,7 @@ async fn mobile_push_bytes(
         }
         let rssi_snap = *state.mobile_last_rssi.lock().await;
 
+        let tx_snap = *state.mobile_packets_tx.lock().await;
         let lora = state.lora_settings.lock().await.clone();
         let stats = RadioStats {
             frequency_mhz: lora.frequency_mhz,
@@ -1135,8 +1349,8 @@ async fn mobile_push_bytes(
             bandwidth_khz: lora.bandwidth_khz,
             coding_rate: lora.coding_rate.clone(),
             rssi: rssi_snap,
-            snr: 0.0, // SNR not available over USB serial; BLE path may supply it later
-            packets_sent: 0,
+            snr: None, // SNR not available over USB serial or BLE
+            packets_sent: tx_snap,
             packets_received: count_snap,
         };
         let _ = app.emit("radio-stats-update", &stats);
@@ -1147,10 +1361,70 @@ async fn mobile_push_bytes(
 
 /// Build a raw PING packet for the Android USB bridge to write directly to serial.
 /// Uses the current node address from AppState (synced from board on connect).
+///
+/// Mirrors the desktop `serial::ping()` which sends CMD_PING from `local` to `local`
+/// (self-addressed).  The firmware only echoes back a CMD_PING response when the
+/// destination address matches the board's own address — broadcast PINGs are silently
+/// ignored by some firmware builds.
 #[tauri::command]
 async fn mobile_build_ping(state: State<'_, AppState>) -> Result<Vec<u8>, String> {
     let src = state.serial.get_node_address().await;
-    Ok(radio::build_ping(&src, &NodeAddress::broadcast()))
+    Ok(radio::build_ping(&src, &src)) // self-addressed, same as desktop serial::ping()
+}
+
+/// Build a SET_GATEWAY packet for the Android USB bridge.
+/// The JS layer writes the bytes to USB/BLE; the board responds via CMD_GET_SETTINGS
+/// board-sync which updates gateway_mode in the connection store.
+#[tauri::command]
+async fn mobile_build_set_gateway(enable: bool, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+    let src = state.serial.get_node_address().await;
+    Ok(radio::build_set_gateway(&src, enable))
+}
+
+/// Build a WIFI_TOGGLE packet for the Android USB bridge.
+#[tauri::command]
+async fn mobile_build_wifi_toggle(enable: bool, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+    let src = state.serial.get_node_address().await;
+    Ok(radio::build_wifi_toggle(&src, enable))
+}
+
+/// Build a BLE_TOGGLE packet for the Android USB bridge.
+/// Enables or disables BLE advertising on the board (persisted to NVS).
+/// Requires firmware v0.3.16+.
+#[tauri::command]
+async fn mobile_build_ble_toggle(enable: bool, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+    let src = state.serial.get_node_address().await;
+    Ok(radio::build_ble_toggle(&src, enable))
+}
+
+/// Build a GET_MAC packet for the Android USB bridge.
+/// After writing, the board sends CMD_GET_MAC (0x27) response;
+/// mobile_push_bytes processes it and emits "mobile-board-mac".
+#[tauri::command]
+async fn mobile_build_get_mac(state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+    let src = state.serial.get_node_address().await;
+    Ok(radio::build_get_mac(&src))
+}
+
+/// v0.3.16 — Enable/disable BLE advertising on the board (desktop path).
+/// Mirrors set_wifi_enabled but uses CMD_BLE_TOGGLE (0x28).
+/// Requires board firmware v0.3.16+.
+#[tauri::command]
+async fn set_ble_enabled(
+    enable: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<bool, String> {
+    if !state.serial.is_connected() {
+        return Err("Not connected to board.".to_string());
+    }
+    let src = state.serial.get_node_address().await;
+    let pkt = radio::build_ble_toggle(&src, enable);
+    let pkt_hex = hex::encode(&pkt);
+    emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_BLE_TOGGLE (0x28) → {}", if enable { "ON" } else { "OFF" }));
+    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    // BLE toggle ACK is just the 9-byte echo — no follow-up GET_SETTINGS needed.
+    Ok(enable)
 }
 
 /// Build the two-packet connect sequence for the Android USB bridge:
@@ -1182,13 +1456,23 @@ async fn mobile_build_tx_packets(
     let src = state.serial.get_node_address().await;
     let dst = NodeAddress::broadcast();
 
-    // encode_transaction_payload signature: (to_address, amount_doge, memo)
-    let payload = wallet::encode_transaction_payload(
-        &tx.to_address,
-        tx.amount_doge,
-        tx.memo.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    let payload = if let Some(ref wif) = tx.from_private_key_wif {
+        wallet::build_signed_transaction(
+            wif,
+            &tx.to_address,
+            tx.amount_doge,
+            wallet::DEFAULT_TX_FEE_DOGE,
+        )
+        .await
+        .map_err(|e| format!("Transaction signing failed: {}", e))?
+    } else {
+        wallet::encode_transaction_payload(
+            &tx.to_address,
+            tx.amount_doge,
+            tx.memo.as_deref(),
+        )
+        .map_err(|e| e.to_string())?
+    };
 
     if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
         Ok(vec![radio::build_doge_tx(&src, &dst, &payload)])
@@ -1213,14 +1497,14 @@ async fn mobile_build_lora_settings_packet(settings: LoraSettings) -> Vec<u8> {
         "4/8" => 8,
         _     => 5, // default 4/5
     };
-    let freq_khz = (settings.frequency_mhz * 1000.0) as u32;
+    let freq_khz = (settings.frequency_mhz * 1000.0).round() as u32;
     radio::build_set_lora_params(
         &settings.node_address,
         settings.spreading_factor,
         bw_idx,
         cr,
         freq_khz,
-        settings.power_dbm as u8,
+        settings.power_dbm.max(2).min(22) as u8,
     )
 }
 
@@ -1304,6 +1588,32 @@ async fn mobile_ble_disconnect(
     Ok(())
 }
 
+/// Log bytes written to the USB serial port in the debug traffic stream.
+///
+/// The Android USB mobile path performs physical writes in JS via the
+/// serialplugin's `writeBinary()` API.  This command exists to:
+///   1. Emit a "TX-USB" debug-serial-traffic event visible in the Debug Console
+///   2. Mirror the equivalent `mobile_ble_write_characteristic` for the BLE path
+#[tauri::command]
+async fn mobile_emit_debug_tx(bytes: Vec<u8>, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    let hex = hex::encode(&bytes);
+    let note = bytes.first().map(|cmd| match *cmd {
+        0x02 => "CMD_PING",
+        0x10 => "CMD_DOGE_TX",
+        0x20 => "CMD_GET_FIRMWARE_VERSION",
+        0x22 => "CMD_GET_SETTINGS",
+        0x23 => "CMD_SET_GATEWAY",
+        0x24 => "CMD_WIFI_TOGGLE",
+        0x26 => "CMD_GET_BATTERY",
+        0x27 => "CMD_GET_MAC",
+        0x28 => "CMD_BLE_TOGGLE",
+        _    => "CMD_?",
+    }).unwrap_or("(empty)");
+    emit_debug_traffic(&app, "TX-USB", &hex, note);
+    *state.mobile_packets_tx.lock().await += 1;
+    Ok(())
+}
+
 /// Log bytes being written to the BLE TX characteristic in the debug traffic stream.
 ///
 /// The actual GATT write is performed by the JS layer via the blec plugin's
@@ -1313,10 +1623,12 @@ async fn mobile_ble_disconnect(
 #[tauri::command]
 async fn mobile_ble_write_characteristic(
     data: Vec<u8>,
+    state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
     let hex = hex::encode(&data);
     emit_debug_traffic(&app, "TX-BLE", &hex, "BLE write characteristic");
+    *state.mobile_packets_tx.lock().await += 1;
     Ok(())
 }
 
@@ -1354,6 +1666,9 @@ pub fn run() {
             ping_device,
             generate_wallet,
             import_wif,
+            generate_mnemonic_wallet,
+            import_mnemonic_wallet,
+            get_balance,
             send_transaction,
             update_lora_settings,
             get_lora_settings,
@@ -1371,6 +1686,7 @@ pub fn run() {
             query_battery,
             query_mac,
             save_wallet,
+            wallet_needs_passphrase,
             load_saved_wallet,
             delete_saved_wallet,
             load_address_book,
@@ -1385,6 +1701,14 @@ pub fn run() {
             mobile_build_connect_queries,
             mobile_build_tx_packets,
             mobile_build_lora_settings_packet,
+            // ── v0.3.16 Settings-tab mobile commands ──────────────────────
+            mobile_build_set_gateway,
+            mobile_build_wifi_toggle,
+            mobile_build_ble_toggle,
+            mobile_build_get_mac,
+            set_ble_enabled,
+            // ── v0.3.16 Android USB TX debug ──────────────────────────────
+            mobile_emit_debug_tx,
             // ── v0.3.10 Android BLE bridge ────────────────────────────────
             // blec plugin handles GATT transport; Rust handles state + debug logging
             mobile_ble_scan,
@@ -1395,7 +1719,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             tray::setup_tray(app)?;
-            log::info!("RadioDoge GUI v0.3.15 started — much mesh, very wow 🐕");
+            log::info!("RadioDoge GUI v0.3.16 started — much mesh, very wow 🐕");
             Ok(())
         })
         .run(tauri::generate_context!())

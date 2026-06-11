@@ -4,11 +4,10 @@
    */
 
   import { invoke } from '@tauri-apps/api/core';
+  import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
   import DogeSpinner from './DogeSpinner.svelte';
-  import type { Confetti as ConfettiType } from './Confetti.svelte';
-
   interface Props {
     onTriggerConfetti: () => void;
   }
@@ -21,9 +20,15 @@
   let success = $state<string | null>(null);
   let error = $state<string | null>(null);
 
+  // Timer used to clear the form + success message 5s after a successful send.
+  // Tracked so it can be cancelled if the user starts a new transaction before
+  // the 5s window elapses (otherwise their freshly-typed inputs would be wiped).
+  let _successClearTimer: ReturnType<typeof setTimeout> | null = null;
+  onMount(() => () => { if (_successClearTimer) clearTimeout(_successClearTimer); });
+
   // Validation
   const isValidAddress = $derived(() => {
-    return toAddress.length > 25 && toAddress.startsWith('D');
+    return toAddress.length === 34 && toAddress.startsWith('D');
   });
 
   const isValidAmount = $derived(() => {
@@ -41,6 +46,13 @@
   );
 
   async function sendTransaction() {
+    // Cancel any pending form-clear timer so a new transaction doesn't wipe
+    // inputs the user has already started filling in.
+    if (_successClearTimer !== null) {
+      clearTimeout(_successClearTimer);
+      _successClearTimer = null;
+    }
+
     // Hard gate: never invoke the backend without a "From" wallet.
     // The button is already disabled, but guard here too in case of keyboard/script triggers.
     if (!connection.isConnected) {
@@ -70,12 +82,15 @@
       success = result;
       onTriggerConfetti(); // 🎉 BOOM — confetti!
 
-      // Clear form after success
-      setTimeout(() => {
+      // Clear form 5s after success — gives user time to screenshot/note the result.
+      // The timer ID is stored so it can be cancelled if the user starts a new
+      // transaction during the 5s window (preventing their new inputs from being wiped).
+      _successClearTimer = setTimeout(() => {
         toAddress = '';
         amountDoge = '';
         memo = '';
         success = null;
+        _successClearTimer = null;
       }, 5000);
 
     } catch (e: unknown) {
@@ -235,6 +250,22 @@
           No sender wallet — <strong>required to sign transactions</strong>.
           Go to the <em>Wallet</em> tab to generate or import one.
         </span>
+      </div>
+    {/if}
+
+    <!-- Fee summary (shown when wallet is loaded and amount is valid) -->
+    {#if wallet.isGenerated && isValidAmount()}
+      <div style="
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 14px;
+        background: rgba(245, 197, 24, 0.04);
+        border: 1px solid rgba(245, 197, 24, 0.15);
+        border-radius: 8px;
+        font-size: 0.78rem;
+        color: var(--doge-muted);
+      ">
+        <span>Network fee</span>
+        <span style="font-family: var(--font-mono); color: var(--doge-text);">1.00000000 DOGE (fixed)</span>
       </div>
     {/if}
 

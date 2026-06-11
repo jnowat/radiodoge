@@ -48,7 +48,12 @@ enum Commands {
 
     /// Send a Dogecoin transaction over LoRa radio
     ///
-    /// Example: radiodoge-cli send -p COM3 -t DH5yaieq... -a 4.20
+    /// Without --wif: sends a legacy payload (amount + address) for gateways
+    /// that handle signing server-side.
+    /// With --wif: builds and signs a real P2PKH transaction (fetches UTXOs
+    /// from Blockbook, signs with secp256k1) before broadcasting over LoRa.
+    ///
+    /// Example: radiodoge-cli send -p COM3 -t DH5yaieq... -a 4.20 --wif Q...
     Send {
         /// Serial port (e.g. COM3 on Windows, /dev/ttyUSB0 on Linux)
         #[arg(short, long)]
@@ -62,9 +67,13 @@ enum Commands {
         #[arg(short, long)]
         amount: f64,
 
-        /// Optional transaction memo (up to 190 bytes)
+        /// Optional transaction memo (up to 190 bytes; ignored when --wif is set)
         #[arg(short, long)]
         memo: Option<String>,
+
+        /// WIF private key for signing a real P2PKH transaction before LoRa broadcast
+        #[arg(short, long)]
+        wif: Option<String>,
     },
 
     /// Listen for incoming LoRa packets and print them
@@ -110,6 +119,38 @@ enum Commands {
         #[arg(short, long)]
         port: String,
     },
+
+    /// Query the confirmed Dogecoin balance for an address via Trezor Blockbook
+    ///
+    /// Requires an internet connection.
+    ///
+    /// Example: radiodoge-cli balance -a DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L
+    Balance {
+        /// Dogecoin address to query
+        #[arg(short, long)]
+        address: String,
+    },
+
+    /// Build, sign, and broadcast a real P2PKH Dogecoin transaction to the network
+    ///
+    /// Fetches UTXOs from Trezor Blockbook, builds the transaction, signs each
+    /// input with SIGHASH_ALL (secp256k1), and broadcasts via Blockbook.
+    /// Requires an internet connection. No LoRa device needed.
+    ///
+    /// Example: radiodoge-cli broadcast --wif QWif... --to DH5yaie... --amount 4.20
+    Broadcast {
+        /// WIF-encoded private key of the sender (starts with 'Q')
+        #[arg(short, long)]
+        wif: String,
+
+        /// Recipient Dogecoin address (must start with 'D')
+        #[arg(short = 't', long = "to")]
+        to_address: String,
+
+        /// Amount to send in DOGE (network fee of 1 DOGE is added automatically)
+        #[arg(short, long)]
+        amount: f64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -120,6 +161,34 @@ enum WalletCommands {
     ///
     /// Example: radiodoge-cli wallet generate
     Generate,
+
+    /// Generate a new wallet with a 12-word BIP39 mnemonic recovery phrase
+    ///
+    /// Derives the key at m/44'/3'/0'/0/0 (Dogecoin BIP44 path).
+    /// Write down the phrase offline — it is shown once and never stored.
+    ///
+    /// Example: radiodoge-cli wallet mnemonic
+    Mnemonic,
+
+    /// Import a wallet from a BIP39 mnemonic recovery phrase
+    ///
+    /// Derives the key at m/44'/3'/0'/0/0 (Dogecoin BIP44 coin type 3).
+    ///
+    /// Example: radiodoge-cli wallet import-mnemonic "word1 word2 ... word12"
+    ImportMnemonic {
+        /// 12 or 24-word BIP39 mnemonic phrase (space-separated, quoted)
+        phrase: String,
+    },
+
+    /// Import a wallet from a WIF-encoded private key
+    ///
+    /// Only compressed Dogecoin mainnet keys (starting with 'Q') are supported.
+    ///
+    /// Example: radiodoge-cli wallet import-wif QWif...
+    ImportWif {
+        /// WIF-encoded private key (starts with 'Q' for Dogecoin mainnet)
+        wif: String,
+    },
 
     /// Validate whether a string is a valid Dogecoin address
     ///
@@ -144,13 +213,15 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Ports => cmd_ports(),
         Commands::Wallet { cmd } => cmd_wallet(cmd),
-        Commands::Send { port, to_address, amount, memo } => {
-            cmd_send(&port, &to_address, amount, memo.as_deref()).await
+        Commands::Send { port, to_address, amount, memo, wif } => {
+            cmd_send(&port, &to_address, amount, memo.as_deref(), wif.as_deref()).await
         }
         Commands::Receive { port, timeout } => cmd_receive(&port, timeout).await,
         Commands::Ping { port } => cmd_ping(&port).await,
         Commands::Connect { port } => cmd_connect(&port).await,
         Commands::Daemon { port } => cmd_daemon(&port).await,
+        Commands::Balance { address } => cmd_balance(&address).await,
+        Commands::Broadcast { wif, to_address, amount } => cmd_broadcast(&wif, &to_address, amount).await,
     }
 }
 
@@ -182,6 +253,37 @@ fn cmd_wallet(cmd: WalletCommands) -> Result<()> {
             println!("  Private Key (WIF, SECRET): {}", w.private_key_wif);
             println!("\n⚠️  The private key is shown ONCE. Write it down. Lose it = lose DOGE.");
         }
+        WalletCommands::Mnemonic => {
+            let mnemonic = wallet::generate_mnemonic().context("Failed to generate mnemonic")?;
+            let phrase = mnemonic.to_string();
+            let w = wallet::wallet_from_mnemonic(&phrase).context("Failed to derive wallet")?;
+            println!("🌱 New Dogecoin Wallet with Recovery Phrase — WRITE THIS DOWN OFFLINE!\n");
+            println!("  Recovery Phrase (12 words, SECRET):");
+            for (i, word) in phrase.split_whitespace().enumerate() {
+                println!("    {:2}. {}", i + 1, word);
+            }
+            println!();
+            println!("  Derived at: m/44'/3'/0'/0/0 (Dogecoin BIP44)");
+            println!("  Address (share this):     {}", w.address);
+            println!("  Public Key (hex):          {}", w.public_key_hex);
+            println!("  Private Key (WIF, SECRET): {}", w.private_key_wif);
+            println!("\n⚠️  Store the recovery phrase OFFLINE. Anyone with it controls your DOGE.");
+        }
+        WalletCommands::ImportMnemonic { phrase } => {
+            let w = wallet::wallet_from_mnemonic(&phrase)
+                .context("Failed to derive wallet from mnemonic")?;
+            println!("✅ Wallet restored from recovery phrase (m/44'/3'/0'/0/0)\n");
+            println!("  Address (share this):     {}", w.address);
+            println!("  Public Key (hex):          {}", w.public_key_hex);
+            println!("  Private Key (WIF, SECRET): {}", w.private_key_wif);
+        }
+        WalletCommands::ImportWif { wif } => {
+            let w = wallet::import_wif(&wif).context("Failed to import WIF key")?;
+            println!("✅ Wallet imported from WIF key\n");
+            println!("  Address (share this):     {}", w.address);
+            println!("  Public Key (hex):          {}", w.public_key_hex);
+            println!("  Private Key (WIF, SECRET): {}", w.private_key_wif);
+        }
         WalletCommands::Validate { address } => {
             if wallet::is_valid_address(&address) {
                 println!("✅ '{}' is a valid Dogecoin address! Much valid. Wow.", address);
@@ -195,7 +297,7 @@ fn cmd_wallet(cmd: WalletCommands) -> Result<()> {
 }
 
 /// Send a Dogecoin transaction over LoRa.
-async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>) -> Result<()> {
+async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Option<&str>) -> Result<()> {
     if !wallet::is_valid_address(to) {
         anyhow::bail!("'{}' is not a valid Dogecoin address (must start with 'D')", to);
     }
@@ -205,21 +307,25 @@ async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>) -> Resu
 
     println!("🐕 Connecting to {} ...", port);
     let manager = Arc::new(SerialManager::new());
-
-    // Connect with a no-op packet handler (we just want to send)
     let on_packet = Arc::new(|_pkt: IncomingPacket| {});
     manager.connect(port, on_packet).await
         .with_context(|| format!("Failed to open serial port {}", port))?;
 
-    println!("✅ Connected! Encoding transaction...");
-
-    let payload = wallet::encode_transaction_payload(to, amount, memo)
-        .context("Failed to encode transaction")?;
+    // Build payload: real signed P2PKH tx when --wif supplied, legacy stub otherwise.
+    let payload = if let Some(key) = wif {
+        println!("🔑 Signing P2PKH transaction (fetching UTXOs from Blockbook)...");
+        wallet::build_signed_transaction(key, to, amount, wallet::DEFAULT_TX_FEE_DOGE)
+            .await
+            .context("Transaction signing failed")?
+    } else {
+        println!("✅ Connected! Encoding stub transaction...");
+        wallet::encode_transaction_payload(to, amount, memo)
+            .context("Failed to encode transaction")?
+    };
 
     let src = manager.get_node_address().await;
     let dst = NodeAddress::broadcast();
 
-    // Send single or multipart depending on payload size
     if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
         let pkt = radio::build_doge_tx(&src, &dst, &payload);
         manager.send_raw(pkt).await.context("Failed to send packet")?;
@@ -233,8 +339,12 @@ async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>) -> Resu
         }
     }
 
-    let memo_note = memo.map(|m| format!(" [{}]", m)).unwrap_or_default();
-    println!("✅ Sent! {:.8} DOGE → {}{} via LoRa 🐕🌙", amount, to, memo_note);
+    if wif.is_some() {
+        println!("✅ Signed tx sent! {:.8} DOGE → {} via LoRa 🐕🌙", amount, to);
+    } else {
+        let memo_note = memo.map(|m| format!(" [{}]", m)).unwrap_or_default();
+        println!("✅ Sent! {:.8} DOGE → {}{} via LoRa 🐕🌙", amount, to, memo_note);
+    }
 
     manager.disconnect().await.ok();
     Ok(())
@@ -326,7 +436,7 @@ async fn cmd_connect(port: &str) -> Result<()> {
 
     let addr = manager.get_node_address().await;
     println!("✅ Connected! Node address: {}\n", addr.to_display_string());
-    println!("Commands: ping | wallet | send <addr> <amount> [memo] | stats | quit");
+    println!("Commands: ping | wallet | wallet-mnemonic | balance <addr> | send <addr> <amount> [memo] | stats | quit");
     println!("{}", "─".repeat(60));
 
     // Simple line-based REPL
@@ -336,7 +446,7 @@ async fn cmd_connect(port: &str) -> Result<()> {
         if std::io::stdin().read_line(&mut line).is_err() || line.trim().is_empty() {
             continue;
         }
-        let parts: Vec<&str> = line.trim().split_whitespace().collect();
+        let parts: Vec<&str> = line.split_whitespace().collect();
         match parts.as_slice() {
             ["quit"] | ["exit"] | ["q"] => {
                 println!("👋 Disconnecting. Much goodbye. Wow.");
@@ -353,6 +463,22 @@ async fn cmd_connect(port: &str) -> Result<()> {
                         println!("   Address:     {}", w.address);
                         println!("   Private key: {}", w.private_key_wif);
                         println!("   ⚠️  Save the private key now — not stored anywhere!");
+                    }
+                    Err(e) => println!("❌ Error: {}", e),
+                }
+            }
+            ["wallet-mnemonic"] => {
+                match wallet::generate_mnemonic().and_then(|m| {
+                    let phrase = m.to_string();
+                    wallet::wallet_from_mnemonic(&phrase).map(|w| (phrase, w))
+                }) {
+                    Ok((phrase, w)) => {
+                        println!("🌱 New wallet with recovery phrase:");
+                        for (i, word) in phrase.split_whitespace().enumerate() {
+                            println!("   {:2}. {}", i + 1, word);
+                        }
+                        println!("   Address: {}", w.address);
+                        println!("   ⚠️  Write the phrase offline — shows once!");
                     }
                     Err(e) => println!("❌ Error: {}", e),
                 }
@@ -404,15 +530,29 @@ async fn cmd_connect(port: &str) -> Result<()> {
                     }
                 }
             }
+            ["balance", addr] => {
+                if !wallet::is_valid_address(addr) {
+                    println!("❌ '{}' is not a valid Dogecoin address", addr);
+                } else {
+                    print!("🌐 Querying Blockbook... ");
+                    match wallet::fetch_balance_blockbook(addr).await {
+                        Ok(k) => println!("💰 {:.8} DOGE", k as f64 / 1e8),
+                        Err(e) => println!("❌ {}", e),
+                    }
+                }
+            }
             ["stats"] => {
                 let s = manager.get_stats().await;
-                println!("📊 Sent: {}  Received: {}  RSSI: {} dBm  SNR: {:.1} dB",
-                    s.packets_sent, s.packets_received, s.rssi, s.snr);
+                let snr_str = s.snr.map(|v| format!("{:.1} dB", v)).unwrap_or_else(|| "N/A".to_string());
+                println!("📊 Sent: {}  Received: {}  RSSI: {} dBm  SNR: {}",
+                    s.packets_sent, s.packets_received, s.rssi, snr_str);
             }
             ["help"] | [] => {
                 println!("Commands:");
                 println!("  ping                         — ping the device");
                 println!("  wallet                       — generate new Dogecoin keypair");
+                println!("  wallet-mnemonic              — generate wallet with 12-word BIP39 phrase");
+                println!("  balance <addr>               — query confirmed balance via Blockbook");
                 println!("  send <addr> <amount> [memo]  — send DOGE over LoRa");
                 println!("  stats                        — show radio statistics");
                 println!("  quit / exit / q              — disconnect and exit");
@@ -430,9 +570,13 @@ async fn cmd_connect(port: &str) -> Result<()> {
 /// Headless daemon — replaces serdog (C serial daemon).
 ///
 /// Connects to the device, logs all received packets indefinitely.
+/// When a signed Dogecoin transaction is received (CMD_DOGE_TX with a raw
+/// transaction payload), broadcasts it to the Dogecoin network via Trezor
+/// Blockbook and sends a TX_ACK message back to the originator.
+///
 /// Designed for Raspberry Pi gateway deployments.
 async fn cmd_daemon(port: &str) -> Result<()> {
-    println!("🐕 RadioDoge Daemon — Headless Mode (replaces serdog)");
+    println!("🐕 RadioDoge Daemon — Gateway Mode (replaces serdog)");
     println!("Serial port: {}", port);
     println!("Press Ctrl-C to stop.\n");
 
@@ -443,8 +587,9 @@ async fn cmd_daemon(port: &str) -> Result<()> {
     .init();
 
     let manager = Arc::new(SerialManager::new());
+    let manager_for_ack = Arc::clone(&manager);
 
-    let on_packet = Arc::new(|pkt: IncomingPacket| {
+    let on_packet = Arc::new(move |pkt: IncomingPacket| {
         log::info!(
             "PACKET  {} → {}  cmd=0x{:02X}  rssi={}  payload={}{}",
             pkt.source.to_display_string(),
@@ -457,6 +602,41 @@ async fn cmd_daemon(port: &str) -> Result<()> {
                 .map(|d| format!("  decoded={}", d))
                 .unwrap_or_default(),
         );
+
+        // When a signed Dogecoin transaction arrives, broadcast it to the network.
+        if pkt.command == radio::CMD_DOGE_TX {
+            let payload_bytes = hex::decode(&pkt.payload_hex).unwrap_or_default();
+            if wallet::is_signed_tx_payload(&payload_bytes) {
+                let raw_hex = pkt.payload_hex.clone();
+                let mgr = Arc::clone(&manager_for_ack);
+                let source = pkt.source.clone();
+                log::info!(
+                    "GATEWAY  signed tx detected ({} bytes) from {} — broadcasting to Dogecoin network",
+                    payload_bytes.len(),
+                    source.to_display_string()
+                );
+                tokio::spawn(async move {
+                    daemon_broadcast_and_ack(raw_hex, mgr, source).await;
+                });
+            }
+        }
+
+        // When a balance request arrives, query Blockbook and send the result back.
+        if pkt.command == radio::CMD_REQUEST_BALANCE {
+            let payload_bytes = hex::decode(&pkt.payload_hex).unwrap_or_default();
+            let addr = String::from_utf8_lossy(&payload_bytes)
+                .trim_matches('\0')
+                .trim()
+                .to_string();
+            if !addr.is_empty() {
+                let mgr = Arc::clone(&manager_for_ack);
+                let source = pkt.source.clone();
+                log::info!("GATEWAY  balance request from {} for {}", source.to_display_string(), addr);
+                tokio::spawn(async move {
+                    daemon_fetch_and_send_balance(addr, mgr, source).await;
+                });
+            }
+        }
     });
 
     log::info!("Connecting to {} ...", port);
@@ -465,6 +645,7 @@ async fn cmd_daemon(port: &str) -> Result<()> {
 
     let addr = manager.get_node_address().await;
     log::info!("Connected — node address: {}", addr.to_display_string());
+    log::info!("Gateway ready — monitoring for signed Dogecoin transactions");
 
     // Run until Ctrl-C
     tokio::signal::ctrl_c().await.context("Failed to listen for Ctrl-C")?;
@@ -472,5 +653,111 @@ async fn cmd_daemon(port: &str) -> Result<()> {
     log::info!("Shutdown signal received — disconnecting");
     manager.disconnect().await.ok();
 
+    Ok(())
+}
+
+/// Broadcast a signed transaction to the Dogecoin network with exponential-backoff
+/// retry (up to 3 attempts), then radio an ACK back to the originating node.
+async fn daemon_broadcast_and_ack(
+    raw_hex: String,
+    mgr: Arc<SerialManager>,
+    source: NodeAddress,
+) {
+    let mut delay_secs = 2u64;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+            delay_secs *= 2;
+        }
+        match wallet::broadcast_raw_tx(&raw_hex).await {
+            Ok(txid) => {
+                log::info!("GATEWAY  broadcast OK  txid={}", txid);
+                // Send ACK back to the originating node via radio
+                let gateway_addr = mgr.get_node_address().await;
+                let ack_msg = format!("TX_ACK:{}", &txid[..txid.len().min(40)]);
+                let ack_pkt = radio::build_message(&gateway_addr, &source, &ack_msg);
+                if let Err(e) = mgr.send_raw(ack_pkt).await {
+                    log::warn!("GATEWAY  ACK send failed: {}", e);
+                }
+                return;
+            }
+            Err(e) => {
+                log::warn!(
+                    "GATEWAY  broadcast attempt {}/3 failed: {}",
+                    attempt + 1, e
+                );
+            }
+        }
+    }
+    log::error!(
+        "GATEWAY  broadcast failed after 3 attempts for tx {}…",
+        &raw_hex[..raw_hex.len().min(16)]
+    );
+}
+
+/// Fetch the balance for `address` from Blockbook and send it back to `source` via radio.
+/// The response is a CMD_MESSAGE with text `"BAL:{koinus}"` so the GUI can parse it.
+async fn daemon_fetch_and_send_balance(
+    address: String,
+    mgr: Arc<SerialManager>,
+    source: NodeAddress,
+) {
+    match wallet::fetch_balance_blockbook(&address).await {
+        Ok(koinus) => {
+            log::info!(
+                "GATEWAY  balance for {}: {} koinus ({:.8} DOGE)",
+                address, koinus, koinus as f64 / 1e8
+            );
+            let gateway_addr = mgr.get_node_address().await;
+            let msg = format!("BAL:{}", koinus);
+            let pkt = radio::build_message(&gateway_addr, &source, &msg);
+            if let Err(e) = mgr.send_raw(pkt).await {
+                log::warn!("GATEWAY  balance reply send failed: {}", e);
+            }
+        }
+        Err(e) => {
+            log::warn!("GATEWAY  balance fetch failed for {}: {}", address, e);
+        }
+    }
+}
+
+/// Query the confirmed balance for a Dogecoin address from Trezor Blockbook.
+async fn cmd_balance(address: &str) -> Result<()> {
+    if !wallet::is_valid_address(address) {
+        anyhow::bail!("'{}' is not a valid Dogecoin address (must start with 'D')", address);
+    }
+    println!("🌐 Querying Blockbook for {}...", address);
+    let koinus = wallet::fetch_balance_blockbook(address).await?;
+    println!("💰 Balance: {:.8} DOGE  ({} koinus)", koinus as f64 / 1e8, koinus);
+    Ok(())
+}
+
+/// Build, sign, and broadcast a real P2PKH Dogecoin transaction directly to the network.
+async fn cmd_broadcast(wif: &str, to: &str, amount: f64) -> Result<()> {
+    if !wallet::is_valid_address(to) {
+        anyhow::bail!("'{}' is not a valid Dogecoin address (must start with 'D')", to);
+    }
+    if amount <= 0.0 {
+        anyhow::bail!("Amount must be > 0 DOGE");
+    }
+
+    println!("🐕 Building signed P2PKH transaction...");
+    println!("   To:     {}", to);
+    println!("   Amount: {:.8} DOGE  (+{:.8} DOGE fee)", amount, wallet::DEFAULT_TX_FEE_DOGE);
+
+    let raw_tx = wallet::build_signed_transaction(wif, to, amount, wallet::DEFAULT_TX_FEE_DOGE)
+        .await
+        .context("Failed to build/sign transaction")?;
+
+    let raw_hex = hex::encode(&raw_tx);
+    println!("   Signed: {} bytes", raw_tx.len());
+
+    println!("🌐 Broadcasting via Trezor Blockbook...");
+    let txid = wallet::broadcast_raw_tx(&raw_hex)
+        .await
+        .context("Broadcast failed")?;
+
+    println!("✅ Broadcast! txid = {}", txid);
+    println!("   Track: https://dogechain.info/tx/{}", txid);
     Ok(())
 }

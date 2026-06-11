@@ -86,21 +86,43 @@
     } catch { /* sandboxed — fail silently */ }
   }
 
-  function exportToTxt() {
+  async function exportToTxt() {
     const filename = `radiodoge-debug-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
     const header = `RadioDoge Debug Console Export\nGenerated: ${new Date().toISOString()}\n${'─'.repeat(72)}\n\n`;
     const text = header + entries.map(entryToText).join('\n');
     const blob = new Blob([text], { type: 'text/plain' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
+
+    // On Android/mobile: use the native share sheet (routes to Files / Downloads).
+    // File construction is inside the try-catch so any exotic failures fall through
+    // to the anchor download rather than propagating uncaught.
+    // AbortError (user cancelled share) also falls through — the file is still saved.
+    if (typeof navigator.share === 'function') {
+      try {
+        const file = new File([blob], filename, { type: 'text/plain' });
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ files: [file], title: 'RadioDoge Debug Log' });
+          if (exportToastTimer) clearTimeout(exportToastTimer);
+          exportToast = 'Shared via system share sheet';
+          exportToastTimer = setTimeout(() => { exportToast = null; }, 4000);
+          return;  // Only return on actual success
+        }
+      } catch (err) {
+        // User cancelled (AbortError) or share failed — fall through to anchor download
+        if ((err as DOMException).name !== 'AbortError') {
+          console.warn('[debug-export] share failed, falling back to download:', err);
+        }
+      }
+    }
+
+    // Desktop / WebView fallback: anchor download
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
     a.href     = url;
     a.download = filename;
-    // Must be in the DOM for Tauri's WebView to honour the download attribute
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    // Show a friendly toast with the filename so the user knows where it went
     if (exportToastTimer) clearTimeout(exportToastTimer);
     exportToast = `Downloads/${filename}`;
     exportToastTimer = setTimeout(() => { exportToast = null; }, 4000);
@@ -300,7 +322,7 @@
     role="status"
     aria-live="polite"
   >
-    💾 Saved to <strong>{exportToast}</strong>
+    💾 {exportToast}
   </div>
 {/if}
 

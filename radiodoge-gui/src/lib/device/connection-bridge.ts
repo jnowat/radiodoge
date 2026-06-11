@@ -1,5 +1,5 @@
 /**
- * RadioDoge connection bridge — v0.3.13
+ * RadioDoge connection bridge — v0.3.16
  *
  * Platform-aware abstraction over serial communication:
  *
@@ -82,9 +82,11 @@ export type MobileConnectionStatus =
 //   BLE_WRITE_CHAR_UUID  = NUS RX char  (we write to it)
 //   BLE_NOTIFY_CHAR_UUID = NUS TX char  (we subscribe for notifications)
 
-const BLE_SERVICE_UUID     = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'; // NUS service
-const BLE_WRITE_CHAR_UUID  = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'; // NUS RX — host writes
-const BLE_NOTIFY_CHAR_UUID = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'; // NUS TX — board notifies
+// Lowercase UUIDs are required by some Android BLE implementations.
+// NUS service UUID (6e400001-…) is not needed after upgrading to plugin-blec v0.5+
+// which addresses characteristics directly without a service UUID argument.
+const BLE_WRITE_CHAR_UUID  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // NUS RX — host writes
+const BLE_NOTIFY_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // NUS TX — board notifies
 
 // ─── USB VID/PID recognition ─────────────────────────────────────────────────
 
@@ -137,8 +139,11 @@ export async function isAndroid(): Promise<boolean> {
 /** Currently open USB serial port on Android (null when disconnected). */
 let activePort: InstanceType<typeof SerialPort> | null = null;
 
-/** Teardown function returned by the serialplugin's listen() call. */
-let activeListenerTeardown: (() => void) | null = null;
+/**
+ * True while the USB polling read loop is running.
+ * Set to false to stop the loop (on disconnect or error).
+ */
+let activeReadLoopRunning = false;
 
 /** BLE device address (MAC) when connected over BLE (null when disconnected). */
 let activeBleAddress: string | null = null;
@@ -165,7 +170,14 @@ export async function bleScan(timeoutMs = 5000): Promise<MobileDeviceInfo[]> {
   const blec = await _blec();
   let rawDevices: Array<{ address: string; name?: string | null; rssi?: number | null }> = [];
   try {
-    rawDevices = await blec.scan(timeoutMs);
+    // plugin-blec v0.5+ uses startScan(handler, timeout) instead of scan(timeout)
+    rawDevices = await new Promise<typeof rawDevices>((resolve, reject) => {
+      const seen = new Map<string, (typeof rawDevices)[number]>();
+      blec.startScan(
+        (devices) => { for (const d of devices) seen.set(d.address, d); },
+        timeoutMs,
+      ).then(() => resolve(Array.from(seen.values()))).catch(reject);
+    });
   } catch (e) {
     console.warn('[bridge-ble] scan() failed:', e);
     return [];
@@ -226,7 +238,7 @@ async function _listDesktopPorts(): Promise<MobileDeviceInfo[]> {
 async function _listAndroidDevices(): Promise<MobileDeviceInfo[]> {
   let portsMap: Record<string, Record<string, unknown>>;
   try {
-    portsMap = (await SerialPort.available_ports()) as Record<string, Record<string, unknown>>;
+    portsMap = (await SerialPort.available_ports()) as unknown as Record<string, Record<string, unknown>>;
   } catch (e) {
     console.warn('[bridge] available_ports() failed:', e);
     return [];
@@ -305,6 +317,38 @@ export async function connect(devicePath: string, type?: 'usb' | 'bluetooth'): P
   await invoke('connect_port', { port: devicePath });
 }
 
+// ─── Raw-bytes extraction helper ─────────────────────────────────────────────
+//
+// Used by both the USB polling loop and the BLE onReceiveData path to normalise
+// whatever shape the underlying transport delivers into a flat number[].
+//
+// USB polling path: invoke('plugin:serialplugin|read_binary', ...) returns
+//   Vec<u8> from Rust, which Tauri IPC serialises to JSON number[].
+// BLE notify path: blec.onReceiveData delivers Uint8Array.
+
+/**
+ * Extract raw bytes from whatever shape the transport layer delivers:
+ *
+ *   number[]           — standard Tauri IPC result for Vec<u8> (USB polling)
+ *   Uint8Array         — typed array (BLE notify, some native paths)
+ *   ArrayBuffer        — raw buffer (some native edge cases)
+ *   { data: ... }      — wrapped form (defensive, some plugin versions)
+ *
+ * Returns an empty array for any unrecognised shape.
+ */
+function _extractBytes(raw: unknown): number[] {
+  if (raw instanceof Uint8Array) return Array.from(raw);
+  if (raw instanceof ArrayBuffer) return Array.from(new Uint8Array(raw));
+  if (Array.isArray(raw)) return raw as number[];
+  if (raw !== null && typeof raw === 'object') {
+    const inner = (raw as Record<string, unknown>).data;
+    if (inner instanceof Uint8Array) return Array.from(inner);
+    if (inner instanceof ArrayBuffer) return Array.from(new Uint8Array(inner));
+    if (Array.isArray(inner)) return inner as number[];
+  }
+  return [];
+}
+
 // ─── Android USB connect ──────────────────────────────────────────────────────
 
 async function _connectAndroid(devicePath: string): Promise<void> {
@@ -320,19 +364,17 @@ async function _connectAndroid(devicePath: string): Promise<void> {
     throw new Error(`USB serial open failed: ${e}`);
   }
 
-  try {
-    const teardown = await activePort.listen((data: Uint8Array | number[]) => {
-      const bytes = Array.isArray(data) ? data : Array.from(data);
-      invoke('mobile_push_bytes', { bytes, rssi: 0 }).catch(
-        (err) => console.warn('[bridge] mobile_push_bytes error:', err),
-      );
-    });
-    activeListenerTeardown = typeof teardown === 'function' ? teardown : null;
-  } catch (e) {
-    await _closePort();
-    await invoke('mobile_set_disconnected');
-    throw new Error(`USB listener setup failed: ${e}`);
-  }
+  // Kick off the polling read loop as a fire-and-forget task.
+  // It runs until activeReadLoopRunning is set to false (disconnect / error).
+  // We do NOT use startListening()+listen() here because the Android Kotlin code
+  // emits "serialData" events (not the "plugin-serialplugin-read-*" name that
+  // the JS listen() wrapper subscribes to) and encodes data as a UTF-8 string
+  // (not a number[]), making the event-based path completely unusable.
+  // Using read_binary() directly is the same IPC path as writeBinary() — known
+  // to work — and is simpler, more reliable, and free of event-name fragility.
+  _startReadLoop(devicePath).catch(
+    (err) => console.warn('[bridge] USB read loop crashed unexpectedly:', err),
+  );
 
   await _registerSessionListeners();
 
@@ -345,7 +387,7 @@ async function _connectAndroid(devicePath: string): Promise<void> {
 
   const initPackets = await invoke<number[][]>('mobile_build_connect_queries');
   for (let i = 0; i < initPackets.length; i++) {
-    await activePort.writeBinary(new Uint8Array(initPackets[i]));
+    await _usbWrite(new Uint8Array(initPackets[i]));
     if (i < initPackets.length - 1) await _sleep(80);
   }
 }
@@ -364,7 +406,10 @@ async function _connectBluetoothAndroid(address: string): Promise<void> {
   // Connect via the blec plugin (triggers Android BLE GATT connect)
   try {
     await blec.connect(address, () => {
-      // onDisconnect: board dropped the connection unexpectedly — reset global state
+      // onDisconnect: board dropped the connection unexpectedly — reset global state.
+      // Guard: if activeBleAddress is already null we initiated the disconnect ourselves
+      // (see _disconnectBluetoothAndroid), so skip to avoid double-setDisconnected().
+      if (!activeBleAddress) return;
       console.warn('[bridge-ble] BLE device disconnected:', address);
       activeBleAddress = null;
       invoke('mobile_ble_disconnect').catch(() => {});
@@ -378,24 +423,37 @@ async function _connectBluetoothAndroid(address: string): Promise<void> {
 
   activeBleAddress = address;
 
+  // Allow the Android BLE stack 250 ms to stabilise after GATT connect before
+  // enabling characteristic notifications.  Some Android BLE implementations
+  // silently drop the CCCD descriptor write if it arrives too quickly after
+  // the GATT Connected callback, resulting in a "connected" state where the
+  // board never sends data back.
+  await _sleep(250);
+
+  // Guard: if the user disconnected during the stabilisation delay, abort cleanly.
+  if (!activeBleAddress) return;
+
   // Subscribe to characteristic notifications (board → host data path).
   // Each notification chunk feeds directly into mobile_push_bytes, which runs
   // the identical accumulator + framing logic as the USB-OTG path.
   try {
-    const teardown = await blec.onReceiveData(
-      BLE_SERVICE_UUID,
-      BLE_NOTIFY_CHAR_UUID,
-      (data: Uint8Array) => {
-        const bytes = Array.from(data);
-        invoke('mobile_push_bytes', { bytes, rssi: 0 }).catch(
-          (err) => console.warn('[bridge-ble] mobile_push_bytes error:', err),
-        );
-      },
-    );
-    bleNotifyTeardown = typeof teardown === 'function' ? teardown : null;
+    // plugin-blec v0.5+ uses subscribe(char, handler) instead of onReceiveData(svc, char, handler)
+    await blec.subscribe(BLE_NOTIFY_CHAR_UUID, (data: unknown) => {
+      // BLE notifications are typically Uint8Array but use _extractBytes()
+      // for defensive compatibility with any wrapper format.
+      const bytes = _extractBytes(data);
+      if (bytes.length === 0) return;
+      invoke('mobile_push_bytes', { bytes, rssi: 0 }).catch(
+        (err) => console.warn('[bridge-ble] mobile_push_bytes error:', err),
+      );
+    });
+    bleNotifyTeardown = () => { void blec.unsubscribe(BLE_NOTIFY_CHAR_UUID); };
   } catch (e) {
-    // Non-fatal: we can still send but won't receive from the board.
-    console.warn('[bridge-ble] notification subscribe failed (UUID mismatch?):', e);
+    // Propagate: without notifications the board can never respond and the
+    // connection is silently broken.  Surface the error so the UI can show it.
+    activeBleAddress = null;
+    await invoke('mobile_ble_disconnect').catch(() => {});
+    throw new Error(`BLE notification subscribe failed (UUID mismatch?): ${e}`);
   }
 
   // Register the same Tauri event listeners as the USB path
@@ -429,10 +487,9 @@ export async function disconnect(): Promise<void> {
 async function _disconnectAndroid(notifyRust: boolean): Promise<void> {
   _clearSessionListeners();
 
-  if (activeListenerTeardown) {
-    try { activeListenerTeardown(); } catch { /* ignore */ }
-    activeListenerTeardown = null;
-  }
+  // Tell the polling read loop to stop.  It will exit within at most one
+  // 100 ms read window (the current read_binary call).
+  activeReadLoopRunning = false;
 
   await _closePort();
 
@@ -441,6 +498,64 @@ async function _disconnectAndroid(notifyRust: boolean): Promise<void> {
     await invoke('mobile_clear_accumulator').catch(() => {});
     setDisconnected();
   }
+}
+
+// ─── Android USB polling read loop ───────────────────────────────────────────
+//
+// Why polling instead of startListening()+listen()?
+//
+// The tauri-plugin-serialplugin Android (Kotlin) backend emits data via
+// `trigger("serialData", { path, data: String(chunk), size })`.
+// The JS plugin wrapper's listen() subscribes to
+// `plugin-serialplugin-read-${encodedPath}` — a completely different event name.
+// Even if the name matched, the payload.data is a UTF-8 encoded string
+// (String(byteArray) in Kotlin) and `new Uint8Array(string)` throws a
+// RangeError, which the plugin catches silently.
+//
+// read_binary() uses the same synchronous IPC path as writeBinary() (which is
+// known to work): JS invoke → Rust command → run_mobile_plugin("readBinary")
+// → Kotlin reads USB port → returns bytes → Rust → JS.  No events, no
+// encoding ambiguity, no event-name fragility.
+//
+// Each loop iteration:
+//   1. invoke('plugin:serialplugin|read_binary', { path, timeout: 100, size: 1024 })
+//   2. bytes.length > 0 → invoke('mobile_push_bytes', { bytes, rssi: 0 })
+//   3. "no data within N ms" timeout errors are silently skipped.
+//   4. Any other error (device unplugged, port closed) exits the loop.
+
+async function _startReadLoop(devicePath: string): Promise<void> {
+  activeReadLoopRunning = true;
+  while (activeReadLoopRunning) {
+    try {
+      const raw = await invoke('plugin:serialplugin|read_binary', {
+        path: devicePath,
+        timeout: 100,    // 100 ms read window per iteration
+        size:    1024,
+      });
+      const bytes = _extractBytes(raw);
+      if (bytes.length > 0) {
+        invoke('mobile_push_bytes', { bytes, rssi: 0 }).catch(
+          (err) => console.warn('[bridge] mobile_push_bytes error:', err),
+        );
+      }
+    } catch (e: unknown) {
+      if (!activeReadLoopRunning) break;  // Normal shutdown — silently exit
+      const msg = String(e).toLowerCase();
+      // A read timeout (no data in the 100 ms window) is normal and expected.
+      if (
+        msg.includes('no data') ||
+        msg.includes('timeout') ||
+        msg.includes('timed out') ||
+        msg.includes('timedout')
+      ) {
+        continue;
+      }
+      // Any other error means the port is closed or device was unplugged.
+      console.warn('[bridge] USB read loop: port error, stopping:', e);
+      break;
+    }
+  }
+  activeReadLoopRunning = false;
 }
 
 async function _disconnectBluetoothAndroid(notifyRust: boolean): Promise<void> {
@@ -452,13 +567,16 @@ async function _disconnectBluetoothAndroid(notifyRust: boolean): Promise<void> {
     bleNotifyTeardown = null;
   }
 
-  // Disconnect GATT
+  // Disconnect GATT.
+  // Clear activeBleAddress BEFORE calling blec.disconnect() so the onDisconnect
+  // callback (registered in blec.connect()) sees null and early-returns, preventing
+  // a double setDisconnected() + duplicate Rust invocations.
   if (activeBleAddress) {
+    activeBleAddress = null;
     try {
       const blec = await _blec();
       await blec.disconnect();
     } catch { /* ignore — device may already be gone */ }
-    activeBleAddress = null;
   }
 
   if (notifyRust) {
@@ -481,6 +599,22 @@ async function _registerSessionListeners(): Promise<void> {
     window.dispatchEvent(new CustomEvent('radiodoge:doge-tx', { detail: ev.payload.body }));
   });
   sessionUnlistens.push(unlistenTx);
+
+  // send_transaction emits this event on Android so the bridge can write the
+  // signed radio packets over USB or BLE without any protocol code in the UI.
+  const unlistenMobileTx = await listen<number[][]>('mobile-tx-packets', async (ev) => {
+    const packets = ev.payload;
+    for (let i = 0; i < packets.length; i++) {
+      const chunk = new Uint8Array(packets[i]);
+      if (activeBleAddress) {
+        await _bleWrite(chunk);
+      } else {
+        await _usbWrite(chunk);
+      }
+      if (packets.length > 1 && i < packets.length - 1) await _sleep(120);
+    }
+  });
+  sessionUnlistens.push(unlistenMobileTx);
 }
 
 function _clearSessionListeners(): void {
@@ -503,7 +637,8 @@ async function _bleWrite(data: Uint8Array): Promise<void> {
   // Debug logging (non-blocking — fire-and-forget is fine here)
   invoke('mobile_ble_write_characteristic', { data: Array.from(data) }).catch(() => {});
   const blec = await _blec();
-  await blec.sendData(BLE_SERVICE_UUID, BLE_WRITE_CHAR_UUID, data);
+  // plugin-blec v0.5+ uses send(char, data) instead of sendData(svc, char, data)
+  await blec.send(BLE_WRITE_CHAR_UUID, data, 'withoutResponse');
 }
 
 // ─── Port helpers ─────────────────────────────────────────────────────────────
@@ -515,6 +650,19 @@ async function _closePort(): Promise<void> {
   }
 }
 
+/**
+ * Write `data` to the active USB serial port and emit TX debug traffic.
+ *
+ * Mirrors _bleWrite() for the USB path: the actual byte write goes via the
+ * serialplugin's writeBinary, and a fire-and-forget invoke to mobile_emit_debug_tx
+ * makes the bytes visible in the Debug Console.
+ */
+async function _usbWrite(data: Uint8Array): Promise<void> {
+  _requireActivePort();
+  await activePort!.writeBinary(data);
+  invoke('mobile_emit_debug_tx', { bytes: Array.from(data) }).catch(() => {});
+}
+
 function _sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -522,18 +670,102 @@ function _sleep(ms: number): Promise<void> {
 // ─── Outgoing packet helpers (Android — USB and BLE) ─────────────────────────
 
 /**
- * Send a PING to the board.
+ * Send a PING and wait up to `timeoutMs` ms for the board to echo it back.
+ *
+ * Mirrors the desktop `ping_device` Rust command which blocks until it receives
+ * a CMD_PING (0x02) reply or times out after 500 ms.
+ *
+ * Implementation:
+ *   1. Register a one-shot `radio-packet` listener BEFORE writing the PING
+ *      bytes to avoid a race condition where the PONG arrives before we start
+ *      listening.
+ *   2. Write the PING via USB or BLE.
+ *   3. Resolve true when CMD_PING arrives; resolve false on timeout (500 ms).
+ *
+ * Returns true if a PONG was received, false on timeout.
+ */
+export async function mobilePingWait(timeoutMs = 2000): Promise<boolean> {
+  const pingBytes = await invoke<number[]>('mobile_build_ping');
+
+  // Deferred-resolve pattern: create the promise first, capture its resolver.
+  let resolvePong!: (v: boolean) => void;
+  const pong = new Promise<boolean>((r) => { resolvePong = r; });
+  let settled = false;
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+
+  // Start as a no-op; overwritten once listen() resolves (before any event
+  // can fire because events are only dispatched after the current microtask).
+  let unlisten: () => void = () => {};
+
+  const ul = await listen<{ command: number }>('radio-packet', (ev) => {
+    if (!settled && ev.payload.command === 0x02 /* CMD_PING */) {
+      settled = true;
+      if (timerId !== undefined) clearTimeout(timerId);
+      unlisten();
+      resolvePong(true);
+    }
+  });
+  unlisten = ul;
+
+  timerId = setTimeout(() => {
+    if (!settled) {
+      settled = true;
+      unlisten();
+      resolvePong(false);
+    }
+  }, timeoutMs);
+
+  // Send the PING only after the listener is active.
+  try {
+    if (activeBleAddress) {
+      await _bleWrite(new Uint8Array(pingBytes));
+    } else {
+      await _usbWrite(new Uint8Array(pingBytes));
+    }
+  } catch (e) {
+    if (!settled) {
+      settled = true;
+      if (timerId !== undefined) clearTimeout(timerId);
+      unlisten();
+      resolvePong(false);
+    }
+    throw e;
+  }
+
+  return pong;
+}
+
+/**
+ * Write raw bytes to the active transport (USB or BLE).
+ *
+ * Used by SettingsTab and other UI components that need to send arbitrary
+ * command packets (SET_GATEWAY, WIFI_TOGGLE, BLE_TOGGLE, GET_MAC, etc.)
+ * to the board on Android without going through the desktop Rust serial path.
+ *
+ * Routes to USB serial or BLE GATT depending on which transport is active.
+ * Throws if no transport is active.
+ */
+export async function mobileSendBytes(data: Uint8Array): Promise<void> {
+  if (activeBleAddress) {
+    await _bleWrite(data);
+  } else {
+    await _usbWrite(data);
+  }
+}
+
+/**
+ * Send a PING to the board (fire-and-forget, no wait for PONG).
  *
  * Routes through USB serial or BLE write depending on which transport is active.
  * Rust builds the correct byte sequence so there is no protocol code in JS.
+ * Use mobilePingWait() when a round-trip confirmation is needed.
  */
 export async function mobilePing(): Promise<void> {
   const bytes = await invoke<number[]>('mobile_build_ping');
   if (activeBleAddress) {
     await _bleWrite(new Uint8Array(bytes));
   } else {
-    _requireActivePort();
-    await activePort!.writeBinary(new Uint8Array(bytes));
+    await _usbWrite(new Uint8Array(bytes));
   }
 }
 
@@ -550,8 +782,7 @@ export async function mobileSendTransaction(tx: TransactionRequest): Promise<voi
     if (activeBleAddress) {
       await _bleWrite(chunk);
     } else {
-      _requireActivePort();
-      await activePort!.writeBinary(chunk);
+      await _usbWrite(chunk);
     }
     if (packets.length > 1 && i < packets.length - 1) await _sleep(120);
   }
@@ -568,8 +799,7 @@ export async function mobileSendLoraSettings(settings: LoraSettings): Promise<vo
   if (activeBleAddress) {
     await _bleWrite(data);
   } else {
-    _requireActivePort();
-    await activePort!.writeBinary(data);
+    await _usbWrite(data);
   }
 }
 
@@ -589,6 +819,8 @@ export const bridge = {
   connect,
   disconnect,
   mobilePing,
+  mobilePingWait,
+  mobileSendBytes,
   mobileSendTransaction,
   mobileSendLoraSettings,
 };

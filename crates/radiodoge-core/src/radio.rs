@@ -51,6 +51,7 @@ pub const CMD_WIFI_TOGGLE: u8 = 0x24;          // v0.3.7: Enable/disable WiFi ra
 pub const CMD_ADDR_CONFLICT: u8 = 0x25;        // v0.3.7: Board-initiated: duplicate node address detected
 pub const CMD_GET_BATTERY: u8 = 0x26;          // v0.3.8: Query battery voltage (2-byte u16 mV in payload)
 pub const CMD_GET_MAC: u8 = 0x27;              // v0.3.8: Query board MAC address (6 bytes in payload)
+pub const CMD_BLE_TOGGLE: u8 = 0x28;          // v0.3.16: Enable/disable BLE advertising (persists to NVS)
 
 /// Single packet header length in bytes
 pub const SINGLE_HDR_LEN: usize = 8;
@@ -82,7 +83,7 @@ pub fn build_ping(src: &NodeAddress, dst: &NodeAddress) -> Vec<u8> {
 /// Build a text MESSAGE packet.
 pub fn build_message(src: &NodeAddress, dst: &NodeAddress, text: &str) -> Vec<u8> {
     let mut packet = build_header(CMD_MESSAGE, FLAG_STANDARD, src, dst);
-    let payload = &text.as_bytes()[..text.as_bytes().len().min(MAX_SINGLE_PAYLOAD_LEN)];
+    let payload = &text.as_bytes()[..text.len().min(MAX_SINGLE_PAYLOAD_LEN)];
     packet.extend_from_slice(payload);
     packet
 }
@@ -135,6 +136,25 @@ pub fn build_get_mac(src: &NodeAddress) -> Vec<u8> {
     build_header(CMD_GET_MAC, FLAG_STANDARD, src, &NodeAddress::broadcast())
 }
 
+/// Build a BLE_TOGGLE command (CMD 0x28) — v0.3.16.
+/// Payload byte: 1 = enable BLE advertising, 0 = disable (power saving).
+/// Board persists setting to NVS.
+pub fn build_ble_toggle(src: &NodeAddress, enable: bool) -> Vec<u8> {
+    let mut packet = build_header(CMD_BLE_TOGGLE, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    packet.push(if enable { 1u8 } else { 0u8 });
+    packet
+}
+
+/// Build a CMD_REQUEST_BALANCE packet.
+/// The gateway that receives this will query Blockbook for `doge_address` and reply with
+/// a CMD_MESSAGE containing `"BAL:{koinus}"` addressed back to `src`.
+pub fn build_request_balance(src: &NodeAddress, doge_address: &str) -> Vec<u8> {
+    let mut packet = build_header(CMD_REQUEST_BALANCE, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    let addr_bytes = doge_address.as_bytes();
+    packet.extend_from_slice(&addr_bytes[..addr_bytes.len().min(MAX_SINGLE_PAYLOAD_LEN)]);
+    packet
+}
+
 /// Return the exact total byte count for commands with fixed-size replies.
 /// Returns None for variable-length commands (e.g., CMD_MESSAGE, CMD_GET_FIRMWARE_VERSION).
 /// Used by the serial read loop to advance the accumulator precisely, avoiding
@@ -143,7 +163,7 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
     match cmd {
         CMD_GET_NODE_ADDR   => Some(8),  // header only
         CMD_PING            => Some(8),  // header only (ACK)
-        CMD_REQUEST_BALANCE => Some(8),  // header only (ACK)
+        // CMD_REQUEST_BALANCE has a variable-length payload (Dogecoin address) — handled as variable
         CMD_SET_LORA_PARAMS => Some(8),  // header only (ACK)
         CMD_ADDR_CONFLICT   => Some(8),  // header only
         CMD_SET_NODE_ADDRS  => Some(8),  // header only (ACK)
@@ -152,6 +172,7 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         CMD_GET_SETTINGS    => Some(13), // header + 5 bytes [region, community, node, gw, wifi]
         CMD_GET_BATTERY     => Some(10), // header + 2 bytes (voltage_mv big-endian)
         CMD_GET_MAC         => Some(14), // header + 6 bytes (MAC address)
+        CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
         _ => None,                       // variable length (0x03 MSG, 0x20 FW version, etc.)
     }
 }
@@ -265,9 +286,20 @@ fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
     match command {
         CMD_PING => Some("🏓 PING".to_string()),
         CMD_MESSAGE | CMD_BROADCAST => {
-            std::str::from_utf8(payload)
-                .ok()
-                .map(|s| format!("💬 {}", s.trim_end_matches('\0')))
+            std::str::from_utf8(payload).ok().map(|s| {
+                let text = s.trim_end_matches('\0').trim();
+                // Gateway balance response: "BAL:{koinus}"
+                if let Some(koinus_str) = text.strip_prefix("BAL:") {
+                    if let Ok(koinus) = koinus_str.parse::<u64>() {
+                        return format!("💰 Balance: {:.8} DOGE", koinus as f64 / 1e8);
+                    }
+                }
+                // Gateway TX acknowledgement: "TX_ACK:{txid}"
+                if let Some(txid) = text.strip_prefix("TX_ACK:") {
+                    return format!("✅ TX confirmed: txid={}", txid);
+                }
+                format!("💬 {}", text)
+            })
         }
         CMD_GET_NODE_ADDR => Some("📍 GET NODE ADDRESS".to_string()),
         CMD_SET_NODE_ADDRS => {
@@ -278,8 +310,23 @@ fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
             }
         }
         CMD_DOGE_TX => {
-            crate::wallet::decode_transaction_payload(payload)
-                .map(|s| format!("🐕 {}", s))
+            if crate::wallet::is_signed_tx_payload(payload) {
+                Some(format!("🐕 {}", crate::wallet::describe_signed_tx(payload)))
+            } else {
+                crate::wallet::decode_transaction_payload(payload)
+                    .map(|s| format!("🐕 {}", s))
+            }
+        }
+        CMD_REQUEST_BALANCE => {
+            if payload.is_empty() {
+                Some("💰 REQUEST BALANCE".to_string())
+            } else {
+                let addr = std::str::from_utf8(payload)
+                    .unwrap_or("?")
+                    .trim_matches('\0')
+                    .trim();
+                Some(format!("💰 REQUEST BALANCE: {}", addr))
+            }
         }
         CMD_GET_FIRMWARE_VERSION => {
             std::str::from_utf8(payload)
@@ -332,6 +379,13 @@ fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
                     payload[0], payload[1], payload[2], payload[3], payload[4], payload[5]))
             } else {
                 Some("🔑 GET_MAC".to_string())
+            }
+        }
+        CMD_BLE_TOGGLE => {
+            if !payload.is_empty() {
+                Some(format!("📶 BLE: {}", if payload[0] != 0 { "ON" } else { "OFF" }))
+            } else {
+                Some("📶 BLE_TOGGLE".to_string())
             }
         }
         _ => None,
@@ -398,5 +452,113 @@ mod tests {
         assert_eq!(parsed.command, CMD_PING);
         assert_eq!(parsed.source.region, 10);
         assert_eq!(parsed.rssi, -70);
+    }
+
+    /// Regression test for the back-to-back framing bug fixed in v0.3.16.
+    ///
+    /// When two packets arrive in a single serial read, the framing loop must
+    /// pre-slice the accumulator to the exact packet length before calling
+    /// parse_incoming.  Without this, the first packet's payload_hex includes
+    /// the raw bytes of every subsequent packet.
+    #[test]
+    fn test_parse_incoming_does_not_bleed_into_next_packet() {
+        let src = test_src();
+        let dst = test_dst();
+
+        // Two back-to-back packets in one buffer, as they might arrive from the
+        // serial port: a CMD_MESSAGE followed immediately by a CMD_PING.
+        let mut combined = build_message(&src, &dst, "hello");
+        combined.extend_from_slice(&build_ping(&src, &dst));
+
+        let msg_len = SINGLE_HDR_LEN + b"hello".len();
+
+        // Parse only the first packet's bytes.
+        let parsed = parse_incoming(&combined[..msg_len], 0)
+            .expect("Should parse valid CMD_MESSAGE");
+
+        assert_eq!(parsed.command, CMD_MESSAGE);
+        // payload_hex must be exactly "hello" — not "hello" + the PING header bytes.
+        assert_eq!(
+            parsed.payload_hex,
+            hex::encode(b"hello"),
+            "payload_hex must not include bytes from the subsequent PING packet"
+        );
+    }
+
+    /// Verify exact_packet_len returns the correct size for every fixed-length command
+    /// and None for all variable-length commands.
+    #[test]
+    fn test_exact_packet_len_coverage() {
+        // Fixed-length commands and their expected total byte counts
+        let fixed = [
+            (CMD_GET_NODE_ADDR,   8usize),
+            (CMD_PING,            8),
+            (CMD_SET_LORA_PARAMS, 8),
+            (CMD_ADDR_CONFLICT,   8),
+            (CMD_SET_NODE_ADDRS,  8),
+            (CMD_SET_GATEWAY,     9),
+            (CMD_WIFI_TOGGLE,     9),
+            (CMD_BLE_TOGGLE,      9),
+            (CMD_GET_SETTINGS,    13),
+            (CMD_GET_BATTERY,     10),
+            (CMD_GET_MAC,         14),
+        ];
+        for (cmd, expected) in fixed {
+            assert_eq!(
+                exact_packet_len(cmd),
+                Some(expected),
+                "CMD 0x{:02X} should have fixed length {}", cmd, expected
+            );
+        }
+
+        // Variable-length commands must return None
+        let variable = [
+            CMD_MESSAGE, CMD_BROADCAST, CMD_MULTIPART,
+            CMD_DOGE_TX, CMD_REQUEST_BALANCE, CMD_GET_FIRMWARE_VERSION,
+        ];
+        for cmd in variable {
+            assert_eq!(
+                exact_packet_len(cmd),
+                None,
+                "CMD 0x{:02X} should be variable-length (None)", cmd
+            );
+        }
+    }
+
+    /// Verify that the null-terminator scan logic used for CMD_GET_FIRMWARE_VERSION
+    /// correctly stops at the '\0' and does not consume bytes from a subsequent packet.
+    #[test]
+    fn test_firmware_version_null_terminator_scan() {
+        let src = test_src();
+        let ver_string = b"v1.2.3\0";
+
+        // Manually build a CMD_GET_FIRMWARE_VERSION response followed by CMD_GET_SETTINGS
+        let mut combined = vec![CMD_GET_FIRMWARE_VERSION, 0x00];
+        combined.extend_from_slice(&[src.region, src.community, src.node]);
+        combined.extend_from_slice(&[0xFF, 0xFF, 0xFF]); // broadcast dst
+        combined.extend_from_slice(ver_string);
+        // Append a CMD_GET_SETTINGS response immediately after
+        combined.extend_from_slice(&build_get_settings(&src));
+
+        // Simulate the null-terminator scan from the framing loop
+        let after_hdr = &combined[SINGLE_HDR_LEN..];
+        let payload_len = after_hdr
+            .iter()
+            .position(|&b| b == 0)
+            .map(|i| i + 1)
+            .unwrap_or_else(|| after_hdr.len().min(MAX_SINGLE_PAYLOAD_LEN));
+        let packet_len = (SINGLE_HDR_LEN + payload_len).min(combined.len());
+
+        let parsed = parse_incoming(&combined[..packet_len], 0)
+            .expect("Should parse firmware version packet");
+
+        assert_eq!(parsed.command, CMD_GET_FIRMWARE_VERSION);
+        // Payload must be only "v1.2.3\0", not "v1.2.3\0" + GET_SETTINGS bytes
+        let raw_payload = hex::decode(&parsed.payload_hex).expect("valid hex");
+        assert_eq!(
+            raw_payload,
+            ver_string,
+            "Firmware version payload must end at the null terminator"
+        );
     }
 }

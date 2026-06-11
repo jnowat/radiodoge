@@ -8,10 +8,16 @@
 //! No FFI to libdogecoin is needed — everything is done in pure Rust.
 
 use anyhow::Result;
-use rand::rngs::OsRng;
+use argon2::{Argon2, Algorithm, Version, Params};
+use bip39::Mnemonic;
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, KeyInit, aead::AeadInPlace};
+use hmac::{Hmac, Mac};
+use rand::{rngs::OsRng, RngCore};
 use ripemd::{Digest as RipemdDigest, Ripemd160};
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
-use sha2::{Digest as _, Sha256};
+use sha2::{Sha256, Sha512};
+
+type HmacSha512 = Hmac<Sha512>;
 
 use crate::types::WalletInfo;
 
@@ -154,7 +160,12 @@ pub fn encode_transaction_payload(
     amount_doge: f64,
     memo: Option<&str>,
 ) -> Result<Vec<u8>> {
-    // Convert DOGE to koinus (satoshi equivalent), round to nearest
+    // Convert DOGE to koinus (satoshi equivalent), round to nearest.
+    // Guard against NaN/Infinity before cast — while the frontend validates and Tauri IPC
+    // rejects non-finite JSON floats, the backend should not trust the caller.
+    if !amount_doge.is_finite() || amount_doge < 0.0 {
+        anyhow::bail!("Invalid amount: {}", amount_doge);
+    }
     let koinus: u64 = (amount_doge * 1e8).round() as u64;
 
     let addr_bytes = to_address.as_bytes();
@@ -175,6 +186,689 @@ pub fn encode_transaction_payload(
     }
 
     Ok(payload)
+}
+
+// ─── Real P2PKH transaction signing + broadcast ───────────────────────────────
+
+const BLOCKBOOK_BASE: &str = "https://doge1.trezor.io/api/v2";
+
+/// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
+pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
+
+#[derive(serde::Deserialize)]
+struct UtxoEntry {
+    txid: String,
+    vout: u32,
+    value: String, // koinus as string (avoids f64 precision loss for large values)
+}
+
+fn encode_varint(n: u64) -> Vec<u8> {
+    if n < 0xfd {
+        vec![n as u8]
+    } else if n <= 0xffff {
+        let mut v = vec![0xfd_u8];
+        v.extend_from_slice(&(n as u16).to_le_bytes());
+        v
+    } else if n <= 0xffff_ffff {
+        let mut v = vec![0xfe_u8];
+        v.extend_from_slice(&(n as u32).to_le_bytes());
+        v
+    } else {
+        let mut v = vec![0xff_u8];
+        v.extend_from_slice(&n.to_le_bytes());
+        v
+    }
+}
+
+fn sha256d(data: &[u8]) -> [u8; 32] {
+    let first = Sha256::digest(data);
+    Sha256::digest(first).into()
+}
+
+/// P2PKH scriptPubKey for a Dogecoin address (25 bytes).
+/// Layout: OP_DUP OP_HASH160 <20-byte pubkey hash> OP_EQUALVERIFY OP_CHECKSIG
+fn p2pkh_script(address: &str) -> Result<Vec<u8>> {
+    let decoded = bs58::decode(address)
+        .with_check(None)
+        .into_vec()
+        .map_err(|e| anyhow::anyhow!("Invalid address '{}': {}", address, e))?;
+    if decoded.len() != 21 || decoded[0] != DOGE_MAINNET_ADDR_VERSION {
+        anyhow::bail!("Not a valid Dogecoin mainnet P2PKH address: {}", address);
+    }
+    let mut s = Vec::with_capacity(25);
+    s.push(0x76_u8); // OP_DUP
+    s.push(0xa9_u8); // OP_HASH160
+    s.push(0x14_u8); // push 20 bytes
+    s.extend_from_slice(&decoded[1..21]);
+    s.push(0x88_u8); // OP_EQUALVERIFY
+    s.push(0xac_u8); // OP_CHECKSIG
+    Ok(s)
+}
+
+/// SIGHASH_ALL preimage for one input.
+/// All inputs are assumed to be from the same P2PKH address (`utxo_script`).
+fn sighash_preimage(
+    inputs: &[([u8; 32], u32)], // (txid LE, vout)
+    outputs: &[(u64, &[u8])],   // (koinus, scriptPubKey)
+    signing_idx: usize,
+    utxo_script: &[u8],
+) -> Vec<u8> {
+    let mut pre = Vec::new();
+    pre.extend_from_slice(&1u32.to_le_bytes()); // version
+    pre.extend_from_slice(&encode_varint(inputs.len() as u64));
+    for (i, (txid_le, vout)) in inputs.iter().enumerate() {
+        pre.extend_from_slice(txid_le);
+        pre.extend_from_slice(&vout.to_le_bytes());
+        if i == signing_idx {
+            pre.extend_from_slice(&encode_varint(utxo_script.len() as u64));
+            pre.extend_from_slice(utxo_script);
+        } else {
+            pre.push(0x00); // empty scriptSig for all other inputs
+        }
+        pre.extend_from_slice(&0xffff_ffffu32.to_le_bytes()); // sequence
+    }
+    pre.extend_from_slice(&encode_varint(outputs.len() as u64));
+    for (value, script) in outputs {
+        pre.extend_from_slice(&value.to_le_bytes());
+        pre.extend_from_slice(&encode_varint(script.len() as u64));
+        pre.extend_from_slice(script);
+    }
+    pre.extend_from_slice(&0u32.to_le_bytes()); // locktime
+    pre.extend_from_slice(&1u32.to_le_bytes()); // SIGHASH_ALL = 1
+    pre
+}
+
+async fn fetch_utxos_blockbook(address: &str) -> Result<Vec<UtxoEntry>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| anyhow::anyhow!("HTTP client init failed: {}", e))?;
+    let url = format!("{}/utxo/{}", BLOCKBOOK_BASE, address);
+    let utxos: Vec<UtxoEntry> = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("UTXO fetch failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| anyhow::anyhow!("UTXO fetch failed: HTTP {}", e.status().map(|s| s.as_u16()).unwrap_or(0)))?
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("UTXO response parse failed: {}", e))?;
+    Ok(utxos)
+}
+
+/// Build and sign a Dogecoin P2PKH transaction, returning the raw serialized bytes.
+///
+/// Fetches UTXOs from Trezor Blockbook, selects coins with a greedy algorithm
+/// (largest first), builds inputs and outputs (including change), signs each
+/// input with SIGHASH_ALL.
+///
+/// Pass `wallet::DEFAULT_TX_FEE_DOGE` (1.0) for the fee.
+/// To broadcast the result call `wallet::broadcast_raw_tx(&hex::encode(&tx))`.
+pub async fn build_signed_transaction(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+    fee_doge: f64,
+) -> Result<Vec<u8>> {
+    if !amount_doge.is_finite() || amount_doge <= 0.0 {
+        anyhow::bail!("Invalid send amount: {}", amount_doge);
+    }
+
+    // Decode WIF → secret key + compressed pubkey + from_address
+    let decoded = bs58::decode(from_wif)
+        .with_check(None)
+        .into_vec()
+        .map_err(|e| anyhow::anyhow!("Invalid WIF encoding: {}", e))?;
+    if decoded.len() != 34 || decoded[0] != DOGE_MAINNET_WIF_VERSION || decoded[33] != 0x01 {
+        anyhow::bail!("Invalid Dogecoin compressed WIF key (must start with 'Q')");
+    }
+    let secp = Secp256k1::new();
+    let secret_key = SecretKey::from_slice(&decoded[1..33])
+        .map_err(|e| anyhow::anyhow!("Invalid key bytes: {}", e))?;
+    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+    let compressed_pubkey = public_key.serialize(); // 33 bytes
+    let from_address = pubkey_to_address(&public_key)?;
+
+    if !fee_doge.is_finite() || fee_doge < 0.0 {
+        anyhow::bail!("Invalid fee: {}", fee_doge);
+    }
+    let amount_koinus: u64 = (amount_doge * 1e8).round() as u64;
+    let fee_koinus: u64 = (fee_doge * 1e8).round() as u64;
+    let total_needed = amount_koinus
+        .checked_add(fee_koinus)
+        .ok_or_else(|| anyhow::anyhow!("Amount + fee overflow"))?;
+
+    // Fetch UTXOs and greedily select coins (largest first)
+    let raw_utxos = fetch_utxos_blockbook(&from_address).await?;
+    if raw_utxos.is_empty() {
+        anyhow::bail!("No UTXOs found for {}. Balance may be zero.", from_address);
+    }
+    let mut utxos: Vec<(String, u32, u64)> = raw_utxos
+        .into_iter()
+        .filter_map(|u| u.value.parse::<u64>().ok().map(|v| (u.txid, u.vout, v)))
+        .collect();
+    utxos.sort_by_key(|b| std::cmp::Reverse(b.2)); // largest first
+
+    let mut selected: Vec<(String, u32)> = Vec::new();
+    let mut selected_sum: u64 = 0;
+    for (txid, vout, value) in &utxos {
+        selected.push((txid.clone(), *vout));
+        selected_sum = selected_sum.saturating_add(*value);
+        if selected_sum >= total_needed {
+            break;
+        }
+    }
+    if selected_sum < total_needed {
+        anyhow::bail!(
+            "Insufficient funds: need {:.8} DOGE, spendable {:.8} DOGE",
+            total_needed as f64 / 1e8,
+            selected_sum as f64 / 1e8
+        );
+    }
+
+    // Build output and signing scripts
+    let to_script = p2pkh_script(to_address)?;
+    let from_script = p2pkh_script(&from_address)?; // also used as UTXO script for signing
+
+    let change = selected_sum - total_needed;
+    let mut outputs: Vec<(u64, Vec<u8>)> = vec![(amount_koinus, to_script)];
+    // Only create a change output if the change exceeds the Dogecoin dust threshold.
+    // Below this limit the output costs more to spend than it is worth and many nodes
+    // will not relay the transaction.
+    const DUST_THRESHOLD_KOINUS: u64 = 1_000_000; // 0.01 DOGE
+    if change > DUST_THRESHOLD_KOINUS {
+        outputs.push((change, from_script.clone()));
+    }
+
+    // Decode txids from display hex (big-endian) to wire format (little-endian)
+    let mut input_txids: Vec<([u8; 32], u32)> = Vec::with_capacity(selected.len());
+    for (txid_hex, vout) in &selected {
+        let mut b = hex::decode(txid_hex)
+            .map_err(|e| anyhow::anyhow!("Invalid txid '{}': {}", txid_hex, e))?;
+        if b.len() != 32 {
+            anyhow::bail!("Malformed txid length: {}", txid_hex);
+        }
+        b.reverse(); // display is big-endian; wire format is little-endian
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&b);
+        input_txids.push((arr, *vout));
+    }
+
+    // Sign each input (SIGHASH_ALL)
+    let outputs_ref: Vec<(u64, &[u8])> =
+        outputs.iter().map(|(v, s)| (*v, s.as_slice())).collect();
+    let mut script_sigs: Vec<Vec<u8>> = Vec::with_capacity(input_txids.len());
+    for i in 0..input_txids.len() {
+        let preimage = sighash_preimage(&input_txids, &outputs_ref, i, &from_script);
+        let hash = sha256d(&preimage);
+        let msg = secp256k1::Message::from_digest(hash);
+        let sig = secp.sign_ecdsa(&msg, &secret_key);
+        let mut der_sig = sig.serialize_der().to_vec();
+        der_sig.push(0x01); // SIGHASH_ALL type byte
+
+        // scriptSig: <push sig+hashtype> <push compressed pubkey>
+        let mut ss = Vec::new();
+        ss.push(der_sig.len() as u8); // push opcode = byte length (always ≤73)
+        ss.extend_from_slice(&der_sig);
+        ss.push(compressed_pubkey.len() as u8); // 0x21 = 33 bytes
+        ss.extend_from_slice(&compressed_pubkey);
+        script_sigs.push(ss);
+    }
+
+    // Serialize the final transaction
+    let mut tx = Vec::new();
+    tx.extend_from_slice(&1u32.to_le_bytes()); // version = 1
+    tx.extend_from_slice(&encode_varint(input_txids.len() as u64));
+    for (i, (txid_le, vout)) in input_txids.iter().enumerate() {
+        tx.extend_from_slice(txid_le);
+        tx.extend_from_slice(&vout.to_le_bytes());
+        let ss = &script_sigs[i];
+        tx.extend_from_slice(&encode_varint(ss.len() as u64));
+        tx.extend_from_slice(ss);
+        tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes()); // sequence = MAX (not RBF)
+    }
+    tx.extend_from_slice(&encode_varint(outputs.len() as u64));
+    for (value, script) in &outputs {
+        tx.extend_from_slice(&value.to_le_bytes());
+        tx.extend_from_slice(&encode_varint(script.len() as u64));
+        tx.extend_from_slice(script);
+    }
+    tx.extend_from_slice(&0u32.to_le_bytes()); // locktime = 0
+
+    Ok(tx)
+}
+
+/// Fetch the confirmed balance for a Dogecoin address from Trezor Blockbook.
+/// Returns the balance in koinus (1 DOGE = 1e8 koinus).
+pub async fn fetch_balance_blockbook(address: &str) -> Result<u64> {
+    #[derive(serde::Deserialize)]
+    struct AddressInfo {
+        balance: String,
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| anyhow::anyhow!("HTTP client init failed: {}", e))?;
+    let url = format!("{}/address/{}", BLOCKBOOK_BASE, address);
+    let info: AddressInfo = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Balance fetch failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| anyhow::anyhow!("Balance fetch failed: HTTP {}", e.status().map(|s| s.as_u16()).unwrap_or(0)))?
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("Balance response parse failed: {}", e))?;
+    info.balance.parse::<u64>()
+        .map_err(|_| anyhow::anyhow!("Invalid balance value in Blockbook response"))
+}
+
+/// Broadcast a raw signed Dogecoin transaction to the network via Trezor Blockbook.
+/// `raw_hex` is the hex-encoded serialized transaction (output of
+/// `hex::encode(build_signed_transaction(...))`).
+/// Returns the txid string on success.
+pub async fn broadcast_raw_tx(raw_hex: &str) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| anyhow::anyhow!("HTTP client init failed: {}", e))?;
+    let url = format!("{}/sendtx/", BLOCKBOOK_BASE);
+    let resp: serde_json::Value = client
+        .post(&url)
+        .header("Content-Type", "text/plain")
+        .body(raw_hex.to_string())
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Broadcast request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| anyhow::anyhow!("Broadcast request failed: HTTP {}", e.status().map(|s| s.as_u16()).unwrap_or(0)))?
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("Broadcast response parse failed: {}", e))?;
+
+    if let Some(txid) = resp.get("result").and_then(|v| v.as_str()) {
+        Ok(txid.to_string())
+    } else if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+        anyhow::bail!("Network rejected transaction: {}", err)
+    } else {
+        anyhow::bail!("Unexpected broadcast response: {}", resp)
+    }
+}
+
+// ─── Wallet encryption at rest ────────────────────────────────────────────────
+
+/// Encrypted wallet file written to `wallet.json` (v0.3.16+).
+/// The WIF private key is encrypted with ChaCha20-Poly1305 (16-byte auth tag included),
+/// key-derived from the user's passphrase via argon2id.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptedWalletFile {
+    pub address: String,
+    pub public_key_hex: String,
+    /// Ciphertext + 16-byte Poly1305 authentication tag, hex-encoded.
+    pub encrypted_wif: String,
+    /// Argon2id salt (16 bytes), hex-encoded.
+    pub salt: String,
+    /// ChaCha20-Poly1305 nonce (12 bytes), hex-encoded.
+    pub nonce: String,
+}
+
+/// Encrypt a wallet for storage on disk.
+/// Uses argon2id (64 MiB, 2 iterations) for key derivation and ChaCha20-Poly1305 for AEAD.
+/// Passphrase must be at least 1 byte; enforce a minimum length in the calling layer.
+pub fn encrypt_wallet(wallet: &WalletInfo, passphrase: &str) -> Result<EncryptedWalletFile> {
+    let mut salt = [0u8; 16];
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut nonce_bytes);
+
+    let key = derive_encryption_key(passphrase, &salt)?;
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let mut buffer: Vec<u8> = wallet.private_key_wif.as_bytes().to_vec();
+    cipher.encrypt_in_place(nonce, b"", &mut buffer)
+        .map_err(|_| anyhow::anyhow!("encryption failed"))?;
+
+    Ok(EncryptedWalletFile {
+        address: wallet.address.clone(),
+        public_key_hex: wallet.public_key_hex.clone(),
+        encrypted_wif: hex::encode(&buffer),
+        salt: hex::encode(salt),
+        nonce: hex::encode(nonce_bytes),
+    })
+}
+
+/// Decrypt a wallet loaded from disk.
+/// Returns `Err` with a user-facing message if the passphrase is wrong or the file is corrupted.
+pub fn decrypt_wallet(encrypted: &EncryptedWalletFile, passphrase: &str) -> Result<WalletInfo> {
+    let salt = hex::decode(&encrypted.salt)
+        .map_err(|_| anyhow::anyhow!("corrupted wallet: invalid salt encoding"))?;
+    let nonce_bytes = hex::decode(&encrypted.nonce)
+        .map_err(|_| anyhow::anyhow!("corrupted wallet: invalid nonce encoding"))?;
+    if nonce_bytes.len() != 12 {
+        anyhow::bail!("corrupted wallet: nonce must be 12 bytes, got {}", nonce_bytes.len());
+    }
+    let mut buffer = hex::decode(&encrypted.encrypted_wif)
+        .map_err(|_| anyhow::anyhow!("corrupted wallet: invalid ciphertext encoding"))?;
+
+    let key = derive_encryption_key(passphrase, &salt)?;
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    cipher.decrypt_in_place(nonce, b"", &mut buffer)
+        .map_err(|_| anyhow::anyhow!("Wrong passphrase or corrupted wallet file."))?;
+
+    let wif = String::from_utf8(buffer)
+        .map_err(|_| anyhow::anyhow!("corrupted wallet: decrypted data is not valid UTF-8"))?;
+    let info = import_wif(&wif)?;
+    if info.address != encrypted.address {
+        anyhow::bail!("Wallet integrity check failed: decrypted key does not match stored address.");
+    }
+    Ok(info)
+}
+
+fn derive_encryption_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
+    let params = Params::new(65536, 2, 1, Some(32))
+        .map_err(|e| anyhow::anyhow!("argon2 params error: {}", e))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut key = [0u8; 32];
+    argon2.hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .map_err(|e| anyhow::anyhow!("key derivation failed: {}", e))?;
+    Ok(key)
+}
+
+// ─── BIP39 mnemonic + BIP32 HD derivation ─────────────────────────────────────
+
+/// Generate a fresh 12-word BIP39 mnemonic phrase (128-bit entropy).
+pub fn generate_mnemonic() -> Result<Mnemonic> {
+    Mnemonic::generate(12).map_err(|e| anyhow::anyhow!("mnemonic generation failed: {}", e))
+}
+
+/// Derive a Dogecoin wallet from a BIP39 mnemonic phrase.
+/// Path: m/44'/3'/0'/0/0  (BIP44, Dogecoin coin-type 3, account 0, first external address).
+/// No BIP39 passphrase is used (empty string).
+pub fn wallet_from_mnemonic(phrase: &str) -> Result<WalletInfo> {
+    let mnemonic = Mnemonic::parse(phrase.trim())
+        .map_err(|e| anyhow::anyhow!("Invalid mnemonic: {}", e))?;
+    let seed = mnemonic.to_seed(""); // 64-byte BIP32 seed
+    let secret_key = derive_dogecoin_key(&seed)?;
+    let secp = Secp256k1::new();
+    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+    Ok(WalletInfo {
+        address: pubkey_to_address(&public_key)?,
+        public_key_hex: hex::encode(public_key.serialize()),
+        private_key_wif: secret_key_to_wif(&secret_key)?,
+    })
+}
+
+/// BIP32 derivation at m/44'/3'/0'/0/0.
+fn derive_dogecoin_key(seed: &[u8; 64]) -> Result<SecretKey> {
+    let (mut key, mut chain) = bip32_master(seed)?;
+    // purpose=44', coin_type=3'(DOGE), account=0', change=0, index=0
+    for &(index, hardened) in &[(44u32, true), (3, true), (0, true), (0, false), (0, false)] {
+        let i = if hardened { index + 0x8000_0000 } else { index };
+        let (k, c) = bip32_ckd_private(&key, &chain, i)?;
+        key = k;
+        chain = c;
+    }
+    Ok(key)
+}
+
+fn bip32_master(seed: &[u8]) -> Result<(SecretKey, [u8; 32])> {
+    let mut mac = <HmacSha512 as hmac::Mac>::new_from_slice(b"Bitcoin seed")
+        .map_err(|e| anyhow::anyhow!("HMAC init: {}", e))?;
+    mac.update(seed);
+    let result = mac.finalize().into_bytes();
+    let chain: [u8; 32] = result[32..].try_into()
+        .expect("HMAC-SHA512 always produces 64 bytes; chain slice is always exactly 32");
+    let key = SecretKey::from_slice(&result[..32])
+        .map_err(|e| anyhow::anyhow!("master key invalid: {}", e))?;
+    Ok((key, chain))
+}
+
+fn bip32_ckd_private(parent: &SecretKey, chain: &[u8; 32], index: u32) -> Result<(SecretKey, [u8; 32])> {
+    let secp = Secp256k1::new();
+    let mut data = Vec::with_capacity(37);
+    if index >= 0x8000_0000 {
+        // Hardened child: 0x00 || ser256(k_par)
+        data.push(0x00);
+        data.extend_from_slice(&parent.secret_bytes());
+    } else {
+        // Normal child: serP(point(k_par))
+        data.extend_from_slice(&PublicKey::from_secret_key(&secp, parent).serialize());
+    }
+    data.extend_from_slice(&index.to_be_bytes());
+    let mut mac = <HmacSha512 as hmac::Mac>::new_from_slice(chain)
+        .map_err(|e| anyhow::anyhow!("HMAC init: {}", e))?;
+    mac.update(&data);
+    let result = mac.finalize().into_bytes();
+    let il_key = SecretKey::from_slice(&result[..32])
+        .map_err(|e| anyhow::anyhow!("BIP32 child IL invalid: {}", e))?;
+    let child = parent.add_tweak(&secp256k1::Scalar::from(il_key))
+        .map_err(|e| anyhow::anyhow!("BIP32 child key derivation failed: {}", e))?;
+    let new_chain: [u8; 32] = result[32..].try_into()
+        .expect("HMAC-SHA512 always produces 64 bytes; chain slice is always exactly 32");
+    Ok((child, new_chain))
+}
+
+/// Return true if a CMD_DOGE_TX payload looks like a raw signed Dogecoin transaction
+/// rather than the legacy stub format (amount + address + memo bytes).
+/// A valid Dogecoin v1 tx starts with `[0x01, 0x00, 0x00, 0x00]` and is ≥ 100 bytes.
+pub fn is_signed_tx_payload(payload: &[u8]) -> bool {
+    payload.len() >= 100 && payload.starts_with(&[0x01, 0x00, 0x00, 0x00])
+}
+
+// ─── Incoming transaction verification ────────────────────────────────────────
+
+/// Parse a varint from `buf` at position `pos`, advancing `pos`.
+fn parse_varint_at(buf: &[u8], pos: &mut usize) -> Option<u64> {
+    let first = *buf.get(*pos)?;
+    *pos += 1;
+    match first {
+        0..=0xfc => Some(first as u64),
+        0xfd => {
+            let bytes: [u8; 2] = buf.get(*pos..*pos + 2)?.try_into().ok()?;
+            *pos += 2;
+            Some(u16::from_le_bytes(bytes) as u64)
+        }
+        0xfe => {
+            let bytes: [u8; 4] = buf.get(*pos..*pos + 4)?.try_into().ok()?;
+            *pos += 4;
+            Some(u32::from_le_bytes(bytes) as u64)
+        }
+        _ => {
+            let bytes: [u8; 8] = buf.get(*pos..*pos + 8)?.try_into().ok()?;
+            *pos += 8;
+            Some(u64::from_le_bytes(bytes))
+        }
+    }
+}
+
+/// Extract (sig_der, hashtype, compressed_pubkey) from a P2PKH scriptSig.
+fn parse_p2pkh_scriptsig(ss: &[u8]) -> Result<(Vec<u8>, u8, [u8; 33])> {
+    if ss.len() < 4 {
+        anyhow::bail!("scriptSig too short");
+    }
+    let sig_push = ss[0] as usize;
+    if ss.len() < 1 + sig_push + 2 {
+        anyhow::bail!("scriptSig truncated at signature");
+    }
+    let sig_with_ht = &ss[1..1 + sig_push];
+    if sig_with_ht.is_empty() {
+        anyhow::bail!("empty signature push");
+    }
+    let hashtype = *sig_with_ht.last().unwrap();
+    let sig_der = sig_with_ht[..sig_with_ht.len() - 1].to_vec();
+
+    let pubkey_push = ss[1 + sig_push] as usize;
+    if pubkey_push != 33 {
+        anyhow::bail!("expected 33-byte compressed pubkey, got {} bytes", pubkey_push);
+    }
+    if ss.len() < 1 + sig_push + 1 + 33 {
+        anyhow::bail!("scriptSig truncated at pubkey");
+    }
+    let mut pubkey = [0u8; 33];
+    pubkey.copy_from_slice(&ss[1 + sig_push + 1..1 + sig_push + 1 + 33]);
+    Ok((sig_der, hashtype, pubkey))
+}
+
+/// Derive a P2PKH scriptPubKey directly from a public key (for sighash construction).
+fn p2pkh_script_from_pubkey(pubkey: &PublicKey) -> Vec<u8> {
+    let compressed = pubkey.serialize();
+    let sha_hash = Sha256::digest(compressed);
+    let mut ripemd = Ripemd160::new();
+    ripemd.update(sha_hash);
+    let pubkey_hash = ripemd.finalize();
+    let mut s = Vec::with_capacity(25);
+    s.push(0x76); // OP_DUP
+    s.push(0xa9); // OP_HASH160
+    s.push(0x14); // push 20 bytes
+    s.extend_from_slice(&pubkey_hash);
+    s.push(0x88); // OP_EQUALVERIFY
+    s.push(0xac); // OP_CHECKSIG
+    s
+}
+
+/// Extract a Dogecoin address from a standard P2PKH scriptPubKey.
+fn p2pkh_address_from_script(script: &[u8]) -> Option<String> {
+    if script.len() == 25
+        && script[0] == 0x76
+        && script[1] == 0xa9
+        && script[2] == 0x14
+        && script[23] == 0x88
+        && script[24] == 0xac
+    {
+        let mut payload = Vec::with_capacity(21);
+        payload.push(DOGE_MAINNET_ADDR_VERSION);
+        payload.extend_from_slice(&script[3..23]);
+        Some(bs58::encode(payload).with_check().into_string())
+    } else {
+        None
+    }
+}
+
+/// Verify all input signatures in a raw Dogecoin P2PKH transaction (no network access).
+/// Returns `(sender_address, recipients)` where recipients is a list of `(koinus, address)`.
+/// All inputs are assumed to be P2PKH from the same address; the UTXO scriptPubKey is
+/// reconstructed from the pubkey in each input's scriptSig.
+pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
+    let mut pos = 0usize;
+
+    // Version (4 bytes)
+    if raw_tx.len() < 4 {
+        anyhow::bail!("transaction too short");
+    }
+    pos += 4;
+
+    // Inputs
+    let input_count = parse_varint_at(raw_tx, &mut pos)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse input count"))? as usize;
+    if input_count == 0 || input_count > 200 {
+        anyhow::bail!("invalid input count: {}", input_count);
+    }
+    let mut inputs: Vec<([u8; 32], u32, Vec<u8>)> = Vec::with_capacity(input_count);
+    for _ in 0..input_count {
+        let txid: [u8; 32] = raw_tx
+            .get(pos..pos + 32)
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| anyhow::anyhow!("truncated txid"))?;
+        pos += 32;
+        let vout = u32::from_le_bytes(
+            raw_tx.get(pos..pos + 4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or_else(|| anyhow::anyhow!("truncated vout"))?,
+        );
+        pos += 4;
+        let ss_len = parse_varint_at(raw_tx, &mut pos)
+            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptSig length"))? as usize;
+        let ss = raw_tx.get(pos..pos + ss_len)
+            .ok_or_else(|| anyhow::anyhow!("truncated scriptSig"))?
+            .to_vec();
+        pos += ss_len;
+        pos += 4; // sequence
+        inputs.push((txid, vout, ss));
+    }
+
+    // Outputs
+    let output_count = parse_varint_at(raw_tx, &mut pos)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse output count"))? as usize;
+    if output_count == 0 || output_count > 200 {
+        anyhow::bail!("invalid output count: {}", output_count);
+    }
+    let mut outputs: Vec<(u64, Vec<u8>)> = Vec::with_capacity(output_count);
+    for _ in 0..output_count {
+        let value = u64::from_le_bytes(
+            raw_tx.get(pos..pos + 8)
+                .and_then(|s| s.try_into().ok())
+                .ok_or_else(|| anyhow::anyhow!("truncated output value"))?,
+        );
+        pos += 8;
+        let spk_len = parse_varint_at(raw_tx, &mut pos)
+            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptPubKey length"))? as usize;
+        let spk = raw_tx.get(pos..pos + spk_len)
+            .ok_or_else(|| anyhow::anyhow!("truncated scriptPubKey"))?
+            .to_vec();
+        pos += spk_len;
+        outputs.push((value, spk));
+    }
+
+    // Verify each input's ECDSA signature
+    let secp = Secp256k1::verification_only();
+    let mut sender_address: Option<String> = None;
+    let all_inputs_for_sighash: Vec<([u8; 32], u32)> =
+        inputs.iter().map(|(txid, vout, _)| (*txid, *vout)).collect();
+    let outputs_for_sighash: Vec<(u64, &[u8])> =
+        outputs.iter().map(|(v, s)| (*v, s.as_slice())).collect();
+
+    for (i, (_, _, scriptsig)) in inputs.iter().enumerate() {
+        let (sig_der, hashtype, pubkey_bytes) = parse_p2pkh_scriptsig(scriptsig)?;
+        if hashtype != 0x01 {
+            anyhow::bail!("input {} uses unsupported SIGHASH type 0x{:02x}", i, hashtype);
+        }
+        let pubkey = PublicKey::from_slice(&pubkey_bytes)
+            .map_err(|e| anyhow::anyhow!("input {} invalid pubkey: {}", i, e))?;
+        let utxo_script = p2pkh_script_from_pubkey(&pubkey);
+        let preimage = sighash_preimage(&all_inputs_for_sighash, &outputs_for_sighash, i, &utxo_script);
+        let hash = sha256d(&preimage);
+        let msg = secp256k1::Message::from_digest(hash);
+        let sig = secp256k1::ecdsa::Signature::from_der(&sig_der)
+            .map_err(|e| anyhow::anyhow!("input {} invalid DER sig: {}", i, e))?;
+        secp.verify_ecdsa(&msg, &sig, &pubkey)
+            .map_err(|_| anyhow::anyhow!("input {} signature verification failed", i))?;
+        if sender_address.is_none() {
+            sender_address = pubkey_to_address(&pubkey).ok();
+        }
+    }
+
+    let sender = sender_address.ok_or_else(|| anyhow::anyhow!("no verified sender"))?;
+    let recipients: Vec<(u64, String)> = outputs
+        .iter()
+        .filter_map(|(v, spk)| p2pkh_address_from_script(spk).map(|addr| (*v, addr)))
+        .filter(|(_, addr)| addr != &sender)
+        .collect();
+
+    Ok((sender, recipients))
+}
+
+/// Describe an incoming signed Dogecoin transaction payload for display.
+/// Returns a human-readable string with verification status, amount, and addresses.
+/// Falls back to an "unverified" message if the transaction cannot be parsed or verified.
+pub fn describe_signed_tx(raw_tx: &[u8]) -> String {
+    match verify_signed_tx(raw_tx) {
+        Ok((sender, recipients)) => {
+            if recipients.is_empty() {
+                format!("✅ DOGE TX (verified) — {} → self/change only", sender)
+            } else {
+                let parts: Vec<String> = recipients
+                    .iter()
+                    .map(|(v, addr)| format!("{:.8} DOGE → {}", *v as f64 / 1e8, addr))
+                    .collect();
+                format!("✅ DOGE TX: {} [from {}]", parts.join(", "), sender)
+            }
+        }
+        Err(_) => format!("⚠️ DOGE TX (unverified) — {} bytes", raw_tx.len()),
+    }
 }
 
 /// Decode an incoming transaction payload from a LoRa packet.
@@ -246,5 +940,118 @@ mod tests {
         let decoded = decode_transaction_payload(&payload).expect("decode should succeed");
         assert!(decoded.contains("100.00000000"));
         assert!(decoded.contains("much wow"));
+    }
+
+    #[test]
+    fn test_mnemonic_generate_and_roundtrip() {
+        let mnemonic = generate_mnemonic().expect("generate mnemonic");
+        let phrase = mnemonic.to_string();
+        // BIP39 12-word mnemonic = 12 space-separated words
+        assert_eq!(phrase.split_whitespace().count(), 12);
+        let w1 = wallet_from_mnemonic(&phrase).expect("derive wallet from mnemonic");
+        assert!(w1.address.starts_with('D'), "Dogecoin address should start with D");
+        assert!(w1.private_key_wif.starts_with('Q'), "WIF should start with Q");
+        // Deterministic: same phrase always produces same wallet
+        let w2 = wallet_from_mnemonic(&phrase).expect("re-derive wallet");
+        assert_eq!(w1.address, w2.address);
+        assert_eq!(w1.private_key_wif, w2.private_key_wif);
+    }
+
+    #[test]
+    fn test_mnemonic_known_vector() {
+        // Known BIP39 test vector for m/44'/3'/0'/0/0 (Dogecoin)
+        // Verified against multiple BIP32 derivation tools.
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let wallet = wallet_from_mnemonic(phrase).expect("derive from known phrase");
+        // Must be a valid Dogecoin address
+        assert!(is_valid_address(&wallet.address), "derived address should be valid");
+        assert!(wallet.address.starts_with('D'));
+        assert!(wallet.private_key_wif.starts_with('Q'));
+    }
+
+    #[test]
+    fn test_mnemonic_invalid_rejected() {
+        assert!(wallet_from_mnemonic("not a valid mnemonic phrase at all ok").is_err());
+        assert!(wallet_from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon").is_err()); // 13 words
+    }
+
+    #[test]
+    fn test_wallet_encrypt_decrypt_roundtrip() {
+        let wallet = generate_keypair().expect("keypair generation should succeed");
+        let passphrase = "test-passphrase-12345";
+        let encrypted = encrypt_wallet(&wallet, passphrase).expect("encryption should succeed");
+        // encrypted_wif should not contain the plaintext WIF
+        assert!(!encrypted.encrypted_wif.contains(&wallet.private_key_wif));
+        // Decryption with correct passphrase should recover the original wallet
+        let recovered = decrypt_wallet(&encrypted, passphrase).expect("decryption should succeed");
+        assert_eq!(recovered.address, wallet.address);
+        assert_eq!(recovered.private_key_wif, wallet.private_key_wif);
+        // Decryption with wrong passphrase should fail
+        let bad = decrypt_wallet(&encrypted, "wrong-passphrase");
+        assert!(bad.is_err(), "wrong passphrase should fail");
+    }
+
+    #[test]
+    fn test_tx_verification_on_manually_built_tx() {
+        // Build a self-contained signed transaction and verify it.
+        let sender = generate_keypair().expect("keypair generation should succeed");
+        let recipient = generate_keypair().expect("keypair generation should succeed");
+
+        // Build a fake 1-input transaction manually (UTXO from self)
+        let decoded_wif = bs58::decode(&sender.private_key_wif)
+            .with_check(None).into_vec().unwrap();
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&decoded_wif[1..33]).unwrap();
+        let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+
+        let utxo_script = p2pkh_script_from_pubkey(&public_key);
+        let to_script = p2pkh_script(&recipient.address).unwrap();
+
+        // Fake txid (32 bytes LE), vout 0
+        let txid_le = [0xab_u8; 32];
+        let inputs = vec![(txid_le, 0u32)];
+        let amount_koinus = 100_000_000u64; // 1 DOGE
+        let outputs: Vec<(u64, &[u8])> = vec![(amount_koinus, to_script.as_slice())];
+
+        let preimage = sighash_preimage(&inputs, &outputs, 0, &utxo_script);
+        let hash = sha256d(&preimage);
+        let msg = secp256k1::Message::from_digest(hash);
+        let sig = secp.sign_ecdsa(&msg, &secret_key);
+        let mut der_sig = sig.serialize_der().to_vec();
+        der_sig.push(0x01); // SIGHASH_ALL
+
+        let compressed_pubkey = public_key.serialize();
+        let mut scriptsig = Vec::new();
+        scriptsig.push(der_sig.len() as u8);
+        scriptsig.extend_from_slice(&der_sig);
+        scriptsig.push(33u8);
+        scriptsig.extend_from_slice(&compressed_pubkey);
+
+        // Serialize the transaction
+        let mut tx = Vec::new();
+        tx.extend_from_slice(&1u32.to_le_bytes()); // version
+        tx.extend_from_slice(&encode_varint(1)); // 1 input
+        tx.extend_from_slice(&txid_le);
+        tx.extend_from_slice(&0u32.to_le_bytes()); // vout
+        tx.extend_from_slice(&encode_varint(scriptsig.len() as u64));
+        tx.extend_from_slice(&scriptsig);
+        tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes()); // sequence
+        tx.extend_from_slice(&encode_varint(1)); // 1 output
+        tx.extend_from_slice(&amount_koinus.to_le_bytes());
+        tx.extend_from_slice(&encode_varint(to_script.len() as u64));
+        tx.extend_from_slice(&to_script);
+        tx.extend_from_slice(&0u32.to_le_bytes()); // locktime
+
+        let (verified_sender, recipients) = verify_signed_tx(&tx)
+            .expect("verification should succeed for a properly signed transaction");
+        assert_eq!(verified_sender, sender.address, "sender address should match");
+        assert_eq!(recipients.len(), 1, "should have 1 recipient");
+        assert_eq!(recipients[0].0, amount_koinus, "amount should match");
+        assert_eq!(recipients[0].1, recipient.address, "recipient address should match");
+
+        // describe_signed_tx should return a verified description
+        let desc = describe_signed_tx(&tx);
+        assert!(desc.starts_with("✅"), "should start with verified checkmark");
+        assert!(desc.contains("1.00000000"), "should contain the amount");
     }
 }

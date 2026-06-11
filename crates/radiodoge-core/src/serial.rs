@@ -341,7 +341,7 @@ impl SerialManager {
                         const KNOWN_CMDS: &[u8] = &[
                             0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
                             0x10, 0x11, 0x20, 0x21, 0x22, 0x23,  // 0x22/0x23 = v0.3.6
-                            0x24, 0x25, 0x26, 0x27,               // v0.3.7/0.3.8
+                            0x24, 0x25, 0x26, 0x27, 0x28,         // v0.3.7/0.3.8/0.3.16 (CMD_BLE_TOGGLE)
                             0x3F, 0x62, 0x64, 0x68, 0x6D, 0xFE, // firmware-side IDs
                         ];
                         while !accumulator.is_empty() {
@@ -352,7 +352,29 @@ impl SerialManager {
                             if accumulator.len() < radio::SINGLE_HDR_LEN {
                                 break;
                             }
-                            if let Some(packet) = radio::parse_incoming(&accumulator, 0) {
+                            // Pre-compute the exact byte span for this packet so that
+                            // parse_incoming receives only the bytes belonging to it.
+                            // Without this, back-to-back packets in the accumulator
+                            // cause next-packet bytes to appear in payload_hex.
+                            // Mirrors the equivalent logic in mobile_push_bytes (lib.rs).
+                            let cmd = accumulator[0];
+                            let packet_len = {
+                                let after_hdr = accumulator.get(radio::SINGLE_HDR_LEN..).unwrap_or(&[]);
+                                match radio::exact_packet_len(cmd) {
+                                    Some(n) => n,
+                                    None => {
+                                        let payload_len = if cmd == radio::CMD_GET_FIRMWARE_VERSION {
+                                            after_hdr.iter().position(|&b| b == 0)
+                                                .map(|i| i + 1)
+                                                .unwrap_or_else(|| after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN))
+                                        } else {
+                                            after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN)
+                                        };
+                                        radio::SINGLE_HDR_LEN + payload_len
+                                    }
+                                }
+                            }.min(accumulator.len());
+                            if let Some(packet) = radio::parse_incoming(&accumulator[..packet_len], 0) {
                                 // Update stats
                                 {
                                     let mut stats = stats_clone.lock().await;
@@ -460,7 +482,7 @@ impl SerialManager {
                                             });
                                             // Keep last 20 neighbors
                                             if nbrs.len() > 20 {
-                                                nbrs.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+                                                nbrs.sort_by_key(|b| std::cmp::Reverse(b.last_seen));
                                                 nbrs.truncate(20);
                                             }
                                         }
@@ -470,25 +492,13 @@ impl SerialManager {
                                 // Broadcast to all subscribers
                                 let _ = packet_tx_clone.send(packet.clone());
 
-                                // Save command before packet is moved into callback
-                                let cmd = packet.command;
-
                                 // Invoke the caller-supplied callback (GUI emitter, CLI printer…)
                                 on_packet(packet);
 
-                                // Consume the processed bytes.
-                                // For commands with known fixed reply sizes, drain exactly that many
-                                // bytes so back-to-back packets in the accumulator are not lost.
-                                // For variable-length commands (messages, FW version), drain
-                                // what's available up to MAX_SINGLE_PAYLOAD_LEN.
-                                let consumed = radio::exact_packet_len(cmd)
-                                    .unwrap_or_else(|| {
-                                        radio::SINGLE_HDR_LEN
-                                            + (accumulator.len() - radio::SINGLE_HDR_LEN)
-                                                .min(radio::MAX_SINGLE_PAYLOAD_LEN)
-                                    });
-                                let consumed = consumed.min(accumulator.len());
-                                accumulator.drain(..consumed);
+                                // Drain the bytes that belong to this packet.
+                                // packet_len was computed above from exact_packet_len / null-scan,
+                                // so this is exact for both fixed- and variable-length commands.
+                                accumulator.drain(..packet_len);
                             } else {
                                 // parse_incoming returned None (buffer too short) — wait for more data
                                 break;
@@ -590,6 +600,21 @@ impl SerialManager {
         *self.node_address.lock().await = addr;
     }
 
+    /// Update the cached board settings (called by the Android mobile path when
+    /// CMD_GET_SETTINGS (0x22) arrives via `mobile_push_bytes`).
+    /// Allows `get_board_settings()` to return valid data on Android without the
+    /// desktop Rust serial loop needing to be active.
+    pub async fn update_board_settings(&self, settings: BoardSettings) {
+        *self.board_settings.lock().await = Some(settings);
+    }
+
+    /// Update the cached board MAC address (called by the Android mobile path when
+    /// CMD_GET_MAC (0x27) arrives via `mobile_push_bytes`).
+    /// Allows `get_board_mac()` to return a value on Android.
+    pub async fn update_board_mac(&self, mac: String) {
+        *self.board_mac.lock().await = Some(mac);
+    }
+
     /// The firmware version string reported by the connected device, if available.
     pub async fn get_firmware_version(&self) -> Option<String> {
         self.firmware_version.lock().await.clone()
@@ -644,7 +669,7 @@ impl SerialManager {
 
         let expected_owned = expected.clone();
         let deadline = std::time::Duration::from_millis(timeout_ms);
-        match tokio::time::timeout(deadline, async move {
+        tokio::time::timeout(deadline, async move {
             loop {
                 match rx.recv().await {
                     Ok(pkt) if pkt.command == radio::CMD_GET_NODE_ADDR
@@ -655,10 +680,7 @@ impl SerialManager {
             }
         })
         .await
-        {
-            Ok(verified) => verified,
-            Err(_) => false, // timeout
-        }
+        .unwrap_or_default()
     }
 }
 

@@ -7,6 +7,343 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.16] — 2026-04-15 — 🐕 Android Settings + BLE Toggle + Live Log Polish — Much Polish. Very Stable. Wow.
+
+> **Settings tab actions now work on Android. Start Gateway double-press fixed on desktop. Live Packet Log fully readable on 360dp phones. Debug export uses native share sheet on Android. BLE advertising toggle added. Board MAC read fixed for both platforms.**
+> Such cross-platform. Very consistent. Much UX. Wow. 🐕📡
+
+### Fixed
+
+#### `setDisconnected()` does not clear `connection.error` — stale error banner after reconnect
+- **Root cause**: `setDisconnected()` in `connection.svelte.ts` reset all connection fields (port, stats, MAC, mobile state, etc.) but did not clear `connection.error`. If a connection attempt failed with an error message, then the user disconnected and reconnected successfully, the red error banner from the previous session was still visible even though the connection was healthy.
+- **Fix**: Added `connection.error = null;` to `setDisconnected()`.
+
+#### `SendTab` address validation too loose — accepts strings up to 100+ characters
+- **Root cause**: `isValidAddress` checked `toAddress.length > 25 && toAddress.startsWith('D')`. Dogecoin P2PKH addresses are exactly 34 characters; the `> 25` check accepted any string longer than 25 chars starting with `D`, including garbled pastes or addresses from other networks.
+- **Fix**: Changed to `toAddress.length === 34 && toAddress.startsWith('D')` — exactly the right length for a Base58Check P2PKH address.
+
+#### `WalletTab` `onMount` async without mounted guard — state writes after unmount
+- **Root cause**: `onMount(async () => { ... })` awaited two sequential `invoke()` calls without checking whether the component was still mounted. If the user navigated away (switching tabs unmounts `WalletTab`) between the first and second `invoke`, the state assignments (`walletSaved`, `walletIsLegacy`, `showUnlockModal`) ran after unmount — a Svelte 5 footgun that can trigger reactive updates on a dead component.
+- **Fix**: Refactored to `onMount(() => { let mounted = true; (async () => { ...; if (!mounted) return; ...; })(); return () => { mounted = false; }; })` — all post-`await` state writes are guarded, and the cleanup sets `mounted = false`.
+
+#### Settings tab actions failing on Android ("Not connected to board")
+- **Root cause**: All Rust commands (`set_gateway_mode`, `set_wifi_enabled`, `query_mac`) checked `state.serial.is_connected()` which is always `false` on Android (the JS bridge owns the USB port, not the Rust `SerialManager`). Every Settings tab action immediately returned an error.
+- **Fix**: Added four new `mobile_build_*` Tauri commands that return raw packet bytes for the JS bridge to write:
+  - `mobile_build_set_gateway(enable: bool)` — builds a `CMD_SET_GATEWAY` packet
+  - `mobile_build_wifi_toggle(enable: bool)` — builds a `CMD_WIFI_TOGGLE` packet
+  - `mobile_build_ble_toggle(enable: bool)` — builds a `CMD_BLE_TOGGLE` packet
+  - `mobile_build_get_mac()` — builds a `CMD_GET_MAC` packet
+- **`SettingsTab.svelte`** detects Android via `bridge.isAndroid()` and takes the mobile path (invoke → get bytes → `bridge.mobileSendBytes(bytes)` → optimistic state update) instead of the Rust-serial path.
+- **`mobileSendBytes`** — new exported function in `connection-bridge.ts` that routes to `_bleWrite` or `_usbWrite` depending on the active transport.
+
+#### Start Gateway double-press required on desktop
+- **Root cause**: `invoke('set_gateway_mode')` returned before the async `board-sync` Tauri event was processed by JS, so `connection.gatewayMode` still showed the old value when the button re-rendered, requiring a second press to visually confirm.
+- **Fix**: `set_gateway_mode` already returns the confirmed `bool` from the board. JS now uses it directly (`connection.gatewayMode = confirmed`) instead of waiting for the `board-sync` event.
+
+#### Read MAC failing on desktop (timeout too tight)
+- **Root cause**: `query_mac` sent a `CMD_GET_MAC` packet and waited 400ms for the board response before reading the cache. Boards with a slow UART or queue delay missed the window.
+- **Fix**: Timeout extended to 600ms.
+
+#### Read MAC failing on Android
+- **Root cause**: `query_mac` had no mobile path. It sent the packet via `state.serial.send()` (no-op on Android) and waited, always returning `None`.
+- **Fix**: `mobile_push_bytes` now handles `CMD_GET_MAC` responses: parses the 6-byte MAC, caches it via `state.serial.update_board_mac()`, and emits a `mobile-board-mac` Tauri event. `SettingsTab.svelte` listens for this event and updates `connection.boardMac`. The Rust `query_mac` command also returns the cached value immediately on mobile (when `current_port` is set but `serial.is_connected()` is false).
+
+#### Live Packet Log text cut off / overlapping on Android phones
+- **Root cause**: All packet metadata (direction, timestamp, command, source, content, RSSI, copy button) was in a single `display: flex` row with `gap: 8px`. On 360dp phones the total content far exceeded the viewport width; content was clipped or pushed off-screen.
+- **Fix**: Restructured each packet entry into two rows:
+  - **Row 1** (`flex-wrap: nowrap`): direction arrow, timestamp, command badge, source address — all `flex-shrink: 0` with `white-space: nowrap` — then a spacer, RSSI, and copy button pinned to the right.
+  - **Row 2**: packet content with `word-break: break-all; overflow-wrap: anywhere` so long hex strings and decoded text wrap freely.
+  - Font size: `clamp(0.65rem, 2vw, 0.76rem)` — scales with viewport width on phones, caps at desktop readable size.
+- **Further**: Log container now has `overflow-x: hidden; min-width: 0` and each packet entry has `min-width: 0; overflow: hidden` so the card never generates a horizontal scrollbar on any viewport.
+
+#### Debug log export unreliable on Android
+- **Root cause**: The `<a download="...">` anchor click approach is not reliably honoured by Tauri's Android WebView — the file was silently discarded with no user-visible feedback or file manager entry.
+- **Fix**: `exportToTxt` now checks for `navigator.share` + `navigator.canShare({ files: [...] })` (both present on Android). When available, it calls `navigator.share({ files: [file], title: 'RadioDoge Debug Log' })` which triggers the native Android share sheet (user can choose Files, Gmail, etc.). On desktop / WebView without share-file support, the existing anchor download fallback runs unchanged.
+
+#### Android home screen showing default Tauri icon
+- **Root cause**: `tauri android init` uses `icons/icon.png` (64×64 default Tauri placeholder) as the source for Android launcher icon generation. The placeholder was the original icon generated when the project was initialized and was never replaced with the RadioDoge image.
+- **Fix**: Added a `tauri icon src-tauri/icons/doge-radio.png` step in `build-android.yml` **before** `tauri android init`. The `tauri icon` command re-generates all platform icon files — including `icon.png` at the correct size — from the 1024×1024 RadioDoge source. When `tauri android init` then runs, it generates the Android mipmap assets (mdpi / hdpi / xhdpi / xxhdpi / xxxhdpi) from the RadioDoge image.
+
+#### BLE GATT connection silently producing no data (board "connected" but unresponsive)
+- **Root cause 1 — CCCD timing**: Some Android BLE stacks silently drop the NOTIFY descriptor write when it arrives within ~200 ms of the GATT Connected callback. `blec.connect()` succeeds and `onReceiveData()` returns without error, but notifications are never actually enabled — the board can receive commands but the app never hears back.
+- **Fix**: Added a 250 ms delay in `_connectBluetoothAndroid()` between `blec.connect()` and `blec.onReceiveData()` to let the GATT connection stabilise before enabling notifications.
+- **Root cause 2 — sendData byte type**: Some `@mnlphlp/plugin-blec@0.4.x` builds expect `number[]` rather than `Uint8Array` in the Tauri IPC serialisation. Passing `Uint8Array` directly could silently send zero bytes.
+- **Fix**: `_bleWrite()` now passes `Array.from(data)` to `blec.sendData()`.
+- **Root cause 3 — silent failure**: `onReceiveData()` subscribe failure was previously caught and only logged as a warning, leaving the connection in a state where the app appeared connected but the board was deaf.
+- **Fix**: `onReceiveData` failure now throws, propagates to `mobileConnect()` as a visible error, disconnects, and clears the BLE address so the user can retry.
+
+#### BLE disconnect-during-stabilisation race
+- **Root cause**: After the 250 ms `_sleep()` in `_connectBluetoothAndroid()`, if the user called `disconnect()` during the delay, `activeBleAddress` was already cleared — but `onReceiveData()` was still called against the now-closed GATT connection, silently failing or throwing.
+- **Fix**: Added a guard immediately after the sleep: `if (!activeBleAddress) return;` — connection attempt aborts cleanly if a disconnect raced the delay.
+
+#### Ping timeout error message incorrect (said "500 ms", actual timeout is 2 s on Android)
+- **Root cause**: The mobile ping path in `ConnectionPanel.svelte` used a 2000 ms timeout but the error string read `"No response within 500 ms."` — copied from the desktop path which genuinely times out at 500 ms via the Rust serial layer.
+- **Fix**: Message corrected to `"No response within 2 s."` for the Android path only; desktop message unchanged.
+
+#### BLE toggle state not reset on disconnect
+- **Root cause 1 — `ConnectionPanel.svelte`**: `panelBleEnabled` and `panelBleError` were not cleared in `mobileDisconnect()`. After disconnect+reconnect, the toggle showed the last-used state instead of the board's default (enabled).
+- **Fix**: Added `panelBleEnabled = true; panelBleError = null;` to `mobileDisconnect()`.
+- **Root cause 2 — `SettingsTab.svelte`**: Same issue for `bleAdvertisingEnabled` and `bleError` — no disconnect handler existed.
+- **Fix**: Added a `$effect` that resets both to default (`true` / `null`) whenever `connection.isConnected` becomes `false`.
+
+#### `fetchMac()` race on Android — wrong code path taken on fast connect
+- **Root cause**: `isAndroidPlatform` was initialised as `$state(false)`. If `fetchMac()` fired before the `bridge.isAndroid()` Promise resolved (possible on fast connects), the desktop branch (`invoke('query_mac')`) ran on Android — a no-op at best, broken at worst.
+- **Fix**: Changed initial value to `$state<boolean | null>(null)`. `fetchMac()` returns early if `isAndroidPlatform === null`, and the auto-fetch `$effect` is gated on `isAndroidPlatform !== null`. Platform detection resolves in the same microtask queue, so the fetch fires on the very next effect re-run with the correct branch.
+
+#### Debug Console export: File constructor outside try-catch + AbortError bypassed fallback
+- **Root cause 1**: `new File([blob], filename)` was constructed before the try-catch block in `exportToTxt()`. If the `File` constructor threw in an exotic WebView, the exception propagated uncaught and the entire export silently failed.
+- **Root cause 2**: On `AbortError` (user cancelled the native share sheet), the function did an early `return` — bypassing the anchor-download fallback. On desktop Chrome/Firefox where `navigator.share` exists, cancelling the sheet meant no file was saved at all.
+- **Fix**: Moved `File` construction inside the try block. Removed the early `return` on `AbortError` so the anchor download always runs as a fallback when sharing is unavailable or cancelled.
+
+#### `commandName(0x28)` returning generic "CMD(0x28)" in Live Packet Log
+- **Root cause**: `0x28` (CMD_BLE_TOGGLE) was missing from the `commandName()` map in `types/index.ts`.
+- **Fix**: Added `0x28: 'BLE TOGGLE'` to the map.
+
+#### Debug Console showing "CMD_?" for BLE toggle packets
+- **Root cause**: `0x28` was missing from the `match` arm in `mobile_emit_debug_tx` in `lib.rs`.
+- **Fix**: Added `0x28 => "CMD_BLE_TOGGLE"`.
+
+#### Live Packet Log too tall on short phones (keyboard-open state)
+- **Root cause**: Log container height was hardcoded at `300px`. On a ~600 px-tall viewport (keyboard open on a small Android phone), the packet log occupied half the screen.
+- **Fix**: Changed to `height: clamp(180px, 38vh, 320px)` — scales proportionally with viewport height, floors at 180px (readable), caps at 320px on large screens.
+
+#### BLE user-initiated disconnect triggering double `setDisconnected()` + duplicate Rust invocations
+- **Root cause**: `_disconnectBluetoothAndroid()` called `blec.disconnect()` while `activeBleAddress` was still set. This triggered the `onDisconnect` callback registered in `blec.connect()`, which called `setDisconnected()` and `invoke('mobile_ble_disconnect')`. Then `_disconnectBluetoothAndroid` called both again (since `notifyRust=true`), producing a double-disconnect and two duplicate Rust invocations per clean disconnect.
+- **Fix A**: In `_disconnectBluetoothAndroid`, `activeBleAddress` is now cleared to `null` *before* calling `blec.disconnect()`. The callback checks `activeBleAddress` on entry and returns immediately when null — making it a pure "unexpected board-side disconnect" handler.
+- **Fix B**: Added `if (!activeBleAddress) return;` guard at the start of the `onDisconnect` callback.
+
+#### `mobileRefreshing` spinner persists after switching USB↔BLE tabs
+- **Root cause**: The USB/BLE tab-switch `onclick` handler cleared `selectedMobileDevice` and `mobileDevices` but did not reset `mobileRefreshing`. If a 5-second BLE scan was in progress when the user tapped the USB tab, the USB tab displayed the spinning "Scanning BLE… (5 s)" label and the Scan button remained disabled until the scan finished.
+- **Fix**: Added `mobileRefreshing = false;` to the tab-switch handler.
+
+#### `WalletTab` `load_saved_wallet` overwrites in-memory wallet on tab return
+- **Root cause**: The `$effect` that calls `invoke('load_saved_wallet')` on mount ran on every mount. Since `{#if activeTab === 'wallet'}` unmounts WalletTab when the user navigates away, navigating back always re-ran the effect — overwriting any wallet the user had generated or imported in memory since the last disk save.
+- **Fix**: Changed `$effect` to `onMount` so the load runs exactly once per component lifetime.
+
+#### `wifiError` and `gatewayError` not cleared on disconnect
+- **Root cause**: The existing `$effect` that resets `bleAdvertisingEnabled` and `bleError` on disconnect did not include `wifiError` or `gatewayError`. After disconnecting, the Settings tab could show a stale red error from the previous session.
+- **Fix**: Added `wifiError = null; gatewayError = null;` to the disconnect `$effect`.
+
+#### "Read MAC" button clickable while platform detection is unresolved
+- **Root cause**: `fetchMac()` returns early silently when `isAndroidPlatform === null`. If the user tapped the button in the brief window before `bridge.isAndroid()` resolved, nothing happened — no spinner, no error, no feedback.
+- **Fix**: Added `isAndroidPlatform === null` to the button's `disabled` condition so it is visually inactive until the platform is known.
+
+#### Desktop serial framing drops `0x28` (CMD_BLE_TOGGLE) response as unknown byte
+- **Root cause**: The `KNOWN_CMDS` array in `serial.rs` (used to re-sync framing when a non-packet byte is seen) did not include `0x28`. When the board responds to a BLE_TOGGLE command on desktop, the framing loop discarded the leading `0x28` byte and attempted to re-parse the remaining bytes as a new packet, causing a framing desync.
+- **Fix**: Added `0x28` to `KNOWN_CMDS` in `crates/radiodoge-core/src/serial.rs`.
+
+#### `mobile_build_lora_settings_packet` — unchecked `power_dbm as u8` cast
+- **Root cause**: The desktop `update_lora_settings` command clamps TX power with `.max(2).min(22) as u8`. The mobile equivalent did a raw `settings.power_dbm as u8` — an `i8` to `u8` cast without bounds validation. Negative values (e.g. -1) would wrap to large `u8` values (255), sending an invalid TX power byte to the board.
+- **Fix**: Applied `.max(2).min(22) as u8` to match the desktop path.
+
+#### SendTab success-clear timer overwrites form while user is typing a follow-up send
+- **Root cause**: After a successful send, a 5-second `setTimeout` cleared `toAddress`, `amountDoge`, and `memo`. If the user started typing a second transaction before the 5-second window elapsed, the timer fired and wiped their in-progress input.
+- **Fix**: The timer ID is now stored in `_successClearTimer`. At the start of each `sendTransaction()` call, the pending timer is cancelled so the clear never races the next send. The timer is also cancelled on component unmount (tab switch).
+
+#### `HistoryTab.copyAddr` missing try/catch — unhandled clipboard exception
+- **Root cause**: `navigator.clipboard.writeText()` was not wrapped in a try/catch. In sandboxed or permission-denied environments this throws a `NotAllowedError` which propagated as an uncaught rejection, leaving the copy icon in its default state with no feedback.
+- **Fix**: Wrapped in try/catch matching the identical pattern used by `ReceiveTab.copyPacket`.
+
+#### BLE scan results populate wrong tab after mid-scan tab switch
+- **Root cause**: `mobileRefresh()` in `ConnectionPanel.svelte` ran the 5-second `bridge.bleScan()` call as a plain `await`. If the user switched from the Bluetooth tab to the USB tab while the scan was in progress, the tab-switch handler reset `mobileDevices = []` and `mobileRefreshing = false`, but the in-flight scan still resolved after 5 seconds, reassigning `mobileDevices` with BLE results and auto-selecting a Bluetooth address in the USB device context — wrong device list shown.
+- **Fix**: Captured `scanTab = mobileConnectTab` at the start of `mobileRefresh()`. After the scan resolves, if `mobileConnectTab !== scanTab`, the results are discarded (early `return` before the state assignments). The `finally` block still resets `mobileRefreshing` and the idle state unconditionally.
+
+#### Auto-reconnect watchdog race condition — reconnects after user clicked Disconnect
+- **Root cause**: The reconnect watchdog checked `reconnect_enabled` at the top of its loop, then spent time building the `on_pkt` closure before calling `connect()`. If `disconnect_port()` was called in that narrow window (setting `reconnect_enabled = false`), the already-executing iteration did not see the updated flag and proceeded to reconnect anyway — creating an unwanted connection after the user explicitly disconnected.
+- **Fix**: Added a second `reconnect_enabled` guard immediately before the `connect()` call. The loop now breaks at both the top-of-loop check and again just before attempting the connection, closing most of the race window with a single-line addition.
+
+#### `build_request_balance` — missing payload length clamp
+- **Root cause**: `build_request_balance` in `radio.rs` called `packet.extend_from_slice(doge_address.as_bytes())` with no length check. Every other packet builder (`build_message`, `build_doge_tx`, `build_broadcast`) clamps via `.min(MAX_SINGLE_PAYLOAD_LEN)`. An abnormally long address string (theoretical — Dogecoin addresses are 34 chars) would produce an oversized packet that the board firmware cannot process.
+- **Fix**: Added `.min(MAX_SINGLE_PAYLOAD_LEN)` clamp to match the pattern used by all other variable-payload builders.
+
+#### Desktop serial framing: `parse_incoming` received full accumulator, contaminating `payload_hex`
+- **Root cause**: `serial.rs` called `radio::parse_incoming(&accumulator, 0)` with the entire accumulator buffer. `parse_incoming` takes `&buf[SINGLE_HDR_LEN..]` as the payload — meaning when two packets arrive in a single serial read, the first packet's `payload_hex` included all bytes of every subsequent packet. For fixed-size payloads (PING, GET_SETTINGS, etc.) downstream code only reads specific byte indices so the extra bytes were ignored, but for variable-length payloads (CMD_MESSAGE, CMD_DOGE_TX) the decoded text and signature verification received garbage-appended data.
+- **Fix**: Pre-compute `packet_len` before calling `parse_incoming` using the same logic already in `mobile_push_bytes` (`exact_packet_len` for fixed-length commands, null-terminator scan for `CMD_GET_FIRMWARE_VERSION`, `min(available, MAX_SINGLE_PAYLOAD_LEN)` for all others). Pass `&accumulator[..packet_len]` so the parser receives exactly one packet's worth of bytes. Simplified the drain step to `accumulator.drain(..packet_len)`.
+
+#### `SettingsTab` mobile-board-mac listener leak on fast re-mount
+- **Root cause**: The `$effect` that listens for `"mobile-board-mac"` events used a `let unlisten: (() => void) | undefined` variable assigned asynchronously via `.then()`. If the effect re-ran (e.g., `isAndroidPlatform` changed) before the `listen()` Promise resolved, the effect cleanup fired with `unlisten` still `undefined`, leaving the old listener registered and uncleared.
+- **Fix**: Captured the Promise directly (`const unlisten = listen(...)`) and changed cleanup to `unlisten.then(fn => fn())` — the same pattern already used by `DebugConsole.svelte`. The cleanup always cancels the listener regardless of whether the Promise had resolved.
+
+#### `WalletTab` gateway balance listener skipped for non-saved wallets
+- **Root cause**: The `radio-packet` listener that auto-updates the balance from a gateway `BAL:` response was registered inside `onMount` after a `wallet_needs_passphrase` check. When `hasWallet` was `false` (fresh wallet, no saved data), an early `return` skipped listener registration entirely — so freshly generated wallets never received gateway balance updates. The same async-assignment pattern also had the cleanup race described above.
+- **Fix**: Moved listener registration to module-level (outside `onMount`), unconditional, using the Promise-capture cleanup pattern. The `onMount` now handles only wallet loading. Removed the now-dead `_unlistenBalance` variable and its `onDestroy` cleanup.
+
+#### `ping_device` timeout message said "500 ms" — actual timeout is 1500 ms
+- **Root cause**: When `serial.rs` raised the PING timeout from 500 ms to 1500 ms (v0.3.7), the debug traffic strings in `lib.rs` were not updated. The user-visible log message `"No PONG within 500 ms"` was wrong.
+- **Fix**: Updated both the success and failure debug strings to `"1500 ms"`.
+
+#### Dashboard TX counter always 0 on Android (USB + BLE)
+- **Root cause**: The `radio-stats-update` event emitted by `mobile_push_bytes` had `packets_sent: 0` hardcoded. There was no counter for outgoing mobile packets — only `mobile_packets_rx` existed.
+- **Fix**: Added `mobile_packets_tx: Arc<Mutex<u32>>` to `AppState`. `mobile_emit_debug_tx` (USB) and `mobile_ble_write_characteristic` (BLE) now accept `State<'_, AppState>` and increment the counter on every write. The counter is read in `mobile_push_bytes`'s stats emission block and cleared in `mobile_set_disconnected`.
+
+#### `mobile_push_bytes` accumulator unbounded — memory exhaustion on misbehaving board
+- **Root cause**: `acc.extend_from_slice(&bytes)` had no size guard. In normal operation the packet-drain loop keeps the accumulator to a few hundred bytes. But a board stuck in a debug-print loop, or one that sends valid command-byte headers that never complete into packets, could grow the accumulator without bound — an OOM risk on Android.
+- **Fix**: Added an 8 KB ceiling in `mobile_push_bytes`. If the new data would exceed it, the accumulator is cleared (framing recovers on the next valid packet) and a warning is printed to stderr.
+
+#### `load_history_from_disk` silently discards tx history on JSON corruption
+- **Root cause**: `serde_json::from_str(&json).unwrap_or_default()` returned an empty Vec if `tx_history.json` was corrupted (e.g., power loss during write). No log message was emitted, making the data loss invisible.
+- **Fix**: Changed to a `match` block that prints an `eprintln!` warning with the parse error before falling back to an empty Vec.
+
+#### `load_address_book` silently discards address book on JSON corruption
+- **Root cause**: Identical pattern to the history bug — `unwrap_or_default()` on `address_book.json` parse failure.
+- **Fix**: Same match-with-warning approach.
+
+#### Blockbook HTTP errors surface as confusing JSON-parse failures
+- **Root cause**: All three Blockbook callers (`fetch_utxos_blockbook`, `fetch_balance_blockbook`, `broadcast_raw_tx`) called `.json()` directly after `.send()` without first checking the HTTP status code. A non-2xx response (e.g. 500 Internal Server Error with an HTML body) caused a misleading "… response parse failed" error instead of an actionable HTTP error.
+- **Fix**: Added `.error_for_status()` between `.send()` and `.json()` in all three functions. HTTP errors now surface as "… failed: HTTP 500" (or similar) before JSON parsing is attempted.
+
+#### LoRa frequency truncated to wrong kHz value due to missing `round()` before `as u32` cast
+- **Root cause**: `update_lora_settings` and `mobile_build_lora_settings_packet` both computed `freq_khz` with `(settings.frequency_mhz * 1000.0) as u32`. Rust `as` truncates toward zero, so a floating-point representation like `914.9999...` would produce `914_999` kHz instead of `915_000` kHz, sending the board a slightly wrong frequency.
+- **Fix**: Added `.round()` before the cast in both places: `(settings.frequency_mhz * 1000.0).round() as u32`.
+
+#### SNR displayed as `0.0 dB` instead of `--` when hardware does not report it
+- **Root cause**: The `RadioStats` struct had `snr: f32` defaulting to `0.0`. USB serial and BLE transports do not carry SNR data, so the field was always emitted as `0.0` to the frontend, which displayed `"0.0 dB"` in the Dashboard and Connection panel — indistinguishable from a genuinely terrible signal.
+- **Fix**: Changed `snr` to `Option<f32>` in `RadioStats` (default `None`). The backend emits `null` when SNR is unavailable. `ConnectionPanel.svelte` updated to show `--` when null (Dashboard already handled this with `snr?.toFixed(1) ?? '--'`). CLI `stats` command now prints `N/A` instead of `0.0 dB`.
+
+#### `wallet.rs` `build_transaction_payload` — no NaN/Infinity guard before `f64 → u64` cast
+- **Root cause**: `(amount_doge * 1e8).round() as u64` had no pre-flight check. While `f64::NAN as u64` is now defined (= 0) and `f64::INFINITY as u64` saturates in Rust ≥1.45, both produce wrong packet data silently. The frontend and Tauri IPC filter these inputs in practice, but the backend should not trust the caller.
+- **Fix**: Added `if !amount_doge.is_finite() || amount_doge < 0.0 { anyhow::bail!(...) }` before the cast.
+
+#### `wallet.rs` `decrypt_wallet` — `Nonce::from_slice` panics on corrupted wallet nonce
+- **Root cause**: `ChaCha20Poly1305::Nonce::from_slice` contains an internal `assert_eq!(slice.len(), 12)` and panics rather than returning `Err` when the nonce slice is the wrong length. If `wallet.json` is corrupted (e.g., truncated nonce hex string), the app would crash with a panic instead of returning a user-facing error.
+- **Fix**: Added an explicit length guard before calling `from_slice`: if `nonce_bytes.len() != 12`, `anyhow::bail!` returns a clear "corrupted wallet: nonce must be 12 bytes" error.
+
+#### `wallet.rs` `build_signed_transaction` — fee `f64 → u64` cast without NaN/Infinity guard
+- **Root cause**: `amount_doge` was validated with `is_finite()` before its cast, but `fee_doge` was not — `(fee_doge.abs() * 1e8).round() as u64` could silently produce 0 for a NaN or Infinity fee. In practice the function is always called with `DEFAULT_TX_FEE_DOGE = 1.0`, but the backend should validate all inputs.
+- **Fix**: Added `if !fee_doge.is_finite() || fee_doge < 0.0 { anyhow::bail!("Invalid fee: {}", fee_doge) }` before the cast.
+
+#### `wallet.rs` `build_signed_transaction` — sub-dust change output created for tiny remainders
+- **Root cause**: `if change > 0 { outputs.push(...) }` created a change output for any positive remainder, including amounts below the Dogecoin dust threshold (0.01 DOGE). Sub-dust outputs are unspendable by most nodes and will cause the transaction to be rejected by relaying nodes.
+- **Fix**: Added `const DUST_THRESHOLD_KOINUS: u64 = 1_000_000` (0.01 DOGE). Sub-dust change is now dropped (absorbed into the effective fee) rather than added as an unspendable output.
+
+#### Android mobile cannot send transactions via Send tab
+- **Root cause**: `send_transaction` in `lib.rs` checked `state.serial.is_connected()` unconditionally. On Android the JS bridge owns the USB/BLE port so `serial.is_connected()` is always `false`, causing every send attempt to return "Not connected to a Heltec device" even when a board was actively connected and responsive.
+- **Fix A (lib.rs)**: Added `is_mobile` detection (`current_port.is_some() && !serial.is_connected()`). On mobile, radio packets are built identically to the desktop path, debug-traffic entries are emitted for the Debug Console, then the packet bytes are forwarded to the JS bridge via a new `mobile-tx-packets` Tauri event instead of going through `serial.send_raw()`. History recording and the `transaction-sent` event still fire on both paths.
+- **Fix B (connection-bridge.ts)**: Added a `mobile-tx-packets` listener in `_registerSessionListeners()`. It writes each packet via the active transport (`_usbWrite` or `_bleWrite`), with the same 120 ms inter-packet delay used by `mobileSendTransaction`. The listener is registered on connect and cleaned up on disconnect alongside the existing firmware-version and doge-tx-received listeners.
+
+#### `HistoryTab` does not auto-refresh after a transaction is sent
+- **Root cause**: `HistoryTab.svelte` called `loadHistory()` once in `onMount` and had no listener for updates. If a transaction was sent while the History tab was already open, the new entry was not visible until the user clicked the "Refresh" button.
+- **Fix**: Added a `listen('transaction-sent', ...)` subscriber using the Promise-capture cleanup pattern. Any successful send (desktop or mobile) triggers a `loadHistory()` call so the history list updates immediately.
+
+### Added
+
+#### BIP39 mnemonic + BIP32 HD wallet derivation
+- **`generate_mnemonic()`** — new function in `wallet.rs`. Generates a cryptographically random 12-word BIP39 mnemonic phrase (128-bit entropy) using the OS RNG.
+- **`wallet_from_mnemonic(phrase)`** — new function in `wallet.rs`. Parses and validates a BIP39 mnemonic, derives a 64-byte seed via PBKDF2-HMAC-SHA512 (no passphrase), then applies BIP32 child key derivation at path `m/44'/3'/0'/0/0` (Dogecoin BIP44 coin-type 3). Returns a `WalletInfo` with the first external address.
+- **BIP32 derivation** (`bip32_master`, `bip32_ckd_private`) — implemented in-crate using HMAC-SHA512 over the `hmac = "0.12"` crate. Supports both hardened (`i ≥ 0x80000000`) and normal child keys.
+- **`generate_mnemonic_wallet()`** — new Tauri command. Returns `{ mnemonic, address, publicKeyHex, privateKeyWif }`. The mnemonic is not stored; the caller must back it up before it disappears from the UI.
+- **`import_mnemonic_wallet(phrase)`** — new Tauri command. Accepts a 12 or 24-word BIP39 phrase, derives the wallet at `m/44'/3'/0'/0/0`, returns `WalletInfo`.
+- **`WalletTab.svelte`** — generate flow now calls `generate_mnemonic_wallet` and immediately shows a "Save Your Recovery Phrase" modal: 12 words displayed in a 3-column grid, copy-to-clipboard button, warning banner. The modal must be dismissed before the wallet fields are accessible. Added "🌱 Mnemonic" import button and import panel alongside the existing WIF import flow.
+- New dependencies: `bip39 = { version = "2.2.2", features = ["rand"] }`, `hmac = "0.12"` added to workspace and `radiodoge-core`.
+- New tests: `test_mnemonic_generate_and_roundtrip`, `test_mnemonic_known_vector` (validates against the all-`abandon`+`about` BIP39 test vector), `test_mnemonic_invalid_rejected`.
+
+#### `radiodoge-cli` — mnemonic, balance, and broadcast commands
+- **`wallet mnemonic`** — generates a 12-word BIP39 wallet, prints numbered word list + derived address/WIF at `m/44'/3'/0'/0/0`.
+- **`wallet import-mnemonic "<phrase>"`** — restores a wallet from a BIP39 phrase, prints address + WIF.
+- **`balance -a <address>`** — queries confirmed balance from Trezor Blockbook, prints `X.XXXXXXXX DOGE`.
+- **`broadcast --wif Q… --to D… --amount X.XX`** — new subcommand: builds a real P2PKH Dogecoin transaction, signs it (secp256k1 SIGHASH_ALL), and broadcasts directly to the Dogecoin network via Trezor Blockbook. No LoRa device or gateway needed — the direct internet path for hot wallets. Prints txid and a dogechain.info tracking URL.
+- **`wallet import-wif <key>`** — new subcommand: imports a wallet from a WIF-encoded private key (compressed Dogecoin mainnet keys starting with 'Q'), prints address + public key + WIF for confirmation.
+- **Interactive REPL** (`connect`/`daemon` mode): added `wallet-mnemonic` and `balance <addr>` commands with updated help text and banner.
+
+#### Code quality and TypeScript fixes
+- **`tray.rs`**: Replaced `.expect("app should have a window icon")` with a graceful early-return and `log::warn!` — the app now starts without a tray icon if the icon resource isn't bundled (e.g. in CI dev builds) instead of panicking.
+- **`wallet.rs`**: BIP32 chain-slice `unwrap()` calls in `bip32_master` and `bip32_ckd_private` replaced with `expect()` carrying an invariant message (HMAC-SHA512 always produces 64 bytes — these are infallible, but the message aids debugging).
+- **TypeScript: 8 errors → 0** across the Svelte frontend:
+  - `vite.config.ts`: `@types/node` installed; `/// <reference types="node" />` added to resolve `process` not-found.
+  - `src/lib/types/qrcode.d.ts`: new minimal type shim for the `qrcode` npm package (ships no bundled TS types).
+  - `SendTab.svelte`: removed unused `import type { Confetti }` (type was never exported by `Confetti.svelte`).
+  - `WalletTab.svelte`: removed non-standard `autocorrect` attribute from WIF import textarea.
+  - `connection-bridge.ts`: updated to `@mnlphlp/plugin-blec` v0.5+ API — `scan()` → `startScan()`, `onReceiveData()` → `subscribe()`, `sendData()` → `send()`; removed now-dead `BLE_SERVICE_UUID` constant; fixed `available_ports()` double-cast via `unknown`.
+
+#### BAL:/TX_ACK message decoding + gateway balance listener
+- **`radio.rs`**: `CMD_MESSAGE`/`CMD_BROADCAST` payloads with prefix `BAL:{koinus}` are now decoded to `"💰 Balance: X.XXXXXXXX DOGE"` and `TX_ACK:{txid}` to `"✅ TX confirmed: txid=…"` in `decode_payload`.
+- **`WalletTab.svelte`**: On mount, registers a `radio-packet` listener that matches the `"💰 Balance: …"` pattern and auto-updates the balance card with `balanceSource = 'gateway'`. Source attribution shown below the balance figure.
+- **`SendTab.svelte`**: Fee disclosure row (`1.00000000 DOGE fixed`) shown when wallet is loaded and an amount is entered.
+
+#### Wallet encryption at rest (ChaCha20-Poly1305 + argon2id)
+- **`encrypt_wallet(wallet, passphrase)`** / **`decrypt_wallet(encrypted, passphrase)`** — new public functions in `wallet.rs`. The WIF private key is encrypted with ChaCha20-Poly1305 (16-byte auth tag) using a 32-byte key derived from the user's passphrase via argon2id (64 MiB memory, 2 iterations, 16-byte random salt). Both encryption and decryption happen in-process with no plaintext WIF ever written to disk.
+- **`EncryptedWalletFile`** — new serializable struct stored as `wallet.json` (`{ address, publicKeyHex, encryptedWif, salt, nonce }` — all hex-encoded).
+- **`save_wallet(walletInfo, passphrase)`** — Tauri command now requires a passphrase (minimum 8 characters) and writes the encrypted format. Old unencrypted saves are no longer produced.
+- **`wallet_needs_passphrase()`** — new Tauri command that returns `true` if a `wallet.json` exists on disk (used by the frontend to decide whether to show the unlock prompt on startup).
+- **`load_saved_wallet(passphrase?)`** — Tauri command now accepts an optional passphrase. Returns `Err("passphrase_required")` for encrypted files when no passphrase is provided; loads legacy plaintext files (pre-v0.3.16) directly and logs a warning so users can upgrade.
+- **`WalletTab.svelte`** — save modal replaced with a passphrase entry form (passphrase + confirm, min. 8 chars, visual feedback). Startup now calls `wallet_needs_passphrase()`; if true, shows an unlock modal before loading. Legacy plaintext wallets are detected and a nudge is shown to re-save with encryption.
+- New dependencies: `argon2 = "0.5"`, `chacha20poly1305 = "0.10"` added to workspace and `radiodoge-core`.
+
+#### Repo shrink — removed vendored legacy code
+- **`libdogecoin/`** (117 MB, 651 files): vendored C libdogecoin source tree. Replaced entirely by the pure Rust secp256k1/sha2/ripemd/bs58 stack in `radiodoge-core`. No FFI is needed.
+- **`RadioDogeSharp/`** (5.2 MB, 27 files): C# RadioDogeSharp application (predecessor to `radiodoge-cli`). Contained `dogecoin.dll` and `event.dll` Windows binaries. Replaced by the Rust CLI in `crates/radiodoge-cli`.
+- **`serdog/`** (8 MB, 17 files): C serial helper (predecessor to `radiodoge-core::serial`). Contained a compiled `libdogecoin.a` static library. Replaced by async Rust serial in `crates/radiodoge-core`.
+- **`Radio_Doge.png`** (452 KB) at repo root: duplicate of `images/Radio_Doge.png` (different resolution, not referenced by any build config or README).
+- **Total removed**: ~130 MB, 696 files.
+
+#### Balance query via Blockbook
+- **`fetch_balance_blockbook(address)`** — new async function in `wallet.rs`. Queries `https://doge1.trezor.io/api/v2/address/{address}` and returns the confirmed balance in koinus.
+- **`get_balance(address)`** — new Tauri command. Validates the address, calls `fetch_balance_blockbook`, returns DOGE as `f64`.
+- **`build_request_balance(src, doge_address)`** — new packet builder in `radio.rs`. Builds a `CMD_REQUEST_BALANCE` (0x11) packet carrying the Dogecoin address to query. For the LoRa gateway path.
+- **`daemon_fetch_and_send_balance`** — new async function in `radiodoge-cli`. When the gateway daemon receives a `CMD_REQUEST_BALANCE` packet, it extracts the address from the payload, fetches the balance from Blockbook, and sends a `CMD_MESSAGE` back to the requesting node with text `"BAL:{koinus}"`.
+- **`WalletTab.svelte`** — new Balance card between Address and Public Key: shows confirmed balance with a "Check Balance" button. Error and loading states handled.
+- **`radio.rs` `decode_payload`**: `CMD_REQUEST_BALANCE` now shows `"💰 REQUEST BALANCE: D…"` in the Live Packet Log.
+
+#### Incoming transaction signature verification
+- **`verify_signed_tx(raw_tx)`** — new public function in `wallet.rs` that verifies all ECDSA input signatures in a raw Dogecoin P2PKH transaction without any network access. Extracts the pubkey from each input's scriptSig, reconstructs the UTXO scriptPubKey, computes the SIGHASH_ALL preimage, and calls `secp256k1::verify_ecdsa`. Returns `(sender_address, recipients)` on success.
+- **`describe_signed_tx(raw_tx)`** — formats the verification result into a human-readable string: `"✅ DOGE TX: 1.00000000 DOGE → D… [from D…]"` on success, or `"⚠️ DOGE TX (unverified) — N bytes"` on failure.
+- **`radio.rs` `decode_payload`** — `CMD_DOGE_TX` branch now calls `describe_signed_tx` for signed transactions (detected by `is_signed_tx_payload`); falls back to legacy stub decoder for the old format.
+- All ReceiveTab, Live Packet Log, mobile notification, and daemon ACK paths receive the verified/unverified label automatically via `IncomingPacket.decoded`.
+- **Tests**: `test_tx_verification_on_manually_built_tx` — builds a real P2PKH transaction, signs it, verifies it round-trip; `test_wallet_encrypt_decrypt_roundtrip` — full encrypt/decrypt round-trip + wrong-passphrase rejection.
+
+#### Real Dogecoin P2PKH transaction signing (`wallet.rs`)
+- **`build_signed_transaction(from_wif, to_address, amount_doge, fee_doge)`** — async function that fetches UTXOs from Trezor Blockbook (`https://doge1.trezor.io/api/v2/utxo/{address}`), selects coins with a greedy largest-first algorithm, builds inputs and change outputs, and signs each input with SIGHASH_ALL (secp256k1 ECDSA). Returns the raw serialized binary transaction.
+- **`broadcast_raw_tx(raw_hex)`** — async function that POSTs a hex-encoded raw transaction to Trezor Blockbook (`/api/v2/sendtx/`) and returns the txid on success.
+- **`DEFAULT_TX_FEE_DOGE`** (1.0 DOGE) — exported constant for callers that don't need custom fee logic.
+- **`is_signed_tx_payload(payload)`** — helper that returns true when a CMD_DOGE_TX payload starts with the Dogecoin v1 transaction header (`[0x01, 0x00, 0x00, 0x00]`) and is ≥ 100 bytes, distinguishing signed transactions from the legacy stub format.
+- **`reqwest` dependency** added to `radiodoge-core` and workspace (version 0.12, `rustls-tls` feature — no OpenSSL required).
+
+#### `send_transaction` Tauri command now builds and sends real signed transactions
+- When `fromPrivateKeyWif` is present in the request, `send_transaction` calls `wallet::build_signed_transaction()` to produce a real Dogecoin P2PKH transaction before sending the payload over LoRa. Falls back to the legacy stub format when no WIF is available.
+- `mobile_build_tx_packets` updated with the same real-signing logic for the Android USB/BLE path.
+
+#### Gateway daemon broadcasts signed transactions to the Dogecoin network
+- `cmd_daemon` in `radiodoge-cli` now detects incoming `CMD_DOGE_TX` packets whose payload matches a signed transaction, broadcasts them to the Dogecoin network via Trezor Blockbook, and radios a `TX_ACK:<txid>` message back to the originating node.
+- Broadcast uses exponential-backoff retry (3 attempts, delays 2 s / 4 s).
+- **Note**: full LoRa → gateway firmware → daemon delivery requires an updated Heltec firmware that forwards binary CMD_DOGE_TX packets to the serial host. The daemon broadcast logic is complete and will activate automatically once firmware support is in place.
+
+#### BLE advertising toggle
+- **`CMD_BLE_TOGGLE` (0x28)** — new protocol command added to `radio.rs`. Sends a 1-byte payload (`0x01` = enable, `0x00` = disable) to instruct the board to start or stop BLE advertising.
+- **`build_ble_toggle(src, enable)`** — packet builder in `radio.rs`.
+- **`set_ble_enabled(enable: bool)`** — new desktop Tauri command (writes via Rust serial).
+- **`mobile_build_ble_toggle(enable: bool)`** — new mobile Tauri command (returns bytes for JS to write).
+- **BLE Advertising card** added to `SettingsTab.svelte` — mirrors the WiFi toggle card; shows current state and lets the user enable/disable BLE advertising. Works on both Android (mobile path) and desktop.
+- **BLE Advertising card** also added to `ConnectionPanel.svelte` connected view — visible immediately when connected via USB-C or BLE, without navigating to Settings.
+
+#### `radiodoge-cli` bundled in Windows MSI
+- `build-windows.yml`: added step to compile `radiodoge-cli --release --target x86_64-pc-windows-msvc` and stage the binary as `radiodoge-gui/src-tauri/binaries/radiodoge-cli-x86_64-pc-windows-msvc.exe` before the Tauri bundle step.
+- `tauri.conf.json`: added `"binaries/radiodoge-cli"` to `bundle.externalBin` — Tauri's WiX bundler now includes the CLI sidecar in the MSI and places it next to the main executable. The existing `start_gateway` code finds it automatically.
+
+#### Content-Security-Policy set
+- `tauri.conf.json`: replaced `"csp": null` with a real CSP:
+  `default-src 'self'; connect-src 'self' https://doge1.trezor.io ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'`
+  Allows Trezor Blockbook calls (UTXO fetch + broadcast from items 1/2), blocks all other outbound origins.
+
+#### Fast CI workflow
+- Added `.github/workflows/ci.yml` — runs on every push/PR to `master`/`main`:
+  - `cargo check -p radiodoge-core -p radiodoge-cli`
+  - `cargo test -p radiodoge-core -p radiodoge-cli`
+  - `cargo clippy -p radiodoge-core -p radiodoge-cli -- -D warnings`
+  - `npm run check` (Svelte type-check via svelte-check)
+- `build-windows.yml` and `build-android.yml` trigger scoped to `branches: [master, main]` and `tags: ['v*']` — previously fired on all branches, burning full platform builds on every dev push.
+
+#### `mobileSendBytes` bridge function
+- `connection-bridge.ts` now exports `mobileSendBytes(data: Uint8Array)` — routes to `_bleWrite` or `_usbWrite` based on active transport. Used by all Android Settings actions.
+
+#### BLE UUID normalization
+- All BLE service and characteristic UUIDs in `connection-bridge.ts` normalized to lowercase (`6e400001-...`) — required by Android's BLE stack, which rejects uppercase UUIDs on some devices/API levels.
+
+### Changed
+- `serial.rs`: Added `update_board_settings()` and `update_board_mac()` cache-update helpers used by `mobile_push_bytes`.
+- `mobile_push_bytes` `KNOWN_CMDS` list updated to include `0x28` (CMD_BLE_TOGGLE).
+
+---
+
 ## [0.3.15] — 2026-04-13 — 📡 Android Status Bar + Packet Stats Fix — Much Safe Area. Very Data. Wow.
 
 > **Nav bar no longer hides behind the Android system status bar. Dashboard packet counters and NavBar signal bars now update in real time on mobile USB/BLE.**

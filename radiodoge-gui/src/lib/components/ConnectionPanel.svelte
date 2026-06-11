@@ -163,6 +163,7 @@
   /** Scan for Android devices and update mobileDevices. */
   async function mobileRefresh() {
     mobileRefreshing = true;
+    const scanTab = mobileConnectTab; // capture so we can detect tab switches mid-scan
     setMobileSearching(mobileConnectTab);
     try {
       let found: MobileDeviceInfo[];
@@ -174,6 +175,9 @@
         const all = await bridge.listDevices();
         found = all.filter(d => d.type !== 'bluetooth');
       }
+      // Discard results if the user switched tabs while the scan was running —
+      // a BLE result arriving on the USB tab would populate the wrong device list.
+      if (mobileConnectTab !== scanTab) return;
       mobileDevices = found;
 
       if (mobileDevices.length > 0) {
@@ -215,6 +219,9 @@
   /** Disconnect on Android. */
   async function mobileDisconnect() {
     pingResult = null;
+    // Reset BLE toggle to default (board always starts advertising on next connect)
+    panelBleEnabled = true;
+    panelBleError = null;
     try {
       await bridge.disconnect();
     } catch (e) {
@@ -224,19 +231,48 @@
     setMobileIdle();
   }
 
-  /** Send a PING via the Android bridge and display round-trip time. */
+  /** Send a PING via the Android bridge and wait for the board's PONG reply. */
   async function mobilePingDevice() {
     isPinging = true;
     pingResult = null;
     const start = performance.now();
     try {
-      await bridge.mobilePing();
+      // mobilePingWait() registers a radio-packet listener BEFORE writing the
+      // PING bytes, then waits up to 2000 ms for CMD_PING (0x02) to come back.
+      // 2000 ms matches the desktop serial.ping() which was raised from 500 ms
+      // after debug logs confirmed the firmware response arriving at ~548 ms.
+      const ok = await bridge.mobilePingWait(2000);
       const ms = Math.round(performance.now() - start);
-      pingResult = { success: true, message: `Pong! Device responded in ~${ms} ms 🐕` };
+      pingResult = ok
+        ? { success: true,  message: `Pong! Device responded in ~${ms} ms 🐕` }
+        : { success: false, message: `No response within 2 s. Is the firmware running?` };
     } catch (e) {
       pingResult = { success: false, message: String(e) };
     } finally {
       isPinging = false;
+    }
+  }
+
+  // ── v0.3.16: BLE advertising toggle (Android — USB-C and BLE connected) ──────
+  // Board starts advertising by default; this lets the user disable it quickly
+  // from the Connect panel without navigating to Settings.
+  let panelBleEnabled = $state(true);
+  let isPanelTogglingBle = $state(false);
+  let panelBleError = $state<string | null>(null);
+
+  async function panelToggleBle() {
+    if (!connection.isConnected) return;
+    isPanelTogglingBle = true;
+    panelBleError = null;
+    try {
+      const nextState = !panelBleEnabled;
+      const bytes = await invoke<number[]>('mobile_build_ble_toggle', { enable: nextState });
+      await bridge.mobileSendBytes(new Uint8Array(bytes));
+      panelBleEnabled = nextState;
+    } catch (e: unknown) {
+      panelBleError = e instanceof Error ? e.message : String(e);
+    } finally {
+      isPanelTogglingBle = false;
     }
   }
 
@@ -413,7 +449,7 @@
             { id: 'bluetooth' as const, label: '📶 Bluetooth', subtitle: 'BLE' },
           ] as tab}
             <button
-              onclick={() => { mobileConnectTab = tab.id; selectedMobileDevice = ''; mobileDevices = []; setMobileIdle(); }}
+              onclick={() => { mobileConnectTab = tab.id; selectedMobileDevice = ''; mobileDevices = []; mobileRefreshing = false; setMobileIdle(); }}
               style="
                 flex: 1;
                 padding: 10px 8px;
@@ -617,6 +653,46 @@
               {pingResult.success ? '✅' : '❌'} {pingResult.message}
             </div>
           {/if}
+
+          <!-- ── BLE Advertising toggle (v0.3.16) ────────────────────────── -->
+          <!-- Only meaningful when the board is connected — enables/disables
+               the board's BLE advertising so other phones can find it via BLE. -->
+          <div style="
+            padding: 10px 14px;
+            background: rgba(100,100,255,0.06);
+            border: 1px solid rgba(100,100,255,0.2);
+            border-radius: 10px;
+            margin-bottom: 10px;
+          ">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+              <div>
+                <div style="font-size: 0.82rem; font-weight: 600; color: var(--doge-text);">
+                  📶 BLE Advertising
+                </div>
+                <div style="font-size: 0.71rem; color: var(--doge-muted); margin-top: 2px;">
+                  {panelBleEnabled ? 'Board is broadcasting NUS (RadioDoge-…)' : 'Board BLE advertising disabled'}
+                </div>
+              </div>
+              <button
+                onclick={panelToggleBle}
+                disabled={isPanelTogglingBle}
+                style="
+                  padding: 6px 14px;
+                  border-radius: 20px;
+                  border: 1px solid {panelBleEnabled ? 'rgba(100,100,255,0.5)' : 'rgba(255,100,100,0.4)'};
+                  background: {panelBleEnabled ? 'rgba(100,100,255,0.15)' : 'rgba(255,100,100,0.1)'};
+                  color: {panelBleEnabled ? '#9090ff' : 'var(--doge-red)'};
+                  font-size: 0.78rem; font-weight: 600; cursor: pointer;
+                  opacity: {isPanelTogglingBle ? 0.6 : 1};
+                "
+              >
+                {isPanelTogglingBle ? '⟳' : panelBleEnabled ? 'Disable' : 'Enable'}
+              </button>
+            </div>
+            {#if panelBleError}
+              <div style="font-size: 0.7rem; color: var(--doge-red); margin-top: 6px;">❌ {panelBleError}</div>
+            {/if}
+          </div>
 
           <button
             onclick={mobileDisconnect}
@@ -943,7 +1019,7 @@
           <div>
             <div class="stat-label">SNR</div>
             <div style="font-family: var(--font-mono); color: var(--doge-text);">
-              {connection.stats.snr.toFixed(1)} dB
+              {connection.stats.snr != null ? connection.stats.snr.toFixed(1) + ' dB' : '--'}
             </div>
           </div>
         {/if}

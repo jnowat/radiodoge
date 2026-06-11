@@ -12,7 +12,7 @@
 
 Send and receive Dogecoin over **LoRa radio waves** — completely offline, no internet required. RadioDoge uses Heltec ESP32 boards with built-in SX1262 LoRa transceivers to create a wireless mesh network for Dogecoin transactions.
 
-> **v0.3.11** ✨: Android USB-C serial **and** Bluetooth BLE are both fully implemented! Connect via USB-C OTG or scan for the Heltec board over BLE — both use the identical RadioDoge packet protocol as the desktop. Firmware GATT UUIDs are a configurable placeholder pending finalisation. Much mobile. Very wireless. Wow!
+> **v0.3.16** ✨: **Real P2PKH transactions + BIP39 mnemonic + wallet encryption + TX verification + balance!** The wallet generates 12-word BIP39 recovery phrases and derives keys at `m/44'/3'/0'/0/0`. Builds, signs (secp256k1 SIGHASH_ALL), and broadcasts real transactions. Private keys are encrypted with ChaCha20-Poly1305 + argon2id. Incoming signed transactions are verified in-process. Balance queries go directly to Trezor Blockbook or over LoRa via the gateway daemon. Android USB-C and Bluetooth BLE both production-ready! Much real. Very encrypted. Wow!
 
 ---
 
@@ -49,7 +49,7 @@ Every push also triggers an Android build. The APK is signed with the Gradle deb
 5. Enable **Settings → Install unknown apps** for your file manager
 6. Tap the `.apk` → Install → done! 🐕
 
-> **⚠️ USB-C connection is experimental and needs testing.** Connect your Heltec to your Android phone via a USB-C OTG cable. The app will ask for USB permission on first use. Serial baud rate is 115,200 — same as desktop. Bluetooth BLE is also present in the UI but GATT comms are a stub pending firmware BLE UUID finalisation.
+> **USB-C** — Connect your Heltec to your Android phone via a USB-C OTG cable. The app will request USB permission on first use. Baud rate 115,200 — same as desktop. **BLE** — The app scans for boards advertising the Nordic UART Service ("RadioDoge-X.X.X"). Once connected, all packet commands work over BLE — no cable needed. Both transports are production-ready as of v0.3.16.
 
 ---
 
@@ -61,7 +61,8 @@ Every push also triggers an Android build. The APK is signed with the Gradle deb
 - **Pure Rust crypto** — no browser, no cloud, generate real Dogecoin keys locally
 - **Open hardware** — works with standard Heltec ESP32 LoRa V3 boards (~$20)
 - **Android app** — installable debug APK built by CI on every push, runs on Android 7.0+
-- **Android USB serial** (experimental) — connect a Heltec via USB-C OTG cable; full protocol support
+- **Android USB serial** — connect a Heltec via USB-C OTG cable; full protocol support, production-ready
+- **Android BLE** — connect wirelessly to a board advertising Nordic UART Service; production-ready
 - **Instant builds** — every push to master compiles a fresh Windows MSI and Android APK
 
 ---
@@ -84,11 +85,14 @@ Your PC / Phone
                         [Dogecoin Network]
 ```
 
-1. Your desktop app (RadioDoge GUI) sends a signed transaction to the Heltec device via USB serial
-2. The device broadcasts it over LoRa radio to nearby nodes
-3. Nodes relay the packet through the mesh (up to 3 hops)
-4. A gateway node (connected to internet) forwards it to the Dogecoin network
-5. 🎉 Your transaction is confirmed on-chain!
+1. Your desktop app (RadioDoge GUI) **builds and signs a real Dogecoin P2PKH transaction** locally (UTXO fetch → coin selection → secp256k1 SIGHASH_ALL signing)
+2. The raw signed transaction is sent to the Heltec device via USB serial and broadcast over LoRa
+3. Nodes relay the packet through the mesh (up to 15 km range)
+4. A gateway node running `radiodoge-cli daemon` receives the packet and **POSTs the raw transaction to Trezor Blockbook** for broadcast to the Dogecoin network
+5. The gateway sends a `TX_ACK:<txid>` radio message back to the sender
+6. 🎉 Your transaction is confirmed on-chain!
+
+> **Gateway note**: Full end-to-end flow (LoRa → firmware → daemon → network) requires the gateway Heltec to forward incoming binary packets to the serial host. The daemon broadcast logic is complete; gateway firmware integration is in progress.
 
 ---
 
@@ -108,8 +112,8 @@ Your PC / Phone
 ### Option B: Build from Source
 
 ```bash
-# Clone (with submodules for libdogecoin)
-git clone --recurse-submodules https://github.com/jnowat/RadioDoge.git
+# Clone
+git clone https://github.com/jnowat/RadioDoge.git
 cd RadioDoge/radiodoge-gui
 
 # Install frontend dependencies
@@ -194,7 +198,7 @@ cargo build -p radiodoge-cli --release
 1. Click the **Wallet** tab
 2. Click **Generate New Wallet** — pure Rust crypto creates a real mainnet keypair in < 1 ms
 3. Your address starts with `D` (e.g., `DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L`)
-4. **Save your private key (WIF) now** — it is never stored to disk! Copy it somewhere safe
+4. **Save your private key** — click **🔐 Save Encrypted** to save with a passphrase (ChaCha20-Poly1305 + argon2id), or copy the WIF somewhere safe offline
 
 ### Step 4 — Send a Dogecoin Transaction Over LoRa
 
@@ -451,28 +455,25 @@ Rock-solid when you plug in a real Heltec board, now with Android support:
 - ✅ **WiFi toggle** — enable/disable the board's WiFi radio from Settings
 - ✅ **Mesh neighbor map** — tracks recently heard nodes; address conflict detection (CMD 0x25)
 - ✅ **Address book** — save and label Dogecoin addresses, persisted to `address_book.json`
-- ✅ **Persistent wallet** — save encrypted wallet to disk; reload on next launch
+- ✅ **Encrypted wallet** — ChaCha20-Poly1305 + argon2id passphrase-protected wallet saved to `wallet.json`; passphrase prompt on unlock; legacy plaintext wallets auto-detected with re-encrypt nudge
 - ✅ **Battery voltage display** — polls board every 15 s when connected
 - ✅ **Board MAC address** — displayed in Settings tab
 - ✅ **Light/dark theme toggle** — full theme switcher in Settings
 - ✅ **Android app** — Tauri Mobile port; debug APK built by CI on every push, installable on Android 7.0+ (API 24); mobile-responsive UI with icon-only NavBar on phones
 - ✅ **Android USB serial** (v0.3.10) — USB-OTG CP2102/CH340 serial via `tauri-plugin-serialplugin`; status badge; full RadioDoge packet protocol identical to desktop
-- ✅ **Android Bluetooth BLE** (v0.3.11) — full GATT scan → connect → notify pipeline via `tauri-plugin-blec`; incoming notifications feed the identical `mobile_push_bytes` accumulator as USB; GATT service/characteristic UUIDs are configurable constants in `connection-bridge.ts` pending firmware finalisation
+- ✅ **Android Bluetooth BLE** (v0.3.11) — full GATT scan → connect → notify pipeline via `tauri-plugin-blec`; incoming notifications feed the identical `mobile_push_bytes` accumulator as USB; Nordic UART Service UUIDs aligned with `heltec-firmware-v3` (v0.3.13)
+- ✅ **Full P2PKH transaction signing** (v0.3.16) — UTXO fetch + secp256k1 SIGHASH_ALL + gateway broadcast via Trezor Blockbook; TX_ACK feedback over LoRa
+- ✅ **Wallet encryption at rest** (v0.3.16) — argon2id (64 MiB) + ChaCha20-Poly1305 passphrase encryption; passphrase entry modal on save and unlock modal on startup
+- ✅ **Incoming TX verification** (v0.3.16) — secp256k1 ECDSA signature verified in-process; ✅ verified or ⚠️ unverified label in all packet views
+- ✅ **Balance query** (v0.3.16) — direct Blockbook query from the GUI; `CMD_REQUEST_BALANCE` daemon handler for LoRa gateway path; Balance card in WalletTab
+- ✅ **BIP32/BIP44 HD wallet** (v0.3.16) — 12-word BIP39 mnemonic generation; derive key at `m/44'/3'/0'/0/0` (Dogecoin coin type 3) via HMAC-SHA512 BIP32; recovery phrase backup modal on generate; mnemonic import panel in WalletTab
 
 ---
 
-### 🚀 v0.4.x — Full Dogecoin Transactions Over LoRa
+### 🚀 v0.4.x — Roadmap
 
-End-to-end on-chain transactions — no internet required on your device:
-
-- 🔜 **Dogecoin Core RPC bridge (optional)** — when Core is running on the same machine, RadioDoge can discover existing wallets/addresses/balances via localhost RPC, use them for signing, then fall back to pure offline LoRa mode (read-only RPC by default for maximum safety)
-- 🔜 **UTXO fetching via gateway** — broadcast `REQUEST_BALANCE`; gateway queries Dogecoin RPC and relays UTXO set back over LoRa mesh
-- 🔜 **BIP32/BIP44 HD wallet** — derive multiple addresses from a single mnemonic seed (m/44'/3'/0'/0/n)
-- 🔜 **Full raw transaction signing** — construct + sign a valid Dogecoin transaction in pure Rust; no internet touched
-- 🔜 **Transaction confirmation feedback** — gateway ACKs broadcast and reports `txid` back over LoRa
 - 🔜 **SPV verification** — lightweight header chain validation; app can verify inclusion without a full node
 - 🔜 **Multi-hop relay status** — show hop count and intermediate node addresses in the packet log
-- 🔜 **Address book** — save labelled Dogecoin addresses in encrypted local storage
 - 🔜 **QR code scanning** — camera/image input for recipient field (no hand-typing long addresses)
 - 🔜 **Fee estimation** — gateway reports current mempool fee rate; app sets appropriate sat/byte fee
 
@@ -493,7 +494,6 @@ Bridge RadioDoge with the existing Meshtastic community:
 
 ### 📱 Future Horizons
 
-- 🔜 **Android USB-OTG serial** — connect to Heltec directly from your phone via USB cable
 - 🔜 **iOS** — Bluetooth LE to Heltec via BLE-serial bridge firmware
 - 🔜 **Linux AppImage + macOS .dmg** in CI — Tauri supports these targets already
 - 🔜 **WebAssembly packet inspector** — browser tool to decode RadioDoge packets from hex
@@ -502,9 +502,9 @@ Bridge RadioDoge with the existing Meshtastic community:
 
 ---
 
-## 🏛️ Legacy: RadioDogeSharp
+## 🏛️ Legacy
 
-The `RadioDogeSharp/` directory contains the original Windows C# .NET 6.0 console application. It remains as a **reference implementation** showing the serial protocol and SPV wallet logic in C#. New development happens in `radiodoge-gui/`.
+The `RadioDogeSharp` C# application and `serdog` C helper have been replaced by `crates/radiodoge-cli` — a pure Rust CLI that implements the full RadioDoge protocol without any native library dependencies. The vendored C source (`libdogecoin`) was also removed; all cryptography is handled by the `secp256k1`, `sha2`, `ripemd`, and `bs58` Rust crates.
 
 ---
 
