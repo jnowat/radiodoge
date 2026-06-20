@@ -342,6 +342,7 @@ impl SerialManager {
                             0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
                             0x10, 0x11, 0x20, 0x21, 0x22, 0x23,  // 0x22/0x23 = v0.3.6
                             0x24, 0x25, 0x26, 0x27, 0x28,         // v0.3.7/0.3.8/0.3.16 (CMD_BLE_TOGGLE)
+                            0x29, 0x2A,                            // v0.4.0 (CMD_RECEIVED_ACK/PING)
                             0x3F, 0x62, 0x64, 0x68, 0x6D, 0xFE, // firmware-side IDs
                         ];
                         while !accumulator.is_empty() {
@@ -461,6 +462,7 @@ impl SerialManager {
                                 const MESH_PACKET_CMDS: &[u8] = &[
                                     radio::CMD_PING, radio::CMD_MESSAGE, radio::CMD_BROADCAST,
                                     radio::CMD_MULTIPART, radio::CMD_DOGE_TX,
+                                    radio::CMD_RECEIVED_ACK, radio::CMD_RECEIVED_PING,
                                 ];
                                 if MESH_PACKET_CMDS.contains(&packet.command) {
                                     use std::time::{SystemTime, UNIX_EPOCH};

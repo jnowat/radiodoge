@@ -319,6 +319,21 @@ unsigned long txOkTimestamp = 0;
 uint32_t pktRxCount = 0;
 uint32_t pktTxCount = 0;
 
+// Broadcast deduplication — suppress mesh storm re-delivery
+#define MAX_SEEN_BROADCASTS 20
+#define SEEN_BROADCAST_TTL_MS 120000UL  // 2 minutes
+
+struct SeenBroadcast {
+  uint8_t srcRegion;
+  uint8_t srcCommunity;
+  uint8_t srcNode;
+  uint32_t dataHash;
+  unsigned long seenAt;
+};
+
+SeenBroadcast seenBroadcasts[MAX_SEEN_BROADCASTS];
+int seenBroadcastCount = 0;
+
 nodeAddress local;
 nodeAddress dest;
 nodeAddress senderAddress;
@@ -1741,16 +1756,22 @@ void GetLocalAddress() {
 void ReceivedACK() {
   SetSenderAddress();
   DisplayRXMessage("ACK", senderAddress);
-  //Serial.printf("MUCH ACK FR %d.%d.%d\n", senderAddress.region, senderAddress.community, senderAddress.node);
-  // @TODO indicate to host we received an ACK
+  // Notify host: CMD_RECEIVED_ACK (0x29), standard 8-byte header, src = ACK sender
+  uint8_t ackMsg[8] = {0x29, 0x00,
+                       senderAddress.region, senderAddress.community, senderAddress.node,
+                       0xFF, 0xFF, 0xFF};
+  Serial.write(ackMsg, 8);
 }
 
 // Indicate to the host that a ping was received and display it on the screen
 void ReceivedPing() {
   SetSenderAddress();
   DisplayRXMessage("Ping!", senderAddress);
-  //Serial.printf("MUCH PING FR %d.%d.%d\n", senderAddress.region, senderAddress.community, senderAddress.node);
-  // @TODO indicate to host we received a Ping
+  // Notify host: CMD_RECEIVED_PING (0x2A), standard 8-byte header, src = ping sender
+  uint8_t pingMsg[8] = {0x2A, 0x00,
+                        senderAddress.region, senderAddress.community, senderAddress.node,
+                        0xFF, 0xFF, 0xFF};
+  Serial.write(pingMsg, 8);
 }
 
 // Send a ping to the specified destination address
@@ -2396,7 +2417,60 @@ void ProcessReassembledMessage(String messageData, uint8_t srcRegion, uint8_t sr
   addLog("[LoRa] Reassembled message forwarded to host");
 }
 
+// FNV-1a 32-bit hash for broadcast deduplication
+static uint32_t fnv1a(const String& s) {
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < (int)s.length(); i++) {
+    h ^= (uint8_t)s.charAt(i);
+    h *= 16777619u;
+  }
+  return h;
+}
+
+// Returns true if an identical broadcast from this source was recently processed.
+// Records the entry on first sight.
+bool isRecentlySeenBroadcast(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, const String& data) {
+  uint32_t hash = fnv1a(data);
+  unsigned long now = millis();
+
+  // Compact out expired entries
+  int writeIdx = 0;
+  for (int i = 0; i < seenBroadcastCount; i++) {
+    if (now - seenBroadcasts[i].seenAt < SEEN_BROADCAST_TTL_MS) {
+      seenBroadcasts[writeIdx++] = seenBroadcasts[i];
+    }
+  }
+  seenBroadcastCount = writeIdx;
+
+  // Check for duplicate
+  for (int i = 0; i < seenBroadcastCount; i++) {
+    if (seenBroadcasts[i].srcRegion    == srcRegion    &&
+        seenBroadcasts[i].srcCommunity == srcCommunity &&
+        seenBroadcasts[i].srcNode      == srcNode      &&
+        seenBroadcasts[i].dataHash     == hash) {
+      return true;
+    }
+  }
+
+  // New entry — record it, evict oldest if full
+  if (seenBroadcastCount < MAX_SEEN_BROADCASTS) {
+    seenBroadcasts[seenBroadcastCount++] = {srcRegion, srcCommunity, srcNode, hash, now};
+  } else {
+    int oldest = 0;
+    for (int i = 1; i < MAX_SEEN_BROADCASTS; i++) {
+      if (seenBroadcasts[i].seenAt < seenBroadcasts[oldest].seenAt) oldest = i;
+    }
+    seenBroadcasts[oldest] = {srcRegion, srcCommunity, srcNode, hash, now};
+  }
+  return false;
+}
+
 void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode) {
+  // Suppress duplicate deliveries from mesh rebroadcasting
+  if (isRecentlySeenBroadcast(srcRegion, srcCommunity, srcNode, broadcastData)) {
+    addLog("[LoRa] Duplicate broadcast from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode) + " suppressed");
+    return;
+  }
   addLog("[LoRa] Processing reassembled BROADCAST from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode));
   
   // Set sender address

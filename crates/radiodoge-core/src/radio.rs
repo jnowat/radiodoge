@@ -52,6 +52,8 @@ pub const CMD_ADDR_CONFLICT: u8 = 0x25;        // v0.3.7: Board-initiated: dupli
 pub const CMD_GET_BATTERY: u8 = 0x26;          // v0.3.8: Query battery voltage (2-byte u16 mV in payload)
 pub const CMD_GET_MAC: u8 = 0x27;              // v0.3.8: Query board MAC address (6 bytes in payload)
 pub const CMD_BLE_TOGGLE: u8 = 0x28;          // v0.3.16: Enable/disable BLE advertising (persists to NVS)
+pub const CMD_RECEIVED_ACK: u8 = 0x29;        // v0.4.0: Board-initiated: over-the-air ACK received from remote node
+pub const CMD_RECEIVED_PING: u8 = 0x2A;       // v0.4.0: Board-initiated: over-the-air Ping received from remote node
 
 /// Single packet header length in bytes
 pub const SINGLE_HDR_LEN: usize = 8;
@@ -173,6 +175,8 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         CMD_GET_BATTERY     => Some(10), // header + 2 bytes (voltage_mv big-endian)
         CMD_GET_MAC         => Some(14), // header + 6 bytes (MAC address)
         CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
+        CMD_RECEIVED_ACK    => Some(8),  // header only; src = remote node that sent the ACK
+        CMD_RECEIVED_PING   => Some(8),  // header only; src = remote node that sent the Ping
         _ => None,                       // variable length (0x03 MSG, 0x20 FW version, etc.)
     }
 }
@@ -388,6 +392,8 @@ fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
                 Some("📶 BLE_TOGGLE".to_string())
             }
         }
+        CMD_RECEIVED_ACK  => Some("📨 ACK received".to_string()),
+        CMD_RECEIVED_PING => Some("🏓 Ping received".to_string()),
         _ => None,
     }
 }
