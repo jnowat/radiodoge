@@ -1,0 +1,42 @@
+# RadioDoge — Rust supply-chain security audit
+#
+# Runs cargo-audit against the workspace Cargo.lock on every push to tracked
+# branches and on a weekly schedule.  Any known CVE in a pinned dependency
+# fails the job so it shows up in the Actions tab before it ships.
+
+name: Cargo Audit
+
+on:
+  push:
+    branches: [master, main, '0.0.1-Beta-1', 'claude/**']
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - 'radiodoge-gui/src-tauri/Cargo.toml'
+      - '.github/workflows/cargo-audit.yml'
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        run: cargo audit
+
+      - name: Summary
+        if: success()
+        run: echo "## Security Audit Passed — No Known CVEs" >> $GITHUB_STEP_SUMMARY
