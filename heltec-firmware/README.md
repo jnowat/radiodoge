@@ -1,31 +1,59 @@
-# Heltec Firmware
-Prototype RadioDoge firmware for the Heltec WiFi LoRa 32 (v2 and v3) modules
+# 🐕 RadioDoge Firmware — v2 Prototype
 
-https://heltec.org/project/wifi-lora-32-v3/
+> **This is the original prototype firmware.** For production use, flash
+> [`heltec-firmware-v3/`](../heltec-firmware-v3/) instead — it adds WiFi, a web/REST interface, Bluetooth LE,
+> NVS persistence, multipart reassembly, mesh rebroadcast, and the full binary protocol the RadioDoge app
+> speaks. This v2 sketch is kept for reference and for the Heltec **WiFi LoRa 32 (V2)** board.
 
-## Installing the development environment
-Instructions for installing the Arduino IDE and required libraries can be found by following the links below.
-<ul>
-  <li>https://wiki-content.arduino.cc/en/software</li>
-  <li>https://heltec.org/wifi_kit_install/</li>
-</ul>
+The first RadioDoge firmware: a compact (~575-line) serial + LoRa sketch for the Heltec WiFi LoRa 32 modules.
+It forms addressed LoRa packets and exchanges them with other modules under host control.
 
-If working in Windows you may need to install USB drivers for the device which can be found at...
-<ul>
-  <li>https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers?tab=downloads</li>
-</ul>
+Board: [Heltec WiFi LoRa 32 (V2 / V3)](https://heltec.org/project/wifi-lora-32-v3/)
 
-## Current Progress
-Currently custom LoRa packets are formed and addressed to individual LoRa modules through the following addressing scheme:
+---
 
-Region.Community.Node (e.g., 10.1.3)
+## Setting up the development environment
 
-Devices are able to send the following messages to each other through the custom LoRa packets:
+Install the Arduino IDE and the required Heltec libraries:
 
-<ul>
-  <li>Pings</li>
-  <li>ACKs</li>
-  <li>User defined messages (e.g., text messages)</li>
-</ul>
+- Arduino IDE — <https://www.arduino.cc/en/software>
+- Heltec board setup — <https://heltec.org/wifi_kit_install/>
 
-Command and control of the modules is done over serial communication with a host device. The host is in charge of issuing commands to the module(s) such as setting the module's address and issuing pings. Please note that there is an excess of serial writing from the LoRa modules to the host right now, however, this is intended to just be temporary for debugging purposes.
+On Windows you may also need the CP210x USB-to-UART driver:
+
+- <https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers>
+
+Open `heltec-firmware.ino` in the Arduino IDE, select your Heltec board, and upload.
+
+---
+
+## What it does
+
+LoRa packets are addressed to individual modules using the RadioDoge scheme:
+
+```
+Region.Community.Node        e.g. 10.1.3
+```
+
+Over these packets, modules can exchange:
+
+- **Pings**
+- **ACKs**
+- **User-defined messages** (e.g. text)
+
+Command and control happens over the serial link to a host, using a 2-byte `[command, payloadSize]` header. The
+host issues commands — set address, send ping, send message — and the module reports back.
+
+> **Note:** this prototype prints verbose serial output for debugging, and received multipart parts are passed
+> to the host **without** reassembly. `ReceivedACK` / `ReceivedPing` host notifications are stubs here — they
+> exist for real in [v3](../heltec-firmware-v3/) as serial commands `0x29` / `0x2A`.
+
+---
+
+## Where to go next
+
+- **Production firmware:** [`heltec-firmware-v3/README.md`](../heltec-firmware-v3/README.md)
+- **Protocol reference:** [`docs/PROTOCOL.md`](../docs/PROTOCOL.md)
+- **The app:** [project README](../README.md)
+
+*Much prototype. Very origin. Wow.* 🐕
