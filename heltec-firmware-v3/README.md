@@ -1,6 +1,41 @@
-# RadioDoge Heltec LoRa V3 Firmware
+# 🐕 RadioDoge Heltec LoRa V3 Firmware
 
-A comprehensive firmware for the Heltec WiFi LoRa 32 V3 module that enables secure Dogecoin transaction transmission via LoRa radio with dual WiFi connectivity, persistent configuration, and web-based management interface.
+A comprehensive firmware for the Heltec **WiFi LoRa 32 V3** (and V2) modules that transmits Dogecoin
+transactions over LoRa radio, with dual WiFi connectivity, persistent NVS configuration, Bluetooth LE, and a
+web-based management interface.
+
+> **Version:** this firmware reports `FIRMWARE_VERSION 8` — i.e. **v0.3.8**. On a `GET_FIRMWARE_VERSION` query
+> it answers with a string like `RadioDoge NV3FW08` (board version + zero-padded firmware number). The `v3.1` /
+> `v3.2` labels in the feature notes below are historical names for feature waves, not the firmware's version.
+>
+> **Two ways to talk to this board:** the **web/REST interface** documented here (over WiFi), and the
+> **binary serial/BLE protocol** the [RadioDoge app](../README.md) and [`radiodoge-cli`](../crates/radiodoge-cli)
+> use. The binary protocol — packet format, command bytes, multipart framing — is documented in
+> [**docs/PROTOCOL.md**](../docs/PROTOCOL.md).
+
+---
+
+<a id="limitations"></a>
+
+## ⚠️ Known Limitations & Security
+
+Please read before deploying:
+
+- **The web/REST interface has no authentication.** Any device on the board's WiFi AP can call every `/api/*`
+  route. Worse, `GET /api/gateway/load` returns the stored gateway RPC password and `GET /api/password/status`
+  returns the AP password **in plaintext**. Treat a firmware gateway as a device on a **trusted network only**.
+- **"Gateway discovery" is not a discovery protocol.** There is no election or negotiation: any node that
+  receives a broadcast and happens to have a configured gateway (or internet) forwards it; others simply
+  rebroadcast. Mesh rebroadcast has **no hop limit** — it's bounded only by a 2-minute broadcast-dedup table.
+- **LoRa parameters are compile-time.** Frequency, spreading factor, and bandwidth are `#define`s; the
+  `SET_LORA_PARAMS` (`0x21`) serial command is currently an ACK-only no-op. Only the node **address** is
+  reconfigurable at runtime (and persisted to NVS).
+- **A few app commands aren't wired up yet.** The serial handlers for `WIFI_TOGGLE` (`0x24`), `GET_BATTERY`
+  (`0x26`), and `GET_MAC` (`0x27`) exist but aren't reachable from the desktop-command dispatch. **Bluetooth LE
+  is notify-oriented**: the board mirrors replies out over BLE but does not yet execute commands *received* over
+  BLE. Use **USB serial** for reliable two-way control.
+
+See the project [Roadmap](../ROADMAP.md#-known-limitations--in-progress) for status on each of these.
 
 ## 🌐 Blockchain-Like LoRa Network
 
@@ -21,7 +56,7 @@ A comprehensive firmware for the Heltec WiFi LoRa 32 V3 module that enables secu
 - **🌐 Blockchain-Like Mesh Network**: Decentralized transaction propagation without internet
 - **📡 Smart Broadcasting**: Automatic multipart packet support for large transactions
 - **🔄 Mesh Rebroadcasting**: Transactions automatically propagate through the network
-- **⛓️ Gateway Discovery**: Automatic detection of devices with Dogecoin network access
+- **⛓️ Gateway Forwarding**: Any node with a configured gateway or internet forwards received transactions (no discovery/election protocol — see [limitations](#limitations))
 - **📨 Response Relay**: Detailed blockchain responses sent back to original sender
 - **Dual WiFi Mode**: Access Point + Station mode for internet connectivity
 - **Web Interface**: Modern, responsive web UI for device management
@@ -29,13 +64,16 @@ A comprehensive firmware for the Heltec WiFi LoRa 32 V3 module that enables secu
 - **Persistent Configuration**: All settings stored in NVS flash memory
 - **Real-Time Logging**: Monitor all system activity with live log viewer
 
-### Security Features
-- **Custom AP Password**: Secure, configurable WiFi access point password
-- **Password Validation**: Strong password requirements (8-32 chars, letters + numbers)
+### Access Control
+- **Custom AP Password**: Configurable WiFi access-point password (gates who can join the AP)
+- **Password Validation**: Password requirements enforced (8-32 chars, letters + numbers)
 - **Persistent Storage**: All configurations survive reboots
-- **Secure API**: Protected web interface access
 - **Password Management**: Change/reset AP password via web interface
-- **Credential Storage**: Secure storage of WiFi credentials in NVS
+- **Credential Storage**: WiFi credentials stored in NVS
+
+> ⚠️ The AP password controls **who can join the WiFi network**, not who can call the API. Once on the AP, the
+> `/api/*` routes are **unauthenticated** and a couple of endpoints return stored credentials in plaintext — see
+> [Known Limitations & Security](#limitations).
 
 ### Network Features
 - **Internet Gateway**: Forward transactions to Dogecoin network
@@ -442,7 +480,8 @@ POST /api/rpc
 Send RPC request to configured gateway.
 
 **Parameters:**
-- `rpc_body`: JSON-RPC request body
+- `body`: JSON-RPC request body
+- `url`: gateway URL to send the RPC request to (required)
 
 #### Gateway Operations
 ```http
@@ -675,7 +714,7 @@ curl "http://192.168.4.1/proxy?url=https://github.com"
 ### LoRa Network Address
 - **Format**: Region.Community.Node (e.g., 10.1.3)
 - **Range**: Each component 0-255
-- **Default**: 10.1.1
+- **First boot (empty NVS)**: `0.0.0` — configure it before use. `POST /api/lora/clear` resets to `10.1.1`.
 - **Persistence**: Stored in NVS, survives reboots
 - **Auto-Restore**: Last configuration automatically restored on boot
 - **Management**: Set via web interface or API
@@ -728,7 +767,7 @@ curl "http://192.168.4.1/proxy?url=https://github.com"
 #### Multipart Packet Support:
 - **📦 Large Transactions**: Automatically splits transactions larger than 255 bytes
 - **🔄 Reliable Delivery**: Each part is sent separately for maximum reliability
-- **⏱️ Smart Timing**: 500ms delay between parts to ensure proper reception
+- **⏱️ Smart Timing**: 500 ms delay between parts for transactions and broadcasts (100 ms for plain messages) to ensure proper reception
 - **🔧 Automatic Reassembly**: Receiving devices automatically reassemble the full transaction
 - **📊 Progress Tracking**: See transmission progress on the display
 
@@ -813,7 +852,7 @@ The system now provides comprehensive logging of all activities:
 **Log Features**:
 - **Auto-Refresh**: Logs automatically refresh every 2 seconds by default
 - **Log Forwarding**: Send current logs to other RadioDoge devices via LoRa
-- **Circular Buffer**: Maintains last 50 log entries in memory
+- **Circular Buffer**: Maintains the last 100 log entries in memory (each truncated to 200 chars)
 - **Detailed Information**: Includes timestamps, signal strength, error codes
 - **Security**: Sensitive information (passwords) excluded from logs
 
@@ -865,7 +904,7 @@ Transactions can now be automatically forwarded to the internet:
 - **No internet_forwarded in response**: Check if gateway is configured in "Internet Gateway" section
 - **Gateway not working**: Verify IP address, port, and credentials are correct
 - **CORE gateway errors**: Ensure Dogecoin Core is running and RPC is enabled
-- **Password not saving**: Check password length (max 15 characters for NVS keys)
+- **Password not saving**: The 15-character NVS limit applies to internal **key names**, not to your password value — passwords themselves can be the full 8-32 characters. If a password won't save, verify it meets the 8-32 char + letters-and-numbers rule.
 
 #### Log Issues
 - **Logs not auto-refreshing**: Click "Toggle Auto-Refresh" button
@@ -953,11 +992,14 @@ All API responses follow this JSON format:
 - **Power**: USB or Battery
 
 ### LoRa Settings
-- **Frequency**: 915 MHz (configurable)
+- **Frequency**: 915 MHz (compile-time `#define`; not runtime-configurable)
 - **Power**: 5 dBm
 - **Bandwidth**: 125 kHz
 - **Spreading Factor**: 7
 - **Coding Rate**: 4/5
+
+> These are fixed at compile time. The `SET_LORA_PARAMS` (`0x21`) serial command is currently an ACK-only no-op;
+> only the node **address** is reconfigurable at runtime.
 
 ### Network
 - **AP IP**: 192.168.4.1

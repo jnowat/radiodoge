@@ -7,6 +7,42 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — 🕸️ Mesh Reliability + Supply-Chain CI — Much Robust. Very Audited. Wow.
+
+> **Groundwork for v0.4.x mesh reliability: the firmware now tells the host when it hears an over-the-air ACK or
+> Ping, broadcast storms are suppressed by a dedup table, and CI fails on any known CVE in a dependency.**
+
+### Added
+
+#### Host notifications for over-the-air ACK / Ping — `CMD_RECEIVED_ACK` (0x29), `CMD_RECEIVED_PING` (0x2A)
+- The firmware now emits an 8-byte serial notification to the host when it receives a LoRa ACK (`0x29`) or Ping
+  (`0x2A`) from a remote node, with the remote node's address in the source bytes. Previously these events were
+  only visible on the board's OLED/serial log.
+- `radiodoge-core` decodes both commands (`📨 ACK received` / `🏓 Ping received`), returns their fixed 8-byte
+  length from `exact_packet_len()` so the serial framer advances precisely, and whitelists them in the read loop.
+
+#### Broadcast deduplication (firmware)
+- Reassembled broadcasts are now fingerprinted with an FNV-1a 32-bit hash over the payload plus source address
+  and tracked in a 20-entry table with a 2-minute TTL. Repeats within the window are dropped, suppressing
+  mesh-storm re-delivery. (Applies to reassembled multipart broadcasts.)
+
+#### `cargo-audit` CI workflow
+- New `.github/workflows/cargo-audit.yml` runs `cargo audit` against the workspace `Cargo.lock` on every push
+  that touches a manifest, plus a weekly schedule (Mondays 06:00 UTC). Any known CVE in a pinned dependency
+  fails the job.
+
+### Documentation
+
+- Rewrote the root `README.md`: added the hero image, corrected the CLI reference (all commands), the serial
+  protocol/command table, and the BLE section (real Nordic UART Service UUIDs); removed references to directories
+  that no longer exist; added Transports, Architecture, Security, and CI/CD sections.
+- Added `ROADMAP.md`, `docs/USER_MANUAL.md`, `docs/PROTOCOL.md`, and `CONTRIBUTING.md`; replaced the `docs/`
+  placeholder with a real index.
+- Corrected stale claims in `heltec-firmware-v3/README.md` (firmware version, log-buffer size, default address,
+  `/api/rpc` parameters, compile-time LoRa settings) and added an honest limitations/security section.
+
+---
+
 ## [0.3.16] — 2026-04-15 — 🐕 Android Settings + BLE Toggle + Live Log Polish — Much Polish. Very Stable. Wow.
 
 > **Settings tab actions now work on Android. Start Gateway double-press fixed on desktop. Live Packet Log fully readable on 360dp phones. Debug export uses native share sheet on Android. BLE advertising toggle added. Board MAC read fixed for both platforms.**

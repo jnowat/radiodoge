@@ -1,527 +1,382 @@
-# 🐕 RadioDoge — Wireless P2P Dogecoin Over LoRa
+<div align="center">
+
+<img src="images/Radio_Doge.png" width="360" alt="RadioDoge — a Shiba Inu tuning a vintage radio while Dogecoins beam out over the airwaves">
+
+# 🐕 RadioDoge
+
+### Wireless, peer-to-peer Dogecoin over LoRa radio — no internet required.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Built%20with-Rust%20🦀-orange)](https://rustlang.org)
+[![Rust](https://img.shields.io/badge/Built%20with-Rust%20🦀-orange)](https://rust-lang.org)
 [![Tauri 2](https://img.shields.io/badge/Tauri-v2-blue)](https://tauri.app)
 [![Dogecoin](https://img.shields.io/badge/Powered%20by-Dogecoin-f7d02c?logo=dogecoin)](https://dogecoin.com)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android-informational)]()
 [![Windows CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml/badge.svg)](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml)
 [![Android CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-android.yml/badge.svg)](https://github.com/jnowat/RadioDoge/actions/workflows/build-android.yml)
+[![Cargo Audit](https://github.com/jnowat/RadioDoge/actions/workflows/cargo-audit.yml/badge.svg)](https://github.com/jnowat/RadioDoge/actions/workflows/cargo-audit.yml)
 
-> **Much wireless. Very transaction. Wow.** 🌙
+**Much wireless. Very transaction. Wow.** 🌙
 
-Send and receive Dogecoin over **LoRa radio waves** — completely offline, no internet required. RadioDoge uses Heltec ESP32 boards with built-in SX1262 LoRa transceivers to create a wireless mesh network for Dogecoin transactions.
+[**Get the app**](#-get-the-app) · [**How it works**](#-how-radiodoge-works) · [**User manual**](docs/USER_MANUAL.md) · [**Roadmap**](ROADMAP.md) · [**Protocol**](docs/PROTOCOL.md)
 
-> **v0.3.16** ✨: **Real P2PKH transactions + BIP39 mnemonic + wallet encryption + TX verification + balance!** The wallet generates 12-word BIP39 recovery phrases and derives keys at `m/44'/3'/0'/0/0`. Builds, signs (secp256k1 SIGHASH_ALL), and broadcasts real transactions. Private keys are encrypted with ChaCha20-Poly1305 + argon2id. Incoming signed transactions are verified in-process. Balance queries go directly to Trezor Blockbook or over LoRa via the gateway daemon. Android USB-C and Bluetooth BLE both production-ready! Much real. Very encrypted. Wow!
-
----
-
-## 🚀 Get the App — Windows MSI or Android APK
-
-> **Builds trigger on every push — grab the MSI or APK from Actions artifacts instantly!**
-
-### 🖥️ Windows MSI
-
-#### ⚡ Option A: Instant Download (Every Push → Actions Artifacts)
-
-1. Go to the [**Windows CI**](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml)
-2. Click the latest **"🐕 Build Windows MSI"** run
-3. Scroll to **Artifacts** → click **`RadioDoge-x.x.x-windows-x64-msi`** → download the `.zip`
-4. Unzip → double-click the `.msi` → done! 🐕
-
-#### 🏷️ Option B: Tagged Release (Permanent)
-
-1. Go to [Releases](https://github.com/jnowat/RadioDoge/releases)
-2. Download `RadioDoge_x.x.x_x64_en-US.msi` → install and launch
-
-Artifacts kept for **30 days**. MSI auto-attaches to any GitHub Release you create.
+</div>
 
 ---
 
-### 📱 Android APK (Debug — Sideload)
+RadioDoge sends and receives **real Dogecoin transactions over LoRa radio waves** — completely offline, no
+internet on your device required. It pairs a friendly desktop/mobile app with low-cost
+[Heltec ESP32 LoRa V3](https://heltec.org/project/wifi-lora-32-v3/) boards to form a wireless mesh: your
+phone or PC builds and signs a transaction locally, beams the raw bytes to a nearby Heltec node, and the mesh
+relays it — hop by hop — until it reaches a gateway node that pushes it to the Dogecoin network.
 
-Every push also triggers an Android build. The APK is signed with the Gradle debug key so it installs directly on any Android 7.0+ device.
-
-1. Go to [**Android CI**](https://github.com/jnowat/RadioDoge/actions/workflows/build-android.yml)
-2. Click the latest **"Android (APK)"** run
-3. Scroll to **Artifacts** → click **`radiodoge-android-debug-apk-vx.x.x`** → download the `.zip`
-4. Unzip → copy the `.apk` to your phone
-5. Enable **Settings → Install unknown apps** for your file manager
-6. Tap the `.apk` → Install → done! 🐕
-
-> **USB-C** — Connect your Heltec to your Android phone via a USB-C OTG cable. The app will request USB permission on first use. Baud rate 115,200 — same as desktop. **BLE** — The app scans for boards advertising the Nordic UART Service ("RadioDoge-X.X.X"). Once connected, all packet commands work over BLE — no cable needed. Both transports are production-ready as of v0.3.16.
+> **What's real today (v0.3.16):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
+> `m/44'/3'/0'/0/0`. It builds, signs (secp256k1, `SIGHASH_ALL`), and broadcasts genuine P2PKH transactions.
+> Private keys are encrypted at rest with ChaCha20-Poly1305 + argon2id. Incoming signed transactions are
+> verified in-process. Balances are fetched directly from Trezor Blockbook, or relayed over LoRa by a gateway.
+> Desktop (Windows) and Android over **USB-C** are the fully-supported transports; Android **Bluetooth LE** is
+> a working preview. *Much real. Very encrypted. Wow.*
 
 ---
 
-## ✨ What Makes RadioDoge Special?
+## 🚀 Get the App
 
-- **No internet required** — transactions travel over LoRa radio (up to 15 km range!)
-- **Mesh networking** — packets hop between nodes to reach the nearest gateway
-- **Beautiful GUI** — fun Dogecoin-themed app with confetti, TX/RX live log, and Easter egg 🎉
-- **Pure Rust crypto** — no browser, no cloud, generate real Dogecoin keys locally
-- **Open hardware** — works with standard Heltec ESP32 LoRa V3 boards (~$20)
-- **Android app** — installable debug APK built by CI on every push, runs on Android 7.0+
-- **Android USB serial** — connect a Heltec via USB-C OTG cable; full protocol support, production-ready
-- **Android BLE** — connect wirelessly to a board advertising Nordic UART Service; production-ready
-- **Instant builds** — every push to master compiles a fresh Windows MSI and Android APK
+> Every push builds a fresh **Windows MSI** and **Android APK** — grab them straight from the Actions artifacts.
+
+### 🖥️ Windows (MSI)
+
+| Option | How |
+|--------|-----|
+| **Instant (every push)** | [Windows CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml) → latest **🪟 Windows x64 MSI** run → **Artifacts** → download `RadioDoge-…-msi.zip` → unzip → double-click the `.msi` |
+| **Tagged release** | [Releases](https://github.com/jnowat/RadioDoge/releases) → download `RadioDoge_x.x.x_x64_en-US.msi` → install |
+
+Push artifacts are kept for **30 days**. On any GitHub Release, the MSI auto-attaches permanently.
+
+> **SmartScreen warning?** Dev builds are unsigned — click **More info → Run anyway**. See
+> [code signing](#optional-code-signing) to sign your own releases.
+
+### 📱 Android (APK — sideload)
+
+Every push also builds a debug APK, signed with the Gradle debug key so it installs on any Android 7.0+ device.
+
+1. [Android CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-android.yml) → latest **Android (APK)** run → **Artifacts** → download `radiodoge-android-debug-apk-…`
+2. Unzip and copy the `.apk` to your phone
+3. Enable **Settings → Apps → Install unknown apps** for your file manager
+4. Tap the `.apk` → **Install** → 🐕
+
+> **Connecting a board on Android:** use a **USB-C OTG** cable (fully supported) or **Bluetooth LE** (preview).
+> The app requests USB permission on first use; BLE scanning lists boards advertising as `RadioDoge-X.X.X`.
+
+---
+
+## ✨ Highlights
+
+- **No internet required** — transactions travel over LoRa radio (line-of-sight range in the kilometres)
+- **Mesh relay** — packets hop between nodes toward the nearest internet gateway
+- **Real, local crypto** — pure-Rust wallet generates genuine `D…` mainnet addresses; keys never leave your device unencrypted
+- **BIP39 + BIP44** — 12-word recovery phrase, HD derivation at `m/44'/3'/0'/0/0`, mnemonic import
+- **Encrypted at rest** — WIF keys sealed with ChaCha20-Poly1305, keyed by argon2id (64 MiB)
+- **Signed on-device** — secp256k1 `SIGHASH_ALL` P2PKH signing; incoming transactions verified in-process
+- **Delightful GUI** — 9 tabs, live signal meters, confetti on every send, a hidden Easter egg 🎉
+- **Cross-platform** — Windows desktop + Android APK, built by CI on every push
+- **Headless CLI** — `radiodoge-cli` does everything without a GUI, including a gateway daemon
+- **Open hardware** — runs on stock Heltec ESP32 LoRa V3 boards (~$20)
 
 ---
 
 ## 🔧 How RadioDoge Works
 
 ```
-Your PC / Phone
-     │ USB Serial
-     ▼
-[Heltec ESP32 V3]  ← LoRa SX1262 Radio
-     │
-     │  LoRa 915 MHz radio waves ~~~~~~~~~~~~~~~~~~~~
-     │
-     ▼
-[Other Heltec Nodes]  →  [Gateway Node]
-                                │
-                                │ Internet
-                                ▼
-                        [Dogecoin Network]
+   Your PC / Phone
+        │  builds + signs a real P2PKH transaction locally
+        │  USB-C serial  (or Bluetooth LE)
+        ▼
+  [ Heltec ESP32 V3 ]  ← SX1262 LoRa radio, 915 MHz
+        │
+        │   ~~~~ LoRa radio waves ~~~~
+        ▼
+  [ Relay nodes ]  →  [ Gateway node ]
+                            │  runs `radiodoge-cli daemon` (or firmware WiFi gateway)
+                            │  Internet
+                            ▼
+                   [ Dogecoin network ]
 ```
 
-1. Your desktop app (RadioDoge GUI) **builds and signs a real Dogecoin P2PKH transaction** locally (UTXO fetch → coin selection → secp256k1 SIGHASH_ALL signing)
-2. The raw signed transaction is sent to the Heltec device via USB serial and broadcast over LoRa
-3. Nodes relay the packet through the mesh (up to 15 km range)
-4. A gateway node running `radiodoge-cli daemon` receives the packet and **POSTs the raw transaction to Trezor Blockbook** for broadcast to the Dogecoin network
-5. The gateway sends a `TX_ACK:<txid>` radio message back to the sender
-6. 🎉 Your transaction is confirmed on-chain!
+1. The app **builds and signs a real Dogecoin P2PKH transaction** locally — UTXO fetch → coin selection
+   (largest-first) → secp256k1 `SIGHASH_ALL` signing.
+2. The raw signed transaction is sent to the Heltec over USB-C serial (or BLE) and broadcast over LoRa.
+3. Relay nodes forward the packet through the mesh; large payloads are split into multipart frames automatically.
+4. A **gateway** — either a host running `radiodoge-cli daemon`, or a Heltec with the firmware WiFi gateway
+   configured — receives the packet and **POSTs the raw transaction to Trezor Blockbook** for broadcast.
+5. The gateway radios a `TX_ACK:<txid>` message back to the sender.
+6. 🎉 Your transaction lands on-chain.
 
-> **Gateway note**: Full end-to-end flow (LoRa → firmware → daemon → network) requires the gateway Heltec to forward incoming binary packets to the serial host. The daemon broadcast logic is complete; gateway firmware integration is in progress.
+> **End-to-end status:** the app-side signing/broadcast path and the `radiodoge-cli daemon` gateway are
+> complete. Forwarding an *incoming LoRa* packet from a gateway Heltec's radio to its serial host is still being
+> finalized in firmware — see the [Roadmap](ROADMAP.md#-known-limitations--in-progress).
 
 ---
 
-## ⚡ Getting Started in 5 Minutes
+## ⚡ Quick Start
 
 ### Prerequisites
-- Windows 10/11 (x64) **or** Android 7.0+ device
-- [Heltec ESP32 LoRa V3](https://heltec.org/project/wifi-lora-32-v3/) board
-- USB cable (USB-C)
-- [Node.js 20+](https://nodejs.org) and [Rust](https://rustup.rs) (for development only)
 
-### Option A: Download the MSI (Windows) or APK (Android)
+- Windows 10/11 (x64) **or** Android 7.0+ (API 24)
+- A [Heltec ESP32 LoRa V3](https://heltec.org/project/wifi-lora-32-v3/) board + USB-C cable
+- For building from source: [Node.js 20+](https://nodejs.org) and [Rust](https://rustup.rs)
 
-- **Windows**: Go to [Windows CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml) → latest run → Artifacts → download MSI zip → install
-- **Android**: Go to [Android CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-android.yml) → latest run → Artifacts → download APK zip → sideload
+### Option A — Install a prebuilt binary
 
-### Option B: Build from Source
+Grab the [Windows MSI or Android APK](#-get-the-app) from CI artifacts (above).
+
+### Option B — Build the GUI from source
 
 ```bash
-# Clone
 git clone https://github.com/jnowat/RadioDoge.git
 cd RadioDoge/radiodoge-gui
 
-# Install frontend dependencies
-npm ci
-
-# Run in development mode (hot-reloading!)
-cargo tauri dev
+npm ci                # install frontend dependencies
+cargo tauri dev       # run with hot-reloading
 ```
 
-### Option C: Use the Headless CLI (no GUI needed)
+### Option C — Use the headless CLI
 
-The new `radiodoge-cli` replaces RadioDogeSharp (C#) and serdog (C) with a pure Rust binary:
+`radiodoge-cli` is a pure-Rust binary that replaces the old `RadioDogeSharp` (C#) and `serdog` (C) tools —
+no native dependencies.
 
 ```bash
-# Build the CLI
 cargo build -p radiodoge-cli --release
-
-# List available serial ports
-./target/release/radiodoge-cli ports
-
-# Generate a Dogecoin wallet
-./target/release/radiodoge-cli wallet generate
-
-# Send DOGE over LoRa (no GUI required!)
-./target/release/radiodoge-cli send -p COM3 -t DH5yaieq... -a 4.20 -m "much transfer"
-
-# Listen for incoming LoRa packets
-./target/release/radiodoge-cli receive -p COM3 --timeout 60
-
-# Run as a headless gateway daemon (replaces serdog)
-./target/release/radiodoge-cli daemon -p /dev/ttyUSB0
+BIN=./target/release/radiodoge-cli
 ```
 
-### Flash the Heltec Firmware
+| Command | What it does |
+|---------|--------------|
+| `radiodoge-cli ports` | List available serial ports |
+| `radiodoge-cli wallet generate` | Generate a keypair (address, pubkey, WIF) — not stored |
+| `radiodoge-cli wallet mnemonic` | Generate a wallet **with** a 12-word BIP39 phrase |
+| `radiodoge-cli wallet import-mnemonic "<12 or 24 words>"` | Restore a wallet from a recovery phrase |
+| `radiodoge-cli wallet import-wif <WIF>` | Import a wallet from a WIF key (starts with `Q`) |
+| `radiodoge-cli wallet validate <ADDRESS>` | Check whether an address is a valid Dogecoin address |
+| `radiodoge-cli ping -p <PORT>` | Ping the Heltec and report round-trip time |
+| `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub |
+| `radiodoge-cli receive -p <PORT> [-T <SECS>]` | Listen for incoming packets (`-T 0` = forever; default 30 s) |
+| `radiodoge-cli connect <PORT>` | Interactive REPL (`port` is positional, no `-p`) |
+| `radiodoge-cli balance -a <ADDRESS>` | Query a confirmed balance via Blockbook (internet, no board) |
+| `radiodoge-cli broadcast -w <WIF> -t <ADDR> -a <DOGE>` | Sign **and** broadcast straight to the network over the internet |
+| `radiodoge-cli daemon -p <PORT>` | Run as a headless gateway (replaces `serdog`) |
 
-1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software)
-2. Add the Heltec ESP32 board package (URL in Arduino IDE preferences):
+Add `-v`/`--verbose` to any command for debug logging (or set `RUST_LOG=debug`). A fixed network fee of
+**1 DOGE** is added on top of the amount for `send --wif` and `broadcast`, so the total debit is `amount + 1`.
+
+```bash
+# Examples
+$BIN wallet mnemonic
+$BIN send -p COM3 -t DH5yaieq… -a 4.20 -m "much transfer" -w Qxxxxxxxx…   # real signed tx over LoRa
+$BIN broadcast -w Qxxxxxxxx… -t DH5yaieq… -a 4.20                          # sign + push over the internet
+$BIN daemon -p /dev/ttyUSB0                                                # gateway
+```
+
+> Full walkthroughs — including the `connect` REPL commands and the gateway flow — live in the
+> [**User Manual**](docs/USER_MANUAL.md#12-the-command-line-cli).
+
+---
+
+## 🔌 Flashing the Heltec Firmware
+
+1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software).
+2. **File → Preferences → Additional boards manager URLs**, add Heltec's package (it bundles the required
+   `LoRaWan_APP` framework):
    ```
    https://resource.heltec.cn/download/package_heltec_esp32_index.json
    ```
-3. Install libraries: `Adafruit GFX`, `Adafruit SSD1306`, `LoRaWan_APP`
-4. Open `heltec-firmware-v3/heltec-firmware.ino` in Arduino IDE
-5. Select board: **Heltec WiFi LoRa 32(V3)**
-6. Upload at 921600 baud
-7. The OLED display will show the node address on boot
+3. **Tools → Board → Boards Manager** → install **Heltec ESP32 Series Dev-Boards**.
+4. **Sketch → Include Library → Manage Libraries** → install `Adafruit GFX Library` and `Adafruit SSD1306`.
+5. Open `heltec-firmware-v3/heltec-firmware.ino`.
+6. **Tools → Board → Heltec WiFi LoRa 32(V3)**, pick the port, and **Upload** (921600 baud works reliably).
+   If the upload won't start, hold **BOOT**, tap **RESET**, release **BOOT**, then upload.
+7. On boot the OLED shows a splash, then cycles through node address, signal, and packet-count pages.
+
+> A board that has never been configured boots with address **0.0.0**. Set a real address from the app's
+> **Settings** tab, or POST `/api/lora/clear` on the firmware's web UI to reset it to `10.1.1`. Full firmware
+> docs: [`heltec-firmware-v3/README.md`](heltec-firmware-v3/README.md).
 
 ---
 
-## 🛠️ How to Test with Real Hardware
+## 📡 Transports
 
-> **Everything below applies once you have a flashed Heltec ESP32 LoRa V3 in hand.**
-> The app is fully functional — zero placeholders.
+| Transport | Platform | Status | Notes |
+|-----------|----------|--------|-------|
+| USB serial | Windows / Linux / macOS | ✅ Supported | Built-in CP2102 at 115,200 baud via the `serialport` crate |
+| USB-C OTG | Android | ✅ Supported | `tauri-plugin-serialplugin` → `usb-serial-for-android`; identical protocol to desktop |
+| Bluetooth LE | Android | 🧪 Preview | Nordic UART Service; scan/connect/notify work end-to-end. Firmware BLE is notify-oriented today — see [known limitations](ROADMAP.md#-known-limitations--in-progress) |
 
-### Step 1 — Flash the Heltec Firmware
+**Bluetooth LE UUIDs** (Nordic UART Service — matched between firmware and app):
 
-1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software) and open it
-2. Go to **File → Preferences** and paste into "Additional boards manager URLs":
-   ```
-   https://resource.heltec.cn/download/package_heltec_esp32_index.json
-   ```
-3. Go to **Tools → Board → Board Manager**, search **Heltec ESP32**, install
-4. Install libraries via **Sketch → Include Library → Manage Libraries**:
-   - `LoRaWan_APP` (Heltec)
-   - `Adafruit GFX Library`
-   - `Adafruit SSD1306`
-5. Open `heltec-firmware-v3/heltec-firmware.ino`
-6. Select board: **Heltec WiFi LoRa 32(V3)**, choose the correct COM port
-7. Click **Upload** (upload speed 921600 works reliably)
-8. On success, the OLED shows the node address (e.g., `10.0.1`) — the radio is live!
-
-### Step 2 — Connect in the GUI
-
-1. Plug the flashed Heltec into your PC via USB-C
-2. Launch RadioDoge (MSI installer or `cargo tauri dev` in `radiodoge-gui/`)
-3. On the **Connect** tab, click **⟳ Refresh** — the Heltec COM port appears (usually `COM3`–`COM8` on Windows)
-4. Select the port, click **🔌 Connect to Heltec**
-5. The app pings the device: if it responds within 500 ms you'll see **✅ Connected!** with RSSI and the node address
-6. The NavBar turns green and the Dashboard tab becomes active automatically
-
-### Step 3 — Generate a Dogecoin Wallet
-
-1. Click the **Wallet** tab
-2. Click **Generate New Wallet** — pure Rust crypto creates a real mainnet keypair in < 1 ms
-3. Your address starts with `D` (e.g., `DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L`)
-4. **Save your private key** — click **🔐 Save Encrypted** to save with a passphrase (ChaCha20-Poly1305 + argon2id), or copy the WIF somewhere safe offline
-
-### Step 4 — Send a Dogecoin Transaction Over LoRa
-
-1. Click the **Send** tab
-2. Paste the recipient's Dogecoin address (must start with `D`)
-3. Enter the amount (e.g., `1.00`) and an optional memo (e.g., `such payment, wow`)
-4. Click **🚀 Sign & Broadcast via Radio**
-5. The app encodes the payload, splits it into LoRa packets if > 192 bytes, and sends each over the serial port
-6. The Heltec device broadcasts the packet over the LoRa mesh
-7. 🎉 Confetti explodes and a success toast appears on screen!
-
-### Step 5 — Monitor Incoming Packets
-
-- **Dashboard tab**: live RSSI/SNR meters + packet log update every 2 s
-- **Receive tab**: decoded incoming LoRa packets with source address, command, and RSSI
-- **Signal Bars** in the NavBar and Dashboard reflect real RF conditions
-
-### Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| "No ports found" | Check USB cable, install CP210x or CH340 drivers, click ⟳ Refresh |
-| "Not connected" after clicking Connect | Wrong port selected, or firmware not flashed — check OLED on device |
-| RSSI very low (< −100 dBm) | Move nodes closer, or adjust spreading factor in Settings tab |
-| Transaction not received by gateway | No gateway node in range — add a second Heltec as a relay/gateway |
-| SmartScreen warning on MSI | Click "More info → Run anyway" — unsigned build is normal for dev |
-| Android: no USB devices after Scan | Check OTG cable, ensure USB Host mode is on; grant USB permission when prompted |
-| Android: "USB serial open failed" | Kill any other app that might hold the USB device, or unplug/replug the cable |
-
----
-
-## 🔌 USB Serial — Windows and Android
-
-The Heltec ESP32 LoRa V3 has a built-in **Silicon Labs CP2102** USB-to-serial chip. This chip exposes a virtual COM port at 115,200 baud and carries the RadioDoge binary packet protocol.
-
-### Windows
-
-1. Install the **CP210x VCP driver** from Silicon Labs if the port isn't auto-detected:
-   `https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers`
-2. Plug the Heltec in via USB-C. Device Manager should show `Silicon Labs CP210x USB to UART Bridge (COM3)` (port number varies).
-3. Open RadioDoge → Connect tab → click **⟳ Refresh**. A 🟢 green badge means the Heltec was identified by VID/PID.
-4. Click **🔌 Connect to Heltec**. The app pings the board, queries firmware version, and syncs the node address.
-
-### Android (USB-C OTG) — ⚠️ Experimental, needs testing
-
-> The USB-C serial connection on Android is functional but **experimental**. Please report any issues on GitHub.
-
-**Requirements:**
-- Android 7.0+ (API 24)
-- A USB-C OTG cable or adapter (both ends USB-C, or USB-A OTG + USB-C adapter for the board side)
-- A Heltec ESP32 LoRa V3 with RadioDoge firmware flashed
-
-**Steps:**
-1. Plug the Heltec into your Android phone via the OTG cable.
-2. Open the RadioDoge APK → Connect tab (shows **📱 Connect to Heltec Device**).
-3. Select the **🔌 USB-C** tab and tap **⟳ Scan** — the device should appear.
-4. Select the device and tap **🔌 Connect via USB-C**.
-5. Android will show a **USB Permission** dialog — tap **OK**.
-6. The status badge changes: *Searching for device…* → *Connecting…* → **Connected** (or *Connection failed* on error).
-7. Once connected, the node address and firmware version appear — the rest of the app (wallet, send, receive, mesh) works identically to desktop.
-
-**How it works under the hood:**
-- The JS layer uses `tauri-plugin-serialplugin` (backed by `usb-serial-for-android`) to open the CP2102 serial port.
-- All received bytes are forwarded to the Rust backend (`mobile_push_bytes`) which applies the same packet framing logic as the desktop read-loop.
-- Outgoing packets are built by the Rust protocol library and written back via the JS serial API — zero protocol duplication.
-
----
-
-## 📶 Bluetooth BLE — Android (v0.3.11)
-
-> Full Bluetooth BLE communication is **implemented** via `tauri-plugin-blec`. The pipeline is identical to USB: BLE notifications → `mobile_push_bytes` → Rust packet framer → "radio-packet" / "board-sync" events → UI.
-
-**How it works (v0.3.11):**
-- The Connect tab shows a **📶 Bluetooth** tab on Android.
-- Tap **⟳ Scan** — runs a 5-second BLE discovery pass and lists nearby devices.
-- Select the Heltec board and tap **Connect via Bluetooth** — the app opens a GATT connection, subscribes to the notify characteristic, and sends the GET_FIRMWARE_VERSION + GET_SETTINGS handshake.
-- Board responses arrive as BLE notifications and are processed by the same `mobile_push_bytes` Rust accumulator as USB — zero protocol duplication.
-- Ping, send Dogecoin, and change LoRa settings all work over BLE via `_bleWrite` → `blec.sendData()`.
-
-**GATT UUID configuration:**
-The firmware GATT service and characteristic UUIDs are placeholder constants at the top of `connection-bridge.ts`. Update them once the firmware BLE service is finalised:
-```typescript
-// connection-bridge.ts — replace with final firmware UUIDs
-const BLE_SERVICE_UUID    = '51ff12bb-3ed8-46e5-b4f9-d64e2fec0001';
-const BLE_WRITE_CHAR_UUID = '51ff12bb-3ed8-46e5-b4f9-d64e2fec0002';
-const BLE_NOTIFY_CHAR_UUID = '51ff12bb-3ed8-46e5-b4f9-d64e2fec021b';
+```
+Service : 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+Write   : 6E400002-B5A3-F393-E0A9-E50E24DCCA9E   (host → board)
+Notify  : 6E400003-B5A3-F393-E0A9-E50E24DCCA9E   (board → host)
 ```
 
-**To enable Bluetooth on the ESP32 firmware side:**
-```cpp
-// In heltec-firmware.ino — enable BLE serial bridge using NimBLE or arduino-esp32 BLE
-// Expose a custom GATT service with write + notify characteristics matching the UUIDs above.
-// Forward data between HardwareSerial (RadioDoge protocol) and the BLE characteristic.
-```
+On Android the JS layer owns the physical USB/BLE transport, but **every packet is built and parsed by the same
+Rust core as desktop** (`mobile_build_*` / `mobile_push_bytes`) — zero protocol duplication. Details in the
+[User Manual](docs/USER_MANUAL.md#android-usb-c--bluetooth).
 
 ---
 
-## 🗂️ Project Structure
+## 🧩 Serial & Packet Protocol
+
+The app talks to the Heltec at **115,200 baud** using a compact binary frame. Single packets carry an 8-byte
+header; payloads over 192 bytes are split into 12-byte-header multipart frames automatically.
+
+```
+Byte 0   Command   (see table)
+Byte 1   Flags     (0x00 = single, 0x01 = multipart)
+Byte 2   Source region
+Byte 3   Source community
+Byte 4   Source node
+Byte 5   Destination region
+Byte 6   Destination community
+Byte 7   Destination node
+Byte 8+  Payload   (up to 192 bytes per frame)
+```
+
+Node addresses use the `Region.Community.Node` format (e.g. `10.0.2`); `255.255.255` is the broadcast address.
+
+| Cmd | Name | Cmd | Name |
+|-----|------|-----|------|
+| `0x00` | GET_NODE_ADDR | `0x23` | SET_GATEWAY |
+| `0x01` | SET_NODE_ADDRS | `0x24` | WIFI_TOGGLE |
+| `0x02` | PING | `0x25` | ADDR_CONFLICT *(board→host)* |
+| `0x03` | MESSAGE | `0x26` | GET_BATTERY |
+| `0x04` | BROADCAST | `0x27` | GET_MAC |
+| `0x05` | MULTIPART | `0x28` | BLE_TOGGLE |
+| `0x10` | DOGE_TX | `0x29` | RECEIVED_ACK *(board→host)* |
+| `0x11` | REQUEST_BALANCE | `0x2A` | RECEIVED_PING *(board→host)* |
+| `0x20` | GET_FIRMWARE_VERSION | | |
+| `0x21` | SET_LORA_PARAMS | | |
+| `0x22` | GET_SETTINGS | | |
+
+> The full frame layout, multipart reassembly, per-command reply sizes, and the firmware's dual (legacy +
+> desktop) dispatch are documented in [**docs/PROTOCOL.md**](docs/PROTOCOL.md).
+
+---
+
+<a id="architecture"></a>
+
+## 🏛️ Architecture
+
+RadioDoge is a Cargo workspace of three Rust crates plus the Arduino firmware:
 
 ```
 radiodoge/
-├── Cargo.toml               🆕 Cargo workspace root (all Rust crates)
-├── .github/workflows/
-│   ├── build-windows.yml    Push-triggered MSI builds (every push to master!)
-│   └── build-android.yml    Push-triggered Android APK builds (debug, sideloadable)
+├── Cargo.toml                Workspace root — shared dependency versions
 ├── crates/
-│   ├── radiodoge-core/      🆕 Pure Rust shared library (no Tauri, no GUI)
-│   │   └── src/             types, wallet, radio protocol, serial port manager
-│   └── radiodoge-cli/       🆕 Headless CLI (Rust port of RadioDogeSharp + serdog)
-│       └── src/main.rs      ports, wallet, send, receive, ping, connect, daemon
-├── radiodoge-gui/           Rust + Tauri 2 desktop GUI (PRIMARY)
-│   ├── src/                 Svelte 5 + TypeScript frontend
-│   └── src-tauri/           Rust Tauri backend (uses radiodoge-core)
-├── heltec-firmware-v3/      Arduino firmware for Heltec ESP32 (primary)
-├── heltec-firmware/         Arduino firmware v2 (prototype)
-├── RadioDogeSharp/          C# .NET console app (legacy — replaced by radiodoge-cli)
-├── serdog/                  C serial daemon (legacy — replaced by radiodoge-cli daemon)
-├── libdogecoin/             Dogecoin cryptography library (legacy — replaced by pure Rust wallet)
-└── docs/                    Documentation
+│   ├── radiodoge-core/       Pure-Rust core: types, wallet, radio protocol, serial manager (no Tauri)
+│   │   └── src/              types.rs · radio.rs · serial.rs · wallet.rs
+│   └── radiodoge-cli/        Headless CLI + gateway daemon (replaces RadioDogeSharp + serdog)
+│       └── src/main.rs       ports · wallet · send · receive · ping · connect · balance · broadcast · daemon
+├── radiodoge-gui/            Tauri 2 desktop + Android app (the primary client)
+│   ├── src/                  Svelte 5 + TypeScript frontend
+│   └── src-tauri/            Rust backend — depends on radiodoge-core
+├── heltec-firmware-v3/       Production Arduino firmware (WiFi, BLE, web UI, mesh)
+├── heltec-firmware/          v2 prototype firmware (serial + LoRa only)
+├── .github/workflows/        CI: Windows MSI · Android APK · cargo-audit
+├── images/                   Artwork
+└── docs/                     User manual, protocol reference, design PDF
 ```
 
-### The GUI (`radiodoge-gui/`)
+The GUI is the **primary client**: a Svelte 5 (runes) frontend on a Tauri 2 Rust backend that reuses
+`radiodoge-core` for all crypto and protocol logic — so the app, the CLI, and the mobile bridge share one
+implementation.
 
-The Rust + Tauri 2 GUI is the **primary official client**. It features:
-
-- **Svelte 5** frontend with reactive runes
-- **TailwindCSS v4** with a custom Doge yellow/orange dark theme
-- **Pure Rust Dogecoin wallet** — generate real `D...` addresses with `secp256k1`
-- **Cross-platform serial** via the `serialport` crate (Windows, Linux, macOS)
-- **Confetti explosion** on every successful transaction 🎉
-- **System tray** icon with connection status
-- **Animated signal bars**, live RSSI/SNR meters, real-time packet log
-
-### Tech Stack
+### Tech stack
 
 | Layer | Technology |
 |-------|-----------|
-| UI Framework | Svelte 5 + TypeScript |
-| CSS | TailwindCSS v4 (CSS-first config) |
-| Desktop Shell | Tauri 2 |
-| Rust Runtime | Tokio (async) |
-| Serial Comms | `serialport` crate (desktop) + `tauri-plugin-serialplugin` (Android) |
-| Dogecoin Crypto | `secp256k1` + `sha2` + `ripemd` + `bs58` |
-| Mobile | Tauri Mobile (Android APK via `tauri android build`) |
-| Android USB | `tauri-plugin-serialplugin` → `usb-serial-for-android` (JitPack) |
-| Platform detection | `tauri-plugin-os` |
-| CI/CD | GitHub Actions → Windows MSI + Android APK on every push |
+| UI | Svelte 5 + TypeScript |
+| Styling | TailwindCSS v4 (CSS-first) with a Doge yellow/orange theme, light + dark |
+| Shell | Tauri 2 (desktop + Android) |
+| Async runtime | Tokio |
+| Serial | `serialport` (desktop) · `tauri-plugin-serialplugin` (Android USB) · `tauri-plugin-blec` (Android BLE) |
+| Crypto | `secp256k1` · `sha2` · `ripemd` · `bs58` · `bip39` · `argon2` · `chacha20poly1305` |
+| Network | `reqwest` (rustls) → Trezor Blockbook |
+| CI/CD | GitHub Actions → Windows MSI + Android APK on every push, weekly cargo-audit |
 
 ---
 
-## 🔌 Serial Protocol
+## 🏗️ CI/CD
 
-The GUI communicates with the Heltec device at **115200 baud** using RadioDoge's binary packet format:
+Three GitHub Actions workflows keep every push shippable and auditable:
 
-```
-Byte 0: Command (0x00=GET_ADDR, 0x02=PING, 0x03=MESSAGE, 0x10=DOGE_TX, ...)
-Byte 1: Flags (0x00=single, 0x01=multipart)
-Byte 2: Source region
-Byte 3: Source community
-Byte 4: Source node
-Byte 5: Destination region
-Byte 6: Destination community
-Byte 7: Destination node
-Byte 8+: Payload (up to 192 bytes)
-```
+| Workflow | Trigger | Output |
+|----------|---------|--------|
+| **🐕 Build Windows MSI** (`build-windows.yml`) | push to `master`/`main`/`0.0.1-Beta-1`/`claude/**`, tags `v*`, releases, manual | MSI artifact (30-day retention); auto-attached to releases |
+| **Build Android APK** (`build-android.yml`) | same triggers | Debug APK artifact (30 days) + build log (14 days) |
+| **Cargo Audit** (`cargo-audit.yml`) | push touching manifests, weekly (Mon 06:00 UTC), manual | Fails on any known CVE in a pinned dependency |
 
-Node addresses use the `Region.Community.Node` format (e.g., `10.0.2`).
-
----
-
-## 🏗️ CI/CD — MSI + APK Auto-Builds on Every Push
-
-Two GitHub Actions workflows trigger automatically on every push:
-
-### Windows MSI (`.github/workflows/build-windows.yml`)
-
-| Event | What Happens |
-|---|---|
-| **Push to any branch** | Builds MSI → uploads as Actions artifact (download immediately!) |
-| **GitHub Release created** | Builds MSI → attaches to the release permanently |
-| **Manual dispatch** | Builds MSI → uploads as artifact |
-
-### Android APK (`.github/workflows/build-android.yml`)
-
-| Event | What Happens |
-|---|---|
-| **Push to any branch** | Builds debug APK → uploads as Actions artifact |
-| **GitHub Release created** | Builds debug APK → uploads as artifact |
-| **Manual dispatch** | Builds debug APK → uploads as artifact |
-
-### Optional: Code Signing (for production)
+### Optional: code signing
 
 ```bash
-# Generate a signing keypair
 cargo tauri signer generate -w ~/.tauri/radiodoge.key
-
-# Add these as GitHub repository secrets (Settings → Secrets → Actions):
-#   TAURI_SIGNING_PRIVATE_KEY          (base64 contents of .key file)
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD (your passphrase)
+# Add as repo secrets (Settings → Secrets → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY           (base64 of the .key file)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (your passphrase)
 ```
 
-Unsigned builds work fine for development and testing — Windows may show a SmartScreen warning on first run, which you can bypass with "More info → Run anyway".
+Unsigned builds are fine for development; Windows may show a SmartScreen prompt on first run.
 
 ---
 
-## 🗺️ Development Roadmap
+## 🔐 Security Notes
 
-> **Much ambition. Very phases. Such plan. Wow. 🐕**
-
----
-
-### ✅ v0.2.x — Windows Foundation (Complete)
-
-The bedrock. Everything that makes a production-ready installable app:
-
-- ✅ Tauri 2 + Svelte 5 GUI with full Dogecoin yellow/orange dark theme
-- ✅ Pure Rust Dogecoin wallet generation (`secp256k1` + `sha2` + `ripemd` + `bs58`) — real mainnet `D...` addresses, no FFI
-- ✅ Real serial communication with Heltec ESP32 at 115,200 baud (`serialport` crate)
-- ✅ RadioDoge binary packet protocol: `PING`, `GET_ADDR`, `SET_ADDR`, `DOGE_TX`, `MULTIPART`
-- ✅ Async Tokio I/O with `spawn_blocking` (blocking reads never stall the Tokio thread pool)
-- ✅ Multipart packets for payloads > 192 bytes (was silently truncated — fixed in v0.2.4)
-- ✅ Live RSSI/SNR stats polling + 5-bar signal widget updated every 2 s
-- ✅ Live packet monitor (Receive tab) with decoded payload display
-- ✅ Windows x64 MSI produced by GitHub Actions on every push to `master`
-- ✅ Cargo workspace: three crates (`radiodoge-core`, `radiodoge-cli`, GUI backend)
-- ✅ `radiodoge-cli` — headless Rust CLI (ports, wallet, send, receive, ping, daemon)
+- **Wallet keys** are encrypted at rest with ChaCha20-Poly1305, keyed by argon2id (64 MiB, 2 iterations) from
+  your passphrase. Legacy plaintext wallets are auto-detected and the app nudges you to re-encrypt.
+- **Your recovery phrase is shown once** on generate and never stored — write it down offline.
+- **The firmware web UI has no authentication.** Anyone on the board's WiFi AP can reach every `/api/*` route,
+  and a couple of status endpoints echo stored credentials in plaintext. Treat a firmware gateway as a device
+  on a trusted network only. This is tracked in the [roadmap](ROADMAP.md#-known-limitations--in-progress).
+- RadioDoge is beta software for the Dogecoin community. Don't send more than you're willing to experiment with.
 
 ---
 
-### ✅ v0.3.x — Heltec Polish + Real-World UX + Android (Complete)
+## 🗺️ Roadmap
 
-Rock-solid when you plug in a real Heltec board, now with Android support:
+The full, phase-by-phase roadmap — what's shipped, what's next (SPV, QR scanning, fee estimation, Meshtastic
+interop, iOS), and an honest **Known Limitations** section — lives in [**ROADMAP.md**](ROADMAP.md).
 
-- ✅ Epic Doge-boombox hero image throughout (NavBar, Connect, Dashboard, MSI icon)
-- ✅ Smart USB port detection — CP210x, CH340, CH9102, FTDI, Espressif native flagged `🟢 Heltec`
-- ✅ Ports sorted: likely-Heltec first → other USB → native COM; auto-selected on refresh
-- ✅ **Ping Device** button with millisecond round-trip readout
-- ✅ Actionable error messages: access-denied, driver-missing, cable-failure with driver URLs
-- ✅ Non-USB port selection warning
-- ✅ **Firmware version badge** — queries `CMD_GET_FIRMWARE_VERSION` on connect, shows `FW v1.x.x`
-- ✅ **Auto-reconnect** — detects USB re-plug → retries with 5s→10s→20s→60s exponential backoff
-- ✅ **Save to Device round-trip verification** — sends settings → queries device → shows `Verified ✓`
-- ✅ **Desktop OS toast** for incoming DOGE TX packets (tauri-plugin-notification)
-- ✅ **Copy-to-clipboard** on every address, key, packet field, and node address
-- ✅ **Show Address QR button** — dedicated toggle separate from private key reveal
-- ✅ **TX/RX packet labels** — green ↑ TX / blue ↓ RX direction icons with filter toggles
-- ✅ **Dynamic signal descriptions** — "Much Strong Radio!", "Very Weak — Such Distance"
-- ✅ **Tooltips everywhere** — all cards, sliders, buttons, and fields have helpful + funny titles
-- ✅ **Branding fix** — NavBar now consistently shows "RadioDoge" (was "DOGE RADIO")
-- ✅ **Accessibility** — ARIA labels, focus rings, role attributes, live regions
-- ✅ **Easter egg** 🎮 — "such wow" toast (use the ultimate [read "uber-nostalgic"] cheat code!)
-- ✅ **Board sync** — app queries `CMD_GET_SETTINGS` (0x22) on connect; board is source of truth for node address and gateway mode
-- ✅ **Gateway mode** — enable/disable gateway from the app; gateway daemon status badge in NavBar
-- ✅ **WiFi toggle** — enable/disable the board's WiFi radio from Settings
-- ✅ **Mesh neighbor map** — tracks recently heard nodes; address conflict detection (CMD 0x25)
-- ✅ **Address book** — save and label Dogecoin addresses, persisted to `address_book.json`
-- ✅ **Encrypted wallet** — ChaCha20-Poly1305 + argon2id passphrase-protected wallet saved to `wallet.json`; passphrase prompt on unlock; legacy plaintext wallets auto-detected with re-encrypt nudge
-- ✅ **Battery voltage display** — polls board every 15 s when connected
-- ✅ **Board MAC address** — displayed in Settings tab
-- ✅ **Light/dark theme toggle** — full theme switcher in Settings
-- ✅ **Android app** — Tauri Mobile port; debug APK built by CI on every push, installable on Android 7.0+ (API 24); mobile-responsive UI with icon-only NavBar on phones
-- ✅ **Android USB serial** (v0.3.10) — USB-OTG CP2102/CH340 serial via `tauri-plugin-serialplugin`; status badge; full RadioDoge packet protocol identical to desktop
-- ✅ **Android Bluetooth BLE** (v0.3.11) — full GATT scan → connect → notify pipeline via `tauri-plugin-blec`; incoming notifications feed the identical `mobile_push_bytes` accumulator as USB; Nordic UART Service UUIDs aligned with `heltec-firmware-v3` (v0.3.13)
-- ✅ **Full P2PKH transaction signing** (v0.3.16) — UTXO fetch + secp256k1 SIGHASH_ALL + gateway broadcast via Trezor Blockbook; TX_ACK feedback over LoRa
-- ✅ **Wallet encryption at rest** (v0.3.16) — argon2id (64 MiB) + ChaCha20-Poly1305 passphrase encryption; passphrase entry modal on save and unlock modal on startup
-- ✅ **Incoming TX verification** (v0.3.16) — secp256k1 ECDSA signature verified in-process; ✅ verified or ⚠️ unverified label in all packet views
-- ✅ **Balance query** (v0.3.16) — direct Blockbook query from the GUI; `CMD_REQUEST_BALANCE` daemon handler for LoRa gateway path; Balance card in WalletTab
-- ✅ **BIP32/BIP44 HD wallet** (v0.3.16) — 12-word BIP39 mnemonic generation; derive key at `m/44'/3'/0'/0/0` (Dogecoin coin type 3) via HMAC-SHA512 BIP32; recovery phrase backup modal on generate; mnemonic import panel in WalletTab
+**Shipped:** Tauri + Svelte GUI · pure-Rust wallet · real P2PKH signing & broadcast · wallet encryption ·
+BIP39/BIP44 HD wallet · balance queries · Android APK · Android USB-C · Android BLE (preview) · headless CLI +
+gateway daemon · broadcast dedup + host ACK/Ping notifications.
 
----
-
-### 🚀 v0.4.x — Roadmap
-
-- 🔜 **SPV verification** — lightweight header chain validation; app can verify inclusion without a full node
-- 🔜 **Multi-hop relay status** — show hop count and intermediate node addresses in the packet log
-- 🔜 **QR code scanning** — camera/image input for recipient field (no hand-typing long addresses)
-- 🔜 **Fee estimation** — gateway reports current mempool fee rate; app sets appropriate sat/byte fee
-
----
-
-### 📡 v0.5.x — Meshtastic Mesh Interoperability
-
-Bridge RadioDoge with the existing Meshtastic community:
-
-- 🔜 **Meshtastic packet encoding** — wrap RadioDoge payloads in Meshtastic protobuf so standard Meshtastic nodes can relay them
-- 🔜 **Detect Meshtastic nodes** — scan for nodes on the same LoRa channel; display in a network map view
-- 🔜 **Bridge mode** — `radiodoge-cli daemon` bridges between RadioDoge and Meshtastic protocols transparently
-- 🔜 **Multi-channel scanning** — hop between frequencies/SFs to reach nodes on different Meshtastic presets
-- 🔜 **GPS location embedding** — include sender coordinates in packets for disaster-response positioning
-- 🔜 **Store-and-forward** — nodes cache undelivered packets and retry when destination node is seen
-
----
-
-### 📱 Future Horizons
-
-- 🔜 **iOS** — Bluetooth LE to Heltec via BLE-serial bridge firmware
-- 🔜 **Linux AppImage + macOS .dmg** in CI — Tauri supports these targets already
-- 🔜 **WebAssembly packet inspector** — browser tool to decode RadioDoge packets from hex
-- 🔜 **Gateway dashboard** — monitor multiple gateway nodes, relay stats, mesh health at a glance
-- 🔜 **Lightning over LoRa** — forward BOLT-11 invoices + HTLC state through the mesh for instant DOGE
-
----
-
-## 🏛️ Legacy
-
-The `RadioDogeSharp` C# application and `serdog` C helper have been replaced by `crates/radiodoge-cli` — a pure Rust CLI that implements the full RadioDoge protocol without any native library dependencies. The vendored C source (`libdogecoin`) was also removed; all cryptography is handled by the `secp256k1`, `sha2`, `ripemd`, and `bs58` Rust crates.
+**Next up:** SPV verification · multi-hop relay status · QR scanning · fee estimation · Meshtastic bridging.
 
 ---
 
 ## 🤝 Contributing
 
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/much-wow`)
-3. Commit with clear messages (`git commit -m 'Add such feature'`)
-4. Push and open a Pull Request
+Contributions are welcome! See [**CONTRIBUTING.md**](CONTRIBUTING.md) for the workflow, build commands, and
+coding conventions. In short: fork → branch → commit with clear messages → open a PR. Run
+`cargo test --workspace` before pushing.
+
+---
+
+## 🏛️ Legacy
+
+The `RadioDogeSharp` (C#) app and `serdog` (C) daemon have been fully replaced by `crates/radiodoge-cli`, and
+the vendored `libdogecoin` C library was removed — all cryptography is now pure Rust (`secp256k1`, `sha2`,
+`ripemd`, `bs58`). Those directories no longer exist in the tree; see the [CHANGELOG](CHANGELOG.md) for the
+migration history.
 
 ---
 
 ## 📄 License
 
-MIT © RadioDoge Contributors
+[MIT](LICENSE) © 2023 The Dogecoin Foundation and RadioDoge contributors.
 
 ---
 
-*Much open source. Very community. Such LoRa. Wow. 🐕🌙*
+<div align="center">
+
+*Much open source. Very community. Such LoRa. Wow.* 🐕🌙
+
+</div>
