@@ -2969,22 +2969,50 @@ void HandleDesktopCommand(uint8_t cmdByte) {
   }
 
   switch (cmdByte) {
-    case 0x10: { // CMD_DOGE_TX — forward payload over LoRa
+    case 0x10: { // CMD_DOGE_TX — relay a signed transaction over LoRa.
+      // v0.4.0 (WP1): transmit the FULL desktop-format packet — command byte plus
+      // 8-byte header — so a receiving gateway can hand it to its serial host
+      // (radiodoge-cli daemon) verbatim and broadcast it to the Dogecoin network.
+      // Earlier firmware sent only the raw payload with no header, so a gateway
+      // could not recognise or forward it. hdrRest holds [src_r,src_c,src_n,dst_r,dst_c,dst_n].
       if (extraLen > 0) {
-        Radio.Send(extraPayload, extraLen);
+        uint8_t ota[BUFFER_SIZE];
+        ota[0] = 0x10; ota[1] = 0x00;
+        for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
+        int payLen = extraLen;
+        if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
+        memcpy(ota + 8, extraPayload, payLen);
+        int otaLen = 8 + payLen;
+        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
         pktTxCount++;
         // v0.3.6 — trigger "TX OK!" OLED page after successful send
         showTxOk = true;
         txOkTimestamp = millis();
+        isLoRaIdle = true;
       }
       uint8_t reply[8] = {0x10, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
       bleSend(reply, 8);
       break;
     }
-    case 0x11: { // CMD_REQUEST_BALANCE — ACK only
+    case 0x11: { // CMD_REQUEST_BALANCE — relay over LoRa so a gateway can answer.
+      // v0.4.0 (WP1): forward the full desktop packet over the air; the receiving
+      // gateway hands it to its daemon, which looks up the balance and relays a
+      // "BAL:<koinus>" MESSAGE back to the requester over LoRa.
+      if (extraLen > 0) {
+        uint8_t ota[BUFFER_SIZE];
+        ota[0] = 0x11; ota[1] = 0x00;
+        for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
+        int payLen = extraLen;
+        if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
+        memcpy(ota + 8, extraPayload, payLen);
+        int otaLen = 8 + payLen;
+        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
+        isLoRaIdle = true;
+      }
       uint8_t reply[8] = {0x11, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
+      bleSend(reply, 8);
       break;
     }
     case 0x20: { // CMD_GET_FIRMWARE_VERSION — reply with version string as payload
@@ -3130,6 +3158,41 @@ void HandleDesktopCommand(uint8_t cmdByte) {
   }
 }
 
+// v0.4.0 (WP1) — Relay a desktop CMD_MESSAGE (0x03) from the host out over LoRa.
+// The daemon replies to a relayed transaction or balance request with a desktop
+// CMD_MESSAGE ("TX_ACK:<txid>" / "BAL:<koinus>") addressed to the originating
+// node; a gateway must put that message on the air so it reaches the requester.
+// The full 8-byte desktop packet is transmitted verbatim (CMD_MESSAGE == the
+// firmware's messageType MESSAGE == 0x03), so the destination node forwards it to
+// its own host app, which parses the TX_ACK:/BAL: prefix.
+void RelayDesktopMessageOverLoRa() {
+  // ReadSerialHeader already consumed [0x03, 0x00]; the delay(500) in HostSerialRead
+  // has let the rest arrive: [src_r, src_c, src_n, dst_r, dst_c, dst_n, ...text...].
+  uint8_t rest[BUFFER_SIZE];
+  int restLen = 0;
+  while (Serial.available() > 0 && restLen < BUFFER_SIZE) {
+    rest[restLen++] = (uint8_t)Serial.read();
+  }
+  if (restLen < 6) {
+    Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+    return;
+  }
+  uint8_t ota[BUFFER_SIZE];
+  ota[0] = 0x03;  // CMD_MESSAGE == messageType MESSAGE
+  ota[1] = 0x00;
+  for (int i = 0; i < 6; i++) ota[2 + i] = rest[i];  // src(3) + dst(3)
+  int textLen = restLen - 6;
+  if (8 + textLen > BUFFER_SIZE) textLen = BUFFER_SIZE - 8;
+  for (int i = 0; i < textLen; i++) ota[8 + i] = rest[6 + i];
+  int otaLen = 8 + textLen;
+  nodeAddress relayDest = { ota[5], ota[6], ota[7] };
+  DisplayTXMessage("Relay", relayDest);
+  Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
+  addLog("[GATEWAY] Relayed host MESSAGE over LoRa to " + String(ota[5]) + "." + String(ota[6]) + "." + String(ota[7]) + " (" + String(otaLen) + " bytes)");
+  Serial.write(hostACK, HOST_ACK_NACK_SIZE);
+  isLoRaIdle = true;
+}
+
 // Read serial data from the host and perform the specified command/control function.
 // This function expects the host to send a header that is 8 bytes in length and then a payload that can range from 0-255 bytes.
 // The header contains the command type and payload size information (see ReadSerialHeader for more info on the header)
@@ -3157,6 +3220,15 @@ void HostSerialRead() {
   //          were never routed here, so the board NACKed them.
   // Intercept desktop-only command IDs before the switch (no matching serialCommand enum).
   uint8_t cmdByte = (uint8_t)commandVal;
+
+  // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
+  // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
+  // PING_REQUEST(3) enum value, which carries a non-zero payload size.
+  if (gateway_mode && cmdByte == 0x03 && payloadSize == 0) {
+    RelayDesktopMessageOverLoRa();
+    return;
+  }
+
   if (cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
       || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
       || cmdByte == 0x27 || cmdByte == 0x28) {
@@ -3337,11 +3409,36 @@ void ParseHostFormedPacket(uint8_t payloadSize) {
 }
 
 // Parse a LoRa message received over the air from another module
+// v0.4.0 (WP1) — Hand a received LoRa packet to the serial host so the app or the
+// radiodoge-cli daemon can act on it. Desktop-format gateway packets (CMD_DOGE_TX
+// 0x10, CMD_REQUEST_BALANCE 0x11) carry the app command byte and the same 8-byte
+// header the host expects, so they are forwarded verbatim. Native MESSAGE packets
+// (messageType MESSAGE == CMD_MESSAGE == 0x03) are already in the host's format,
+// so relayed "TX_ACK:<txid>" / "BAL:<koinus>" replies reach the app too.
+//
+// Transaction/balance forwarding is limited to gateway mode (only a gateway host
+// runs a daemon); incoming messages are always forwarded so the app sees replies.
+void ForwardReceivedPacketToHost() {
+  uint8_t cmd = rxPacket[0];
+  bool forward = false;
+  if (cmd == 0x10 || cmd == 0x11) {
+    forward = gateway_mode;
+  } else if (cmd == MESSAGE) {
+    forward = true;
+  }
+  if (forward) {
+    Serial.write(rxPacket, rxSize);
+    addLog("[HOST] Forwarded LoRa cmd 0x" + String(cmd, HEX) + " to serial host (" + String(rxSize) + " bytes)");
+  }
+}
+
 void ParseReceivedMessage() {
   addLog("[DEBUG] Received packet - Size: " + String(rxSize) + " bytes, First byte: " + String(rxPacket[0]));
-  
+
   if (CheckIfPacketForMe()) {
     addLog("[DEBUG] Packet is for me - processing...");
+    // v0.4.0 (WP1) — forward to the serial host (daemon/app) before local handling.
+    ForwardReceivedPacketToHost();
     //Serial.println("PACKET FOR ME");
     messageType mType = (messageType)rxPacket[0];
     addLog("[DEBUG] Packet type: " + String(mType) + ", Is multipart: " + String(mType == MULTIPART_PACKET));

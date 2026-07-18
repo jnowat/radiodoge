@@ -89,10 +89,12 @@ Rock-solid against real hardware, and now on your phone.
 - ✅ **Host ACK/Ping notifications** — the board now tells the host over serial when it hears an over-the-air ACK
   (`0x29`) or Ping (`0x2A`)
 - ✅ **Supply-chain CI** — weekly `cargo-audit` fails the build on any known CVE in a pinned dependency
-- 🔨 **Gateway radio→host forwarding** — let a gateway Heltec hand incoming LoRa packets to its serial host so the
-  full LoRa → firmware → `daemon` → network path is end-to-end
-- 🔨 **Firmware command reachability** — wire the implemented WiFi-toggle / battery / MAC handlers into the desktop
-  command dispatch (see limitations below)
+- ✅ **Gateway radio→host forwarding** — a gateway Heltec now hands incoming LoRa packets to its serial host, so the
+  full LoRa → firmware → `daemon` → network path is end-to-end. Transactions/balance requests are relayed over the
+  air in the desktop packet format, forwarded to the host in gateway mode, and the daemon's `TX_ACK`/`BAL` reply is
+  relayed back over LoRa to the originating node.
+- ✅ **Firmware command reachability** — the implemented WiFi-toggle (`0x24`), battery (`0x26`), and MAC (`0x27`)
+  handlers are now wired into the firmware's desktop-command dispatch, and `BLE_TOGGLE` (`0x28`) is implemented
 - 🔜 **SPV verification** — lightweight header-chain validation so the app can verify inclusion without a full node
 - 🔜 **Multi-hop relay status** — show hop count and intermediate node addresses in the packet log
 - 🔜 **QR code scanning** — camera/image input for the recipient field
@@ -131,9 +133,9 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   Bluetooth LE, and the app's BLE write path is wired end-to-end — but the firmware currently buffers inbound
   BLE writes without consuming them, so **commands sent over BLE are not yet executed on the board**. Use
   **USB-C** as the reliable transport today; BLE is a preview. *(Tracked under v0.4.x firmware parity.)*
-- **Three desktop commands aren't reachable in firmware yet.** `WIFI_TOGGLE` (`0x24`), `GET_BATTERY` (`0x26`),
-  and `GET_MAC` (`0x27`) have handlers in the firmware but aren't wired into its desktop-command dispatch, so
-  the board NACKs them. The app's WiFi toggle, battery gauge, and MAC readout depend on a firmware update.
+- ~~**Three desktop commands aren't reachable in firmware yet.**~~ *Fixed in v0.4.0 firmware:* `WIFI_TOGGLE`
+  (`0x24`), `GET_BATTERY` (`0x26`), and `GET_MAC` (`0x27`) are now routed to their handlers, and `BLE_TOGGLE`
+  (`0x28`) toggles BLE advertising and persists to NVS. Flash the updated Heltec V3 firmware to use these.
 - **`SET_LORA_PARAMS` (`0x21`) is a no-op ACK.** LoRa frequency/SF/bandwidth are compile-time constants in the
   firmware; the app can send new parameters but the radio isn't reconfigured at runtime yet.
 - **No hop limit on mesh rebroadcast.** Rebroadcast is bounded only by the 2-minute dedup table, not by a hop
