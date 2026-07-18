@@ -88,9 +88,24 @@ extern nodeAddress local;
     BLEDevice::startAdvertising();
     Serial.println("BLE started: " + String(bleName));
   }
+  // v0.4.0 — Enable/disable BLE advertising at runtime (CMD_BLE_TOGGLE 0x28).
+  // A connected central stays connected when advertising stops; new centrals
+  // simply can no longer discover the board.
+  void bleSetAdvertising(bool enable) {
+    if (pBleServer == NULL) {
+      if (enable) setupBLE();
+      return;
+    }
+    if (enable) {
+      BLEDevice::startAdvertising();
+    } else {
+      BLEDevice::stopAdvertising();
+    }
+  }
 #else
   void bleSend(uint8_t*, size_t) {}
   void setupBLE() {}
+  void bleSetAdvertising(bool) {}
 #endif
 
 // V3 Display Configuration
@@ -148,6 +163,9 @@ String gateway_password = "";
 bool gateway_mode = false;
 // v0.3.7 — WiFi on/off toggle (persisted to NVS, default on)
 bool wifi_enabled = true;
+
+// v0.4.0 — Board-is-source-of-truth BLE advertising flag (persisted to NVS)
+bool ble_enabled = true;
 // v0.3.7 — Duplicate node address detection
 bool addrConflict = false;
 unsigned long addrConflictNotifiedAt = 0;
@@ -241,7 +259,7 @@ struct PendingRequest {
   bool requiresConfirmation;
   String requestId;      // Unique identifier for tracking
 };
-#define FIRMWARE_VERSION 8  // v0.3.8
+#define FIRMWARE_VERSION 9  // v0.4.0
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -417,8 +435,14 @@ void setup() {
   // Initialize control messages with loaded/default address
   InitControlMessages();
 
-  // v0.3.6 — Start BLE Nordic UART service
-  setupBLE();
+  // v0.4.0 — Load ble_enabled from NVS; only start BLE if enabled
+  loadBleEnabled();
+  if (ble_enabled) {
+    // v0.3.6 — Start BLE Nordic UART service
+    setupBLE();
+  } else {
+    Serial.println("BLE disabled (stored in NVS)");
+  }
   
   // Setup WiFi in dual mode (AP + Station)
   setupDualWiFi();
@@ -889,6 +913,26 @@ bool loadWifiEnabled() {
   nvs_close(h);
   if (err != ESP_OK) return false; // key not set yet; keep default
   wifi_enabled = (val != 0);
+  return true;
+}
+
+// v0.4.0 — BLE advertising NVS persistence (CMD_BLE_TOGGLE 0x28)
+void saveBleEnabledQuiet(bool enabled) {
+  nvs_handle_t h;
+  if (nvs_open("rd_settings", NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_u8(h, "ble_on", enabled ? 1 : 0);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+bool loadBleEnabled() {
+  nvs_handle_t h;
+  uint8_t val = 1; // default: BLE on
+  if (nvs_open("rd_settings", NVS_READONLY, &h) != ESP_OK) return false;
+  esp_err_t err = nvs_get_u8(h, "ble_on", &val);
+  nvs_close(h);
+  if (err != ESP_OK) return false; // key not set yet; keep default
+  ble_enabled = (val != 0);
   return true;
 }
 
@@ -3046,6 +3090,25 @@ void HandleDesktopCommand(uint8_t cmdByte) {
       break;
     }
 
+    // v0.4.0 — CMD_BLE_TOGGLE (0x28): enable/disable BLE advertising. Payload byte 0: 1=on, 0=off.
+    // Persists to NVS so the choice survives reboot; reply payload byte reports current state.
+    case 0x28: {
+      if (extraLen > 0) {
+        ble_enabled = (extraPayload[0] != 0);
+        saveBleEnabledQuiet(ble_enabled);
+        bleSetAdvertising(ble_enabled);
+        addLog(String("[BLE] Advertising ") + (ble_enabled ? "enabled" : "disabled") + " by host command");
+      }
+      uint8_t reply[9];
+      reply[0] = 0x28; reply[1] = 0x00;
+      reply[2] = local.region; reply[3] = local.community; reply[4] = local.node;
+      reply[5] = 0xFF; reply[6] = 0xFF; reply[7] = 0xFF;
+      reply[8] = ble_enabled ? 1 : 0;
+      Serial.write(reply, 9);
+      bleSend(reply, 9);
+      break;
+    }
+
     // v0.3.8 — CMD_GET_MAC (0x27): Report the WiFi station MAC address (6 bytes).
     case 0x27: {
       uint8_t mac[6] = {0};
@@ -3089,10 +3152,14 @@ void HostSerialRead() {
 
   // OPTIMIZED FOR DESKTOP v0.3.3 – SAFE
   // v0.3.6 — extended with 0x22 (GET_SETTINGS) and 0x23 (SET_GATEWAY)
+  // v0.4.0 — extended with 0x24 (WIFI_TOGGLE), 0x26 (GET_BATTERY), 0x27 (GET_MAC),
+  //          and 0x28 (BLE_TOGGLE). Their handlers existed since v0.3.7/0.3.8 but
+  //          were never routed here, so the board NACKed them.
   // Intercept desktop-only command IDs before the switch (no matching serialCommand enum).
   uint8_t cmdByte = (uint8_t)commandVal;
   if (cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
-      || cmdByte == 0x22 || cmdByte == 0x23) {
+      || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
+      || cmdByte == 0x27 || cmdByte == 0x28) {
     HandleDesktopCommand(cmdByte);
     return;
   }
