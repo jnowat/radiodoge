@@ -376,13 +376,19 @@ async fn cmd_receive(port: &str, timeout_secs: u64) -> Result<()> {
     let manager = Arc::new(SerialManager::new());
 
     let on_packet = Arc::new(|pkt: IncomingPacket| {
+        let hop_note = if pkt.hops > 0 {
+            format!(" | hops={}", pkt.hops)
+        } else {
+            String::new()
+        };
         println!(
-            "[{}] 📻 {} → {} | cmd=0x{:02X} | rssi={} | {}",
+            "[{}] 📻 {} → {} | cmd=0x{:02X} | rssi={}{} | {}",
             pkt.timestamp,
             pkt.source.to_display_string(),
             pkt.destination.to_display_string(),
             pkt.command,
             pkt.rssi,
+            hop_note,
             pkt.decoded.unwrap_or_else(|| format!("raw={}", pkt.payload_hex)),
         );
     });
@@ -432,12 +438,18 @@ async fn cmd_connect(port: &str) -> Result<()> {
 
     // Print packets as they arrive
     let on_packet = Arc::new(|pkt: IncomingPacket| {
+        let hop_note = if pkt.hops > 0 {
+            format!("  hops={}", pkt.hops)
+        } else {
+            String::new()
+        };
         println!(
-            "\n📻 PACKET  {} → {}  cmd=0x{:02X}  rssi={}",
+            "\n📻 PACKET  {} → {}  cmd=0x{:02X}  rssi={}{}",
             pkt.source.to_display_string(),
             pkt.destination.to_display_string(),
             pkt.command,
             pkt.rssi,
+            hop_note,
         );
         if let Some(decoded) = pkt.decoded {
             println!("   {}", decoded);
@@ -602,11 +614,12 @@ async fn cmd_daemon(port: &str) -> Result<()> {
 
     let on_packet = Arc::new(move |pkt: IncomingPacket| {
         log::info!(
-            "PACKET  {} → {}  cmd=0x{:02X}  rssi={}  payload={}{}",
+            "PACKET  {} → {}  cmd=0x{:02X}  rssi={}{}  payload={}{}",
             pkt.source.to_display_string(),
             pkt.destination.to_display_string(),
             pkt.command,
             pkt.rssi,
+            if pkt.hops > 0 { format!("  hops={}", pkt.hops) } else { String::new() },
             pkt.payload_hex,
             pkt.decoded
                 .as_deref()

@@ -75,6 +75,8 @@ export interface IncomingPacket {
   payloadHex: string;
   decoded?: string;
   rssi: number;
+  /** v0.4.0 — mesh hops relayed before reaching us (0 = heard directly). */
+  hops?: number;
 }
 
 export type ConnectionStatusType = 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting';

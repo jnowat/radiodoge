@@ -65,6 +65,44 @@ pub const FLAG_STANDARD: u8 = 0x00;
 /// Flags byte: this packet is part of a multipart sequence
 pub const FLAG_MULTIPART: u8 = 0x01;
 
+/// v0.4.0 — Maximum number of mesh hops a packet may be relayed before it is
+/// dropped. Bounds rebroadcast storms independently of the dedup table.
+pub const MAX_MESH_HOPS: u8 = 8;
+
+/// The flags byte packs the mesh hop count into its upper nibble and the
+/// single/multipart flag into its lower nibble, so hop tracking is backward
+/// compatible: freshly built packets have hops = 0 (upper nibble clear).
+///
+/// Extract the hop count (0–15) from a flags byte.
+pub fn hops_from_flags(flags: u8) -> u8 {
+    (flags >> 4) & 0x0F
+}
+
+/// Combine a base flags value (lower nibble, e.g. [`FLAG_MULTIPART`]) with a hop
+/// count (upper nibble).
+pub fn flags_with_hops(base: u8, hops: u8) -> u8 {
+    (base & 0x0F) | ((hops.min(0x0F)) << 4)
+}
+
+/// Produce the relayed form of a packet: the same bytes with the header's hop
+/// count incremented by one.
+///
+/// Returns `None` if the packet is too short to have a header, or if it has
+/// already reached [`MAX_MESH_HOPS`] (in which case a relay must drop it rather
+/// than forward it, preventing mesh storms).
+pub fn relay_packet(pkt: &[u8]) -> Option<Vec<u8>> {
+    if pkt.len() < SINGLE_HDR_LEN {
+        return None;
+    }
+    let hops = hops_from_flags(pkt[1]);
+    if hops >= MAX_MESH_HOPS {
+        return None;
+    }
+    let mut relayed = pkt.to_vec();
+    relayed[1] = flags_with_hops(pkt[1], hops + 1);
+    Some(relayed)
+}
+
 /// Build a GET_NODE_ADDR command to query the Heltec device's address.
 pub fn build_get_node_addr(src: &NodeAddress) -> Vec<u8> {
     let broadcast = NodeAddress::broadcast();
@@ -258,7 +296,7 @@ pub fn parse_incoming(buf: &[u8], rssi: i16) -> Option<IncomingPacket> {
     }
 
     let command = buf[0];
-    let _flags = buf[1];
+    let hops = hops_from_flags(buf[1]);
 
     let source = NodeAddress::new(buf[2], buf[3], buf[4]);
     let destination = NodeAddress::new(buf[5], buf[6], buf[7]);
@@ -282,6 +320,7 @@ pub fn parse_incoming(buf: &[u8], rssi: i16) -> Option<IncomingPacket> {
         payload_hex,
         decoded,
         rssi,
+        hops,
     })
 }
 
@@ -458,6 +497,52 @@ mod tests {
         assert_eq!(parsed.command, CMD_PING);
         assert_eq!(parsed.source.region, 10);
         assert_eq!(parsed.rssi, -70);
+        assert_eq!(parsed.hops, 0, "a freshly built packet has 0 hops");
+    }
+
+    #[test]
+    fn test_hop_flags_pack_unpack() {
+        assert_eq!(hops_from_flags(0x00), 0);
+        assert_eq!(hops_from_flags(0x01), 0); // multipart flag, 0 hops
+        assert_eq!(hops_from_flags(0x30), 3);
+        assert_eq!(hops_from_flags(0x31), 3); // 3 hops + multipart flag
+        // Round-trip: base flag preserved in the low nibble, hops in the high nibble.
+        let f = flags_with_hops(FLAG_MULTIPART, 5);
+        assert_eq!(f & 0x0F, FLAG_MULTIPART);
+        assert_eq!(hops_from_flags(f), 5);
+        // Hop count saturates at 15 (4-bit field).
+        assert_eq!(hops_from_flags(flags_with_hops(FLAG_STANDARD, 99)), 15);
+    }
+
+    #[test]
+    fn test_relay_packet_increments_hops() {
+        let pkt = build_broadcast(&test_src(), "mesh msg");
+        let relayed = relay_packet(&pkt).expect("first relay should succeed");
+        let parsed = parse_incoming(&relayed, 0).expect("relayed packet parses");
+        assert_eq!(parsed.hops, 1);
+        // Source/dest/command survive the relay unchanged.
+        assert_eq!(parsed.command, CMD_MESSAGE);
+        assert_eq!(parsed.source, test_src());
+
+        // Relaying again bumps to 2.
+        let relayed2 = relay_packet(&relayed).expect("second relay");
+        assert_eq!(parse_incoming(&relayed2, 0).unwrap().hops, 2);
+    }
+
+    #[test]
+    fn test_relay_packet_drops_at_hop_limit() {
+        let mut pkt = build_broadcast(&test_src(), "loopy");
+        // Force the hop count to the limit.
+        pkt[1] = flags_with_hops(pkt[1], MAX_MESH_HOPS);
+        assert!(
+            relay_packet(&pkt).is_none(),
+            "a packet at the hop limit must be dropped, not relayed"
+        );
+    }
+
+    #[test]
+    fn test_relay_packet_rejects_short_buffer() {
+        assert!(relay_packet(&[0x03, 0x00, 0x01]).is_none());
     }
 
     /// Regression test for the back-to-back framing bug fixed in v0.3.16.

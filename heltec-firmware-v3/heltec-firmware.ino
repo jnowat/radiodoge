@@ -223,6 +223,11 @@ Adafruit_SSD1306 radioDogeDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET
 
 // Mesh networking configuration
 #define ENABLE_MESH_REBROADCAST true
+// v0.4.0 — Maximum number of mesh hops a multipart broadcast may traverse before
+// a relay drops it instead of rebroadcasting. The hop count travels in the
+// multipart header's previously-unused `reserved` byte (offset 10) and is
+// incremented on each rebroadcast. Bounds mesh storms independently of the
+// dedup table (which only suppresses exact duplicates).
 #define MAX_REBROADCAST_HOPS 3
 #define HOST_ACK_NACK_SIZE 3
 
@@ -296,6 +301,7 @@ struct MultipartReassembly {
   uint8_t totalParts;
   uint8_t receivedParts;
   uint8_t dataType;
+  uint8_t hops;          // v0.4.0 — mesh hop count from the multipart `reserved` byte
   unsigned long startTime;
   char assembledData[MAX_MULTIPART_PARTS * MULTIPART_CHUNK_SIZE];
   bool partsReceived[MAX_MULTIPART_PARTS];
@@ -2062,30 +2068,30 @@ void SendMultipartTransaction(nodeAddress destination, String transaction, Strin
 }
 
 // Send a large broadcast using multipart packets
-void SendMultipartBroadcast(String message, String type, String priority) {
+void SendMultipartBroadcast(String message, String type, String priority, uint8_t hops) {
   // Prepare broadcast data
   String broadcastData = type + ":" + priority + ":" + message;
   int totalLength = broadcastData.length();
-  
+
   // Calculate number of parts needed
   int totalParts = (totalLength + MULTIPART_CHUNK_SIZE - 1) / MULTIPART_CHUNK_SIZE;
-  
+
   if (totalParts > MAX_MULTIPART_PARTS) {
     addLog("[ERROR] Broadcast too large for multipart - " + String(totalLength) + " bytes, max " + String(MAX_MULTIPART_PARTS * MULTIPART_CHUNK_SIZE) + " bytes");
     return;
   }
-  
-  addLog("[LoRa] Sending MULTIPART BROADCAST - Type: " + type + ", Priority: " + priority + ", Length: " + String(totalLength) + ", Parts: " + String(totalParts));
-  
+
+  addLog("[LoRa] Sending MULTIPART BROADCAST - Type: " + type + ", Priority: " + priority + ", Length: " + String(totalLength) + ", Parts: " + String(totalParts) + ", Hops: " + String(hops));
+
   // Set destination as broadcast
   SetDestinationAsBroadcast();
-  
+
   // Send each part
   for (int part = 0; part < totalParts; part++) {
     int startPos = part * MULTIPART_CHUNK_SIZE;
     int chunkSize = min(MULTIPART_CHUNK_SIZE, totalLength - startPos);
     String chunk = broadcastData.substring(startPos, startPos + chunkSize);
-    
+
     // Create multipart packet
     MultipartPacket mpPacket;
     mpPacket.packetType = (uint8_t)MULTIPART_PACKET;
@@ -2098,7 +2104,7 @@ void SendMultipartBroadcast(String message, String type, String priority) {
     mpPacket.partNumber = part + 1;  // 1-based part numbering
     mpPacket.totalParts = totalParts;
     mpPacket.dataType = 2;  // Broadcast
-    mpPacket.reserved = 0;
+    mpPacket.reserved = hops;  // v0.4.0 — carry the mesh hop count in the reserved byte
     
     // Copy chunk data
     chunk.getBytes((unsigned char*)mpPacket.data, chunkSize + 1);
@@ -2155,12 +2161,12 @@ int FindMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNod
   return -1;  // Not found
 }
 
-int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t totalParts, uint8_t dataType) {
+int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t totalParts, uint8_t dataType, uint8_t hops) {
   if (activeMultipartSessions >= MAX_MULTIPART_PARTS) {
     addLog("[ERROR] No space for new multipart session");
     return -1;
   }
-  
+
   int index = activeMultipartSessions++;
   multipartBuffer[index].srcRegion = srcRegion;
   multipartBuffer[index].srcCommunity = srcCommunity;
@@ -2168,6 +2174,7 @@ int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcN
   multipartBuffer[index].totalParts = totalParts;
   multipartBuffer[index].receivedParts = 0;
   multipartBuffer[index].dataType = dataType;
+  multipartBuffer[index].hops = hops;  // v0.4.0 — from the multipart `reserved` byte
   multipartBuffer[index].startTime = millis();
   
   // Initialize parts received array
@@ -2187,11 +2194,12 @@ bool ProcessMultipartPacket() {
   uint8_t partNumber = rxPacket[7];
   uint8_t totalParts = rxPacket[8];
   uint8_t dataType = rxPacket[9];
-  
+  uint8_t hops = rxPacket[10];  // v0.4.0 — mesh hop count carried in the `reserved` byte
+
   // Find or create session
   int sessionIndex = FindMultipartSession(srcRegion, srcCommunity, srcNode, dataType);
   if (sessionIndex == -1) {
-    sessionIndex = CreateMultipartSession(srcRegion, srcCommunity, srcNode, totalParts, dataType);
+    sessionIndex = CreateMultipartSession(srcRegion, srcCommunity, srcNode, totalParts, dataType, hops);
     if (sessionIndex == -1) {
       addLog("[LoRa] Failed to create multipart session - buffer full");
       return false;
@@ -2298,13 +2306,13 @@ bool ReassembleMultipartPacket(int sessionIndex) {
   // Process based on data type
   switch (session->dataType) {
     case 0:  // Transaction
-      ProcessReassembledTransaction(assembledData, session->srcRegion, session->srcCommunity, session->srcNode);
+      ProcessReassembledTransaction(assembledData, session->srcRegion, session->srcCommunity, session->srcNode, session->hops);
       break;
     case 1:  // Message
-      ProcessReassembledMessage(assembledData, session->srcRegion, session->srcCommunity, session->srcNode);
+      ProcessReassembledMessage(assembledData, session->srcRegion, session->srcCommunity, session->srcNode, session->hops);
       break;
     case 2:  // Broadcast
-      ProcessReassembledBroadcast(assembledData, session->srcRegion, session->srcCommunity, session->srcNode);
+      ProcessReassembledBroadcast(assembledData, session->srcRegion, session->srcCommunity, session->srcNode, session->hops);
       break;
     default:
       addLog("[ERROR] Unknown multipart data type: " + String(session->dataType));
@@ -2316,7 +2324,7 @@ bool ReassembleMultipartPacket(int sessionIndex) {
   return true;
 }
 
-void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode) {
+void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t hops) {
   addLog("[LoRa] Processing reassembled TRANSACTION from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode));
   
   // Set sender address
@@ -2415,15 +2423,16 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
     addLog("[LoRa] No gateway forwarding performed - transaction stored locally only");
     
     // Rebroadcast transaction to other LoRa devices for mesh networking
-    if (ENABLE_MESH_REBROADCAST) {
-      addLog("[LoRa] Rebroadcasting transaction to other LoRa devices for mesh networking");
+    if (ENABLE_MESH_REBROADCAST && hops >= MAX_REBROADCAST_HOPS) {
+      // v0.4.0 — hop limit reached; drop instead of rebroadcasting to bound mesh storms
+      addLog("[LoRa] Mesh hop limit (" + String(MAX_REBROADCAST_HOPS) + ") reached at hop " + String(hops) + " - not rebroadcasting");
+    } else if (ENABLE_MESH_REBROADCAST) {
+      addLog("[LoRa] Rebroadcasting transaction to other LoRa devices for mesh networking (hop " + String(hops + 1) + ")");
       String rebroadcastData = "transaction:" + txType + ":" + txData;
-      if (rebroadcastData.length() > 255) {
-        addLog("[LoRa] Transaction too large for rebroadcast, using multipart");
-        SendMultipartBroadcast(rebroadcastData, "transaction", "normal");
-      } else {
-        SendBroadcast(rebroadcastData, "transaction", "normal");
-      }
+      // Always rebroadcast via multipart so the incremented hop counter (carried
+      // in the multipart `reserved` byte) survives the next relay; single-packet
+      // broadcasts have no header room for it.
+      SendMultipartBroadcast(rebroadcastData, "transaction", "normal", hops + 1);
     } else {
       addLog("[LoRa] Mesh rebroadcasting disabled - transaction stored locally only");
     }
@@ -2432,7 +2441,7 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
   addLog("[LoRa] Reassembled transaction processed and forwarded to host" + String(gateway_forwarded ? " and gateway" : ""));
 }
 
-void ProcessReassembledMessage(String messageData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode) {
+void ProcessReassembledMessage(String messageData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t hops) {
   addLog("[LoRa] Processing reassembled MESSAGE from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode));
   
   // Set sender address
@@ -2509,7 +2518,7 @@ bool isRecentlySeenBroadcast(uint8_t srcRegion, uint8_t srcCommunity, uint8_t sr
   return false;
 }
 
-void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode) {
+void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t hops) {
   // Suppress duplicate deliveries from mesh rebroadcasting
   if (isRecentlySeenBroadcast(srcRegion, srcCommunity, srcNode, broadcastData)) {
     addLog("[LoRa] Duplicate broadcast from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode) + " suppressed");
@@ -2617,8 +2626,11 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
     addLog("[LoRa] No gateway forwarding performed - broadcast stored locally only");
     
     // Rebroadcast to other LoRa devices for mesh networking
-    if (ENABLE_MESH_REBROADCAST) {
-      addLog("[LoRa] Rebroadcasting to other LoRa devices for mesh networking");
+    if (ENABLE_MESH_REBROADCAST && hops >= MAX_REBROADCAST_HOPS) {
+      // v0.4.0 — hop limit reached; drop instead of rebroadcasting to bound mesh storms
+      addLog("[LoRa] Mesh hop limit (" + String(MAX_REBROADCAST_HOPS) + ") reached at hop " + String(hops) + " - not rebroadcasting");
+    } else if (ENABLE_MESH_REBROADCAST) {
+      addLog("[LoRa] Rebroadcasting to other LoRa devices for mesh networking (hop " + String(hops + 1) + ")");
       // Extract type and priority from original broadcast data
       String rebroadcastType = "transaction";
       String rebroadcastPriority = "normal";
@@ -2632,14 +2644,11 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
           rebroadcastPriority = broadcastData.substring(12, colonPos);
         }
       }
-      
+
       String rebroadcastData = rebroadcastType + ":" + rebroadcastPriority + ":" + txData;
-      if (rebroadcastData.length() > 255) {
-        addLog("[LoRa] Broadcast too large for rebroadcast, using multipart");
-        SendMultipartBroadcast(rebroadcastData, rebroadcastType, rebroadcastPriority);
-      } else {
-        SendBroadcast(rebroadcastData, rebroadcastType, rebroadcastPriority);
-      }
+      // Always rebroadcast via multipart so the incremented hop counter (carried
+      // in the multipart `reserved` byte) survives the next relay.
+      SendMultipartBroadcast(rebroadcastData, rebroadcastType, rebroadcastPriority, hops + 1);
     } else {
       addLog("[LoRa] Mesh rebroadcasting disabled - broadcast stored locally only");
     }
@@ -2780,7 +2789,8 @@ void ProcessNextQueuedRequest() {
 
 void ProcessBroadcastRequest(PendingRequest& req) {
   if (req.isMultipart) {
-    SendMultipartBroadcast(req.message, req.typeStr, req.priority);
+    // Locally-originated broadcast starts at hop 0.
+    SendMultipartBroadcast(req.message, req.typeStr, req.priority, 0);
     addLog("[QUEUE] Sent multipart broadcast - ID: " + req.requestId);
   } else {
     SendBroadcast(req.message, req.typeStr, req.priority);

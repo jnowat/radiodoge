@@ -99,7 +99,10 @@ Rock-solid against real hardware, and now on your phone.
   target math, header-chain linkage validation, and merkle-proof verification (all offline unit-tested), plus a
   Blockbook-backed lightweight inclusion check surfaced as `radiodoge-cli verify-tx`, a `verify_tx_inclusion`
   Tauri command, and a "Verify a transaction on-chain" panel in the History tab
-- 🔜 **Multi-hop relay status** — show hop count and intermediate node addresses in the packet log
+- ✅ **Multi-hop relay status** — packets now carry a mesh hop count (header flags upper nibble; the firmware's
+  multipart `reserved` byte on the air), surfaced as a "⇄ N hops" badge in the packet log, in the CLI receive /
+  daemon output, and in exported logs. Firmware mesh rebroadcast increments the count and enforces
+  `MAX_REBROADCAST_HOPS`, so relays are bounded by hop count, not just the dedup table
 - 🔜 **QR code scanning** — camera/image input for the recipient field
 - 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee
 
@@ -141,8 +144,8 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   (`0x28`) toggles BLE advertising and persists to NVS. Flash the updated Heltec V3 firmware to use these.
 - **`SET_LORA_PARAMS` (`0x21`) is a no-op ACK.** LoRa frequency/SF/bandwidth are compile-time constants in the
   firmware; the app can send new parameters but the radio isn't reconfigured at runtime yet.
-- **No hop limit on mesh rebroadcast.** Rebroadcast is bounded only by the 2-minute dedup table, not by a hop
-  count. Multi-hop relay status (v0.4.x) will add visibility here.
+- ~~**No hop limit on mesh rebroadcast.**~~ *Fixed in v0.4.0:* multipart rebroadcasts carry a hop count in the
+  `reserved` byte and are dropped once they reach `MAX_REBROADCAST_HOPS` (3), on top of the 2-minute dedup table.
 - **`gateway_mode` is a reporting flag, not a forwarding switch.** Actual forwarding is decided by the board's
   configured gateway type / IP / internet state, independent of the `gateway_mode` toggle.
 - **The firmware web UI is unauthenticated.** Every `/api/*` route is open to anyone on the board's WiFi AP, and

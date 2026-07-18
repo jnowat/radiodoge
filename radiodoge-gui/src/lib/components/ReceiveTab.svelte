@@ -74,6 +74,7 @@
       destination: `${p.destination.region}.${p.destination.community}.${p.destination.node}`,
       decoded:     p.decoded ?? '',
       payload_hex: p.payloadHex,
+      hops:        p.hops ?? 0,
     }));
     const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
@@ -335,6 +336,27 @@
               {packet.decoded}
             {/if}
           </span>
+
+          <!-- Mesh hop count (relayed packets only) -->
+          {#if !isTx && (packet.hops ?? 0) > 0}
+            <span
+              title="Relayed across {packet.hops} mesh hop{packet.hops === 1 ? '' : 's'} before reaching this node"
+              style="
+                font-family: var(--font-mono);
+                font-size: 0.68rem;
+                color: var(--doge-yellow);
+                background: rgba(255, 193, 7, 0.12);
+                border: 1px solid rgba(255, 193, 7, 0.3);
+                border-radius: 4px;
+                padding: 1px 5px;
+                flex-shrink: 0;
+                white-space: nowrap;
+                cursor: help;
+              "
+            >
+              ⇄ {packet.hops} hop{packet.hops === 1 ? '' : 's'}
+            </span>
+          {/if}
 
           <!-- RSSI (only meaningful for RX packets) -->
           {#if !isTx}
