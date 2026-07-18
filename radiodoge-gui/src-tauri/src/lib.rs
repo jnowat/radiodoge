@@ -481,6 +481,14 @@ async fn get_balance(address: String) -> Result<f64, String> {
     Ok(koinus as f64 / 1e8)
 }
 
+/// Lightweight SPV inclusion check for a txid (confirmations + block) via Blockbook.
+#[tauri::command]
+async fn verify_tx_inclusion(txid: String) -> Result<radiodoge_core::spv::TxInclusion, String> {
+    radiodoge_core::spv::fetch_tx_inclusion(&txid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn send_transaction(
     tx: TransactionRequest,
@@ -1668,6 +1676,7 @@ pub fn run() {
             generate_mnemonic_wallet,
             import_mnemonic_wallet,
             get_balance,
+            verify_tx_inclusion,
             send_transaction,
             update_lora_settings,
             get_lora_settings,

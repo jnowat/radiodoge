@@ -144,6 +144,18 @@ export interface TxHistoryEntry {
 }
 
 /**
+ * Lightweight SPV inclusion result returned by the `verify_tx_inclusion` command.
+ * Mirrors `radiodoge_core::spv::TxInclusion`.
+ */
+export interface TxInclusion {
+  txid: string;
+  confirmed: boolean;
+  confirmations: number;
+  blockHeight: number | null;
+  blockHash: string | null;
+}
+
+/**
  * Map RSSI (dBm) to a signal bar count (1-5).
  */
 export function rssiToBars(rssi: number): number {

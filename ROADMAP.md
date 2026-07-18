@@ -95,7 +95,10 @@ Rock-solid against real hardware, and now on your phone.
   relayed back over LoRa to the originating node.
 - ✅ **Firmware command reachability** — the implemented WiFi-toggle (`0x24`), battery (`0x26`), and MAC (`0x27`)
   handlers are now wired into the firmware's desktop-command dispatch, and `BLE_TOGGLE` (`0x28`) is implemented
-- 🔜 **SPV verification** — lightweight header-chain validation so the app can verify inclusion without a full node
+- ✅ **SPV verification** — a `radiodoge-core::spv` module with block-header parsing, `SHA256d` hashing, `nBits`
+  target math, header-chain linkage validation, and merkle-proof verification (all offline unit-tested), plus a
+  Blockbook-backed lightweight inclusion check surfaced as `radiodoge-cli verify-tx`, a `verify_tx_inclusion`
+  Tauri command, and a "Verify a transaction on-chain" panel in the History tab
 - 🔜 **Multi-hop relay status** — show hop count and intermediate node addresses in the packet log
 - 🔜 **QR code scanning** — camera/image input for the recipient field
 - 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee

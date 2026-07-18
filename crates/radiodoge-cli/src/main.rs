@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use radiodoge_core::{radio, wallet};
+use radiodoge_core::{radio, spv, wallet};
 use radiodoge_core::serial::SerialManager;
 use radiodoge_core::types::{IncomingPacket, NodeAddress};
 
@@ -131,6 +131,19 @@ enum Commands {
         address: String,
     },
 
+    /// Verify a transaction's inclusion in the Dogecoin chain (lightweight SPV)
+    ///
+    /// Performs a lightweight, no-full-node inclusion check via Trezor Blockbook:
+    /// reports whether the txid is mined, its confirmation depth, and the block
+    /// it landed in. Requires an internet connection.
+    ///
+    /// Example: radiodoge-cli verify-tx 5b2a3f53f605d62c53e62932dac6925e3d74afa5a4b459745c36d42d0ed26a69
+    VerifyTx {
+        /// Transaction id (64 hex characters)
+        #[arg(short = 't', long = "txid")]
+        txid: String,
+    },
+
     /// Build, sign, and broadcast a real P2PKH Dogecoin transaction to the network
     ///
     /// Fetches UTXOs from Trezor Blockbook, builds the transaction, signs each
@@ -221,6 +234,7 @@ async fn main() -> Result<()> {
         Commands::Connect { port } => cmd_connect(&port).await,
         Commands::Daemon { port } => cmd_daemon(&port).await,
         Commands::Balance { address } => cmd_balance(&address).await,
+        Commands::VerifyTx { txid } => cmd_verify_tx(&txid).await,
         Commands::Broadcast { wif, to_address, amount } => cmd_broadcast(&wif, &to_address, amount).await,
     }
 }
@@ -726,6 +740,25 @@ async fn cmd_balance(address: &str) -> Result<()> {
     println!("🌐 Querying Blockbook for {}...", address);
     let koinus = wallet::fetch_balance_blockbook(address).await?;
     println!("💰 Balance: {:.8} DOGE  ({} koinus)", koinus as f64 / 1e8, koinus);
+    Ok(())
+}
+
+/// Lightweight SPV inclusion check: report whether a txid is mined and how deep.
+async fn cmd_verify_tx(txid: &str) -> Result<()> {
+    println!("🔎 Verifying transaction inclusion (lightweight SPV via Blockbook)...");
+    let status = spv::fetch_tx_inclusion(txid).await?;
+    if status.confirmed {
+        println!("✅ Confirmed! {} confirmation(s).", status.confirmations);
+        if let Some(h) = status.block_height {
+            println!("   Block height: {}", h);
+        }
+        if let Some(hash) = &status.block_hash {
+            println!("   Block hash:   {}", hash);
+        }
+        println!("   Much included. Very chain. Wow. 🐕🌙");
+    } else {
+        println!("⏳ Not yet confirmed — the transaction is unconfirmed or unknown to the explorer.");
+    }
     Ok(())
 }
 
