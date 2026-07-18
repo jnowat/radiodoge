@@ -29,7 +29,6 @@ use tokio::sync::Mutex;
 mod tray;
 
 use radiodoge_core::{radio, wallet};
-use hex;
 use radiodoge_core::serial::SerialManager;
 use radiodoge_core::types::{
     BoardSettings, ConnectionStatusEvent, IncomingPacket, LoraSettings, NeighborEntry,
@@ -647,7 +646,7 @@ async fn update_lora_settings(
         .trim_start_matches("4/")
         .parse::<u8>()
         .unwrap_or(5);
-    let tx_power = settings.power_dbm.max(2).min(22) as u8;
+    let tx_power = settings.power_dbm.clamp(2, 22) as u8;
     let lora_pkt = radio::build_set_lora_params(
         &settings.node_address, settings.spreading_factor, bw_idx, cr, freq_khz, tx_power,
     );
@@ -1504,7 +1503,7 @@ async fn mobile_build_lora_settings_packet(settings: LoraSettings) -> Vec<u8> {
         bw_idx,
         cr,
         freq_khz,
-        settings.power_dbm.max(2).min(22) as u8,
+        settings.power_dbm.clamp(2, 22) as u8,
     )
 }
 

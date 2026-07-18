@@ -20,7 +20,7 @@ use radiodoge_core::types::{IncomingPacket, NodeAddress};
 #[derive(Parser)]
 #[command(
     name = "radiodoge-cli",
-    version = "0.2.4",
+    version,
     about = "🐕 RadioDoge CLI — Wireless P2P Dogecoin over LoRa\n\nMuch CLI. Very terminal. Such Rust. Wow.",
     long_about = None,
 )]
@@ -402,7 +402,7 @@ async fn cmd_ping(port: &str) -> Result<()> {
     if manager.ping().await {
         println!("✅ PONG received! Device is alive. Much responsive. Wow. 🐕");
     } else {
-        println!("❌ No response within 500 ms. Device may be offline or not running RadioDoge firmware.");
+        println!("❌ No response within 1500 ms. Device may be offline or not running RadioDoge firmware.");
     }
 
     manager.disconnect().await.ok();
@@ -580,11 +580,8 @@ async fn cmd_daemon(port: &str) -> Result<()> {
     println!("Serial port: {}", port);
     println!("Press Ctrl-C to stop.\n");
 
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .format_timestamp_secs()
-    .init();
+    // NOTE: logging is already initialised in main() — calling
+    // env_logger::Builder::init() a second time here panicked at daemon startup.
 
     let manager = Arc::new(SerialManager::new());
     let manager_for_ack = Arc::clone(&manager);

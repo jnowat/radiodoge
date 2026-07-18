@@ -565,12 +565,22 @@ bool CheckIfPacketIsGlobalBroadcast()
 
 // Extract the payload message from the given buffer (assists with displaying on screen)
 String ExtractStringMessageFromBuffer(uint8_t *buf, int bufferSize) {
-  int messageSize = bufferSize - 6;
-  char *extractedMessage = new char[messageSize];
-  for (int i = 0; i < messageSize; i++) {
-    extractedMessage[i] = (char)buf[i + 7];
+  // v0.4.x fix — the previous implementation paired new[] with free() (undefined
+  // behavior) and read one byte past the end of the buffer to find the null
+  // terminator. Build the String directly, stopping at the payload end or the
+  // first NUL, whichever comes first.
+  String messageString = "";
+  if (bufferSize <= 7) {
+    return messageString;
   }
-  String messageString(extractedMessage);
-  free(extractedMessage);
+  int messageSize = bufferSize - 7;
+  messageString.reserve(messageSize);
+  for (int i = 0; i < messageSize; i++) {
+    char c = (char)buf[7 + i];
+    if (c == '\0') {
+      break;
+    }
+    messageString += c;
+  }
   return messageString;
 }
