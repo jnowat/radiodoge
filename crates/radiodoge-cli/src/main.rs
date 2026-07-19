@@ -696,9 +696,13 @@ async fn daemon_broadcast_and_ack(
         match wallet::broadcast_raw_tx(&raw_hex).await {
             Ok(txid) => {
                 log::info!("GATEWAY  broadcast OK  txid={}", txid);
-                // Send ACK back to the originating node via radio
+                // Send ACK back to the originating node via radio. Include the
+                // full 64-hex-char txid — "TX_ACK:" + txid is 71 bytes, well under
+                // MAX_SINGLE_PAYLOAD_LEN (192) — so the recipient can actually look
+                // it up / verify inclusion. (Earlier code truncated it to 40 chars,
+                // which made the ACK'd txid useless.)
                 let gateway_addr = mgr.get_node_address().await;
-                let ack_msg = format!("TX_ACK:{}", &txid[..txid.len().min(40)]);
+                let ack_msg = format!("TX_ACK:{}", txid);
                 let ack_pkt = radio::build_message(&gateway_addr, &source, &ack_msg);
                 if let Err(e) = mgr.send_raw(ack_pkt).await {
                     log::warn!("GATEWAY  ACK send failed: {}", e);

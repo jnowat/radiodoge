@@ -153,7 +153,8 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
 - **The firmware web UI is unauthenticated.** Every `/api/*` route is open to anyone on the board's WiFi AP, and
   a couple of status endpoints return stored credentials in plaintext. Treat a firmware gateway as trusted-network
   only until authentication lands.
-- **`radiodoge-cli --version` reports a stale `0.2.4`** (a hard-coded clap string); the crate is at `0.3.16`.
+- ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
+  crate version via clap's `version` attribute, so it always matches the package.
 
 Found something else? [Open an issue](https://github.com/jnowat/RadioDoge/issues) — much appreciated. 🐕
 
