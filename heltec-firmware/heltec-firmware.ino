@@ -22,6 +22,8 @@
 #define LORA_IQ_INVERSION_ON false
 #define RX_TIMEOUT_VALUE 1000
 #define SERIAL_HEADER_SIZE 2
+// v0.4.x — over-the-air single-packet header: [type, flags, src(3), dst(3)] = 8 bytes.
+#define SINGLE_PACKET_HEADER_SIZE 8
 #define BUFFER_SIZE 256  // Define the payload size here
 #define CONTROL_SIZE 8
 #define SERIAL_TERMINATOR 255
@@ -565,12 +567,24 @@ bool CheckIfPacketIsGlobalBroadcast()
 
 // Extract the payload message from the given buffer (assists with displaying on screen)
 String ExtractStringMessageFromBuffer(uint8_t *buf, int bufferSize) {
-  int messageSize = bufferSize - 6;
-  char *extractedMessage = new char[messageSize];
-  for (int i = 0; i < messageSize; i++) {
-    extractedMessage[i] = (char)buf[i + 7];
+  // v0.4.x fix — the previous implementation paired new[] with free() (undefined
+  // behavior), read one byte past the end of the buffer, and started at offset 7
+  // (one byte before the payload), prepending the destination-node byte as a
+  // stray leading character. The 8-byte packet header is [type, flags, src(3),
+  // dst(3)] and the payload begins at offset 8. Build the String directly from
+  // offset 8, stopping at the payload end or the first NUL, whichever comes first.
+  String messageString = "";
+  if (bufferSize <= SINGLE_PACKET_HEADER_SIZE) {
+    return messageString;
   }
-  String messageString(extractedMessage);
-  free(extractedMessage);
+  int messageSize = bufferSize - SINGLE_PACKET_HEADER_SIZE;
+  messageString.reserve(messageSize);
+  for (int i = 0; i < messageSize; i++) {
+    char c = (char)buf[SINGLE_PACKET_HEADER_SIZE + i];
+    if (c == '\0') {
+      break;
+    }
+    messageString += c;
+  }
   return messageString;
 }

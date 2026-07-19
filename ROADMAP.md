@@ -89,13 +89,23 @@ Rock-solid against real hardware, and now on your phone.
 - ✅ **Host ACK/Ping notifications** — the board now tells the host over serial when it hears an over-the-air ACK
   (`0x29`) or Ping (`0x2A`)
 - ✅ **Supply-chain CI** — weekly `cargo-audit` fails the build on any known CVE in a pinned dependency
-- 🔨 **Gateway radio→host forwarding** — let a gateway Heltec hand incoming LoRa packets to its serial host so the
-  full LoRa → firmware → `daemon` → network path is end-to-end
-- 🔨 **Firmware command reachability** — wire the implemented WiFi-toggle / battery / MAC handlers into the desktop
-  command dispatch (see limitations below)
-- 🔜 **SPV verification** — lightweight header-chain validation so the app can verify inclusion without a full node
-- 🔜 **Multi-hop relay status** — show hop count and intermediate node addresses in the packet log
-- 🔜 **QR code scanning** — camera/image input for the recipient field
+- ✅ **Gateway radio→host forwarding** — a gateway Heltec now hands incoming LoRa packets to its serial host, so the
+  full LoRa → firmware → `daemon` → network path is end-to-end. Transactions/balance requests are relayed over the
+  air in the desktop packet format, forwarded to the host in gateway mode, and the daemon's `TX_ACK`/`BAL` reply is
+  relayed back over LoRa to the originating node.
+- ✅ **Firmware command reachability** — the implemented WiFi-toggle (`0x24`), battery (`0x26`), and MAC (`0x27`)
+  handlers are now wired into the firmware's desktop-command dispatch, and `BLE_TOGGLE` (`0x28`) is implemented
+- ✅ **SPV verification** — a `radiodoge-core::spv` module with block-header parsing, `SHA256d` hashing, `nBits`
+  target math, header-chain linkage validation, and merkle-proof verification (all offline unit-tested), plus a
+  Blockbook-backed lightweight inclusion check surfaced as `radiodoge-cli verify-tx`, a `verify_tx_inclusion`
+  Tauri command, and a "Verify a transaction on-chain" panel in the History tab
+- ✅ **Multi-hop relay status** — packets now carry a mesh hop count (header flags upper nibble; the firmware's
+  multipart `reserved` byte on the air), surfaced as a "⇄ N hops" badge in the packet log, in the CLI receive /
+  daemon output, and in exported logs. Firmware mesh rebroadcast increments the count and enforces
+  `MAX_REBROADCAST_HOPS`, so relays are bounded by hop count, not just the dedup table
+- ✅ **QR code scanning** — a "📷 Scan QR" button on the Send tab decodes a Dogecoin QR from an image file (or
+  camera capture on mobile) via a pure-Rust `rqrr` backend command, and a `radiodoge-core::qr` parser fills the
+  recipient — plus amount and memo — from a bare address or a BIP21 `dogecoin:…?amount=…&label=…` URI
 - 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee
 
 ---
@@ -131,19 +141,20 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   Bluetooth LE, and the app's BLE write path is wired end-to-end — but the firmware currently buffers inbound
   BLE writes without consuming them, so **commands sent over BLE are not yet executed on the board**. Use
   **USB-C** as the reliable transport today; BLE is a preview. *(Tracked under v0.4.x firmware parity.)*
-- **Three desktop commands aren't reachable in firmware yet.** `WIFI_TOGGLE` (`0x24`), `GET_BATTERY` (`0x26`),
-  and `GET_MAC` (`0x27`) have handlers in the firmware but aren't wired into its desktop-command dispatch, so
-  the board NACKs them. The app's WiFi toggle, battery gauge, and MAC readout depend on a firmware update.
+- ~~**Three desktop commands aren't reachable in firmware yet.**~~ *Fixed in v0.4.0 firmware:* `WIFI_TOGGLE`
+  (`0x24`), `GET_BATTERY` (`0x26`), and `GET_MAC` (`0x27`) are now routed to their handlers, and `BLE_TOGGLE`
+  (`0x28`) toggles BLE advertising and persists to NVS. Flash the updated Heltec V3 firmware to use these.
 - **`SET_LORA_PARAMS` (`0x21`) is a no-op ACK.** LoRa frequency/SF/bandwidth are compile-time constants in the
   firmware; the app can send new parameters but the radio isn't reconfigured at runtime yet.
-- **No hop limit on mesh rebroadcast.** Rebroadcast is bounded only by the 2-minute dedup table, not by a hop
-  count. Multi-hop relay status (v0.4.x) will add visibility here.
+- ~~**No hop limit on mesh rebroadcast.**~~ *Fixed in v0.4.0:* multipart rebroadcasts carry a hop count in the
+  `reserved` byte and are dropped once they reach `MAX_REBROADCAST_HOPS` (3), on top of the 2-minute dedup table.
 - **`gateway_mode` is a reporting flag, not a forwarding switch.** Actual forwarding is decided by the board's
   configured gateway type / IP / internet state, independent of the `gateway_mode` toggle.
 - **The firmware web UI is unauthenticated.** Every `/api/*` route is open to anyone on the board's WiFi AP, and
   a couple of status endpoints return stored credentials in plaintext. Treat a firmware gateway as trusted-network
   only until authentication lands.
-- **`radiodoge-cli --version` reports a stale `0.2.4`** (a hard-coded clap string); the crate is at `0.3.16`.
+- ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
+  crate version via clap's `version` attribute, so it always matches the package.
 
 Found something else? [Open an issue](https://github.com/jnowat/RadioDoge/issues) — much appreciated. 🐕
 

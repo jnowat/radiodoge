@@ -152,6 +152,10 @@ pub struct IncomingPacket {
     pub decoded: Option<String>,
     /// RSSI of this packet in dBm
     pub rssi: i16,
+    /// v0.4.0 — Number of mesh hops this packet has been relayed (0 = heard
+    /// directly from the source). Carried in the header flags byte's upper nibble.
+    #[serde(default)]
+    pub hops: u8,
 }
 
 /// v0.3.6 — Board-is-source-of-truth: live state reported by the Heltec device

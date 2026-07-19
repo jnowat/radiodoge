@@ -41,7 +41,8 @@ The app builds an **8-byte header** followed by an optional payload:
 ```
 Offset  Field
   0     Command byte        (see §4)
-  1     Flags               (0x00 = single, 0x01 = multipart)
+  1     Flags               (low nibble: 0x0 = single, 0x1 = multipart;
+                             high nibble: mesh hop count 0–15, v0.4.0)
   2     Source region
   3     Source community
   4     Source node
@@ -53,6 +54,11 @@ Offset  Field
 
 - `MAX_SINGLE_PAYLOAD_LEN = 192`. Payloads longer than this are split into multipart frames (§3).
 - `SINGLE_HDR_LEN = 8`.
+- **Mesh hop count (v0.4.0):** the flags byte's upper nibble carries a 0–15 hop count. Freshly built packets have
+  0 hops (upper nibble clear), so this is fully backward compatible. A relay increments it and drops the packet
+  once it reaches `MAX_MESH_HOPS` (8). The app surfaces the hop count in the packet log. In the **firmware's**
+  multipart mesh frames (§3), the hop count instead rides in the previously-unused `reserved` byte and is bounded
+  by `MAX_REBROADCAST_HOPS` (3).
 
 ---
 

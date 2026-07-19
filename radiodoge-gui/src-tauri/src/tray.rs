@@ -75,7 +75,7 @@ pub fn update_tray_status<R: Runtime>(app: &tauri::AppHandle<R>, connected: bool
     };
 
     // Update all tray icons (there should only be one)
-    for tray in app.tray_by_id("") {
+    if let Some(tray) = app.tray_by_id("") {
         let _ = tray.set_tooltip(Some(&tooltip));
     }
 }

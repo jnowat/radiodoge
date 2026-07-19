@@ -190,7 +190,7 @@ pub fn encode_transaction_payload(
 
 // ─── Real P2PKH transaction signing + broadcast ───────────────────────────────
 
-const BLOCKBOOK_BASE: &str = "https://doge1.trezor.io/api/v2";
+pub(crate) const BLOCKBOOK_BASE: &str = "https://doge1.trezor.io/api/v2";
 
 /// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
 pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;

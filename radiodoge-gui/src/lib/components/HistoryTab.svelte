@@ -8,7 +8,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, onDestroy } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import type { TxHistoryEntry } from '$lib/types';
+  import type { TxHistoryEntry, TxInclusion } from '$lib/types';
   import { formatTimestamp } from '$lib/types';
 
   let history = $state<TxHistoryEntry[]>([]);
@@ -44,6 +44,30 @@
     return status === 'sent' ? '✅' : '❌';
   }
 
+  // ── Lightweight SPV inclusion check ──────────────────────────────────────
+  let verifyTxid = $state('');
+  let verifying = $state(false);
+  let verifyResult = $state<TxInclusion | null>(null);
+  let verifyError = $state<string | null>(null);
+
+  async function verifyTx() {
+    const txid = verifyTxid.trim();
+    verifyResult = null;
+    verifyError = null;
+    if (!/^[0-9a-fA-F]{64}$/.test(txid)) {
+      verifyError = 'Enter a valid 64-hex-character transaction id.';
+      return;
+    }
+    verifying = true;
+    try {
+      verifyResult = await invoke<TxInclusion>('verify_tx_inclusion', { txid });
+    } catch (e: unknown) {
+      verifyError = e instanceof Error ? e.message : String(e);
+    } finally {
+      verifying = false;
+    }
+  }
+
   let copiedTx = $state<Record<number, boolean>>({});
   async function copyAddr(addr: string, idx: number) {
     try {
@@ -73,6 +97,47 @@
     >
       {isLoading ? '⏳ Loading...' : '↺ Refresh'}
     </button>
+  </div>
+
+  <!-- ── SPV inclusion check ─────────────────────────────────────────────── -->
+  <div class="card-doge" style="padding: 14px 16px; margin-bottom: 20px;">
+    <div style="font-size: 0.9rem; font-weight: 700; margin-bottom: 4px;">🔎 Verify a transaction on-chain</div>
+    <p style="margin: 0 0 10px 0; color: var(--doge-muted); font-size: 0.78rem;">
+      Lightweight SPV check via Blockbook — confirm a txid is mined and how deep, no full node needed.
+    </p>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <input
+        bind:value={verifyTxid}
+        placeholder="Transaction id (64 hex characters)"
+        class="mono"
+        aria-label="Transaction id to verify"
+        style="flex: 1; min-width: 240px; font-size: 0.78rem; padding: 8px 10px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 6px; color: var(--doge-text);"
+        onkeydown={(e) => { if (e.key === 'Enter') verifyTx(); }}
+      />
+      <button onclick={verifyTx} disabled={verifying} class="btn-doge" style="font-size: 0.8rem;">
+        {verifying ? '⏳ Checking…' : 'Verify'}
+      </button>
+    </div>
+    {#if verifyError}
+      <div style="margin-top: 10px; color: var(--doge-red); font-size: 0.8rem;" role="alert">❌ {verifyError}</div>
+    {/if}
+    {#if verifyResult}
+      <div style="margin-top: 10px; font-size: 0.8rem;" role="status">
+        {#if verifyResult.confirmed}
+          <div style="color: var(--doge-neon); font-weight: 600;">
+            ✅ Confirmed — {verifyResult.confirmations} confirmation{verifyResult.confirmations === 1 ? '' : 's'}
+          </div>
+          {#if verifyResult.blockHeight !== null}
+            <div style="color: var(--doge-muted);">Block height: {verifyResult.blockHeight}</div>
+          {/if}
+          {#if verifyResult.blockHash}
+            <div class="mono" style="color: var(--doge-subtle); overflow-wrap: anywhere;">Block: {verifyResult.blockHash}</div>
+          {/if}
+        {:else}
+          <div style="color: var(--doge-red);">⏳ Not yet confirmed — unconfirmed or unknown to the explorer.</div>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <!-- ── Error ─────────────────────────────────────────────────────────────── -->

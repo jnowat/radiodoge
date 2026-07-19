@@ -29,7 +29,6 @@ use tokio::sync::Mutex;
 mod tray;
 
 use radiodoge_core::{radio, wallet};
-use hex;
 use radiodoge_core::serial::SerialManager;
 use radiodoge_core::types::{
     BoardSettings, ConnectionStatusEvent, IncomingPacket, LoraSettings, NeighborEntry,
@@ -482,6 +481,43 @@ async fn get_balance(address: String) -> Result<f64, String> {
     Ok(koinus as f64 / 1e8)
 }
 
+/// Lightweight SPV inclusion check for a txid (confirmations + block) via Blockbook.
+#[tauri::command]
+async fn verify_tx_inclusion(txid: String) -> Result<radiodoge_core::spv::TxInclusion, String> {
+    radiodoge_core::spv::fetch_tx_inclusion(&txid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// v0.4.0 — Decode a QR code from raw image bytes (PNG/JPEG from a file picker or
+/// camera capture) and parse it as a Dogecoin address / BIP21 payment URI.
+///
+/// Returns the parsed address (+ optional amount/label) so the Send tab can fill
+/// the recipient field. Errors if no QR code is found or it isn't a Dogecoin
+/// address. Decoding runs on a blocking thread so the UI stays responsive.
+#[tauri::command]
+async fn scan_qr_from_image(
+    image_bytes: Vec<u8>,
+) -> Result<radiodoge_core::qr::ParsedPayment, String> {
+    tokio::task::spawn_blocking(move || {
+        let img = image::load_from_memory(&image_bytes)
+            .map_err(|e| format!("Could not read image: {}", e))?
+            .to_luma8();
+        let mut prepared = rqrr::PreparedImage::prepare(img);
+        let grids = prepared.detect_grids();
+        for grid in grids {
+            if let Ok((_meta, text)) = grid.decode() {
+                if let Some(parsed) = radiodoge_core::qr::parse_payment(&text) {
+                    return Ok(parsed);
+                }
+            }
+        }
+        Err("No Dogecoin address QR code found in the image".to_string())
+    })
+    .await
+    .map_err(|e| format!("QR decode task failed: {}", e))?
+}
+
 #[tauri::command]
 async fn send_transaction(
     tx: TransactionRequest,
@@ -647,7 +683,7 @@ async fn update_lora_settings(
         .trim_start_matches("4/")
         .parse::<u8>()
         .unwrap_or(5);
-    let tx_power = settings.power_dbm.max(2).min(22) as u8;
+    let tx_power = settings.power_dbm.clamp(2, 22) as u8;
     let lora_pkt = radio::build_set_lora_params(
         &settings.node_address, settings.spreading_factor, bw_idx, cr, freq_khz, tx_power,
     );
@@ -1504,7 +1540,7 @@ async fn mobile_build_lora_settings_packet(settings: LoraSettings) -> Vec<u8> {
         bw_idx,
         cr,
         freq_khz,
-        settings.power_dbm.max(2).min(22) as u8,
+        settings.power_dbm.clamp(2, 22) as u8,
     )
 }
 
@@ -1669,6 +1705,8 @@ pub fn run() {
             generate_mnemonic_wallet,
             import_mnemonic_wallet,
             get_balance,
+            verify_tx_inclusion,
+            scan_qr_from_image,
             send_transaction,
             update_lora_settings,
             get_lora_settings,

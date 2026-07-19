@@ -88,9 +88,24 @@ extern nodeAddress local;
     BLEDevice::startAdvertising();
     Serial.println("BLE started: " + String(bleName));
   }
+  // v0.4.0 — Enable/disable BLE advertising at runtime (CMD_BLE_TOGGLE 0x28).
+  // A connected central stays connected when advertising stops; new centrals
+  // simply can no longer discover the board.
+  void bleSetAdvertising(bool enable) {
+    if (pBleServer == NULL) {
+      if (enable) setupBLE();
+      return;
+    }
+    if (enable) {
+      BLEDevice::startAdvertising();
+    } else {
+      BLEDevice::stopAdvertising();
+    }
+  }
 #else
   void bleSend(uint8_t*, size_t) {}
   void setupBLE() {}
+  void bleSetAdvertising(bool) {}
 #endif
 
 // V3 Display Configuration
@@ -148,6 +163,9 @@ String gateway_password = "";
 bool gateway_mode = false;
 // v0.3.7 — WiFi on/off toggle (persisted to NVS, default on)
 bool wifi_enabled = true;
+
+// v0.4.0 — Board-is-source-of-truth BLE advertising flag (persisted to NVS)
+bool ble_enabled = true;
 // v0.3.7 — Duplicate node address detection
 bool addrConflict = false;
 unsigned long addrConflictNotifiedAt = 0;
@@ -190,6 +208,8 @@ Adafruit_SSD1306 radioDogeDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET
 #define LORA_IQ_INVERSION_ON false
 #define RX_TIMEOUT_VALUE 1000
 #define SERIAL_HEADER_SIZE 2
+// v0.4.x — over-the-air single-packet header: [type, flags, src(3), dst(3)] = 8 bytes.
+#define SINGLE_PACKET_HEADER_SIZE 8
 #define BUFFER_SIZE 256  // Define the payload size here
 #define CONTROL_SIZE 8
 #define SERIAL_TERMINATOR 255
@@ -205,6 +225,11 @@ Adafruit_SSD1306 radioDogeDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET
 
 // Mesh networking configuration
 #define ENABLE_MESH_REBROADCAST true
+// v0.4.0 — Maximum number of mesh hops a multipart broadcast may traverse before
+// a relay drops it instead of rebroadcasting. The hop count travels in the
+// multipart header's previously-unused `reserved` byte (offset 10) and is
+// incremented on each rebroadcast. Bounds mesh storms independently of the
+// dedup table (which only suppresses exact duplicates).
 #define MAX_REBROADCAST_HOPS 3
 #define HOST_ACK_NACK_SIZE 3
 
@@ -241,7 +266,7 @@ struct PendingRequest {
   bool requiresConfirmation;
   String requestId;      // Unique identifier for tracking
 };
-#define FIRMWARE_VERSION 8  // v0.3.8
+#define FIRMWARE_VERSION 9  // v0.4.0
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -278,6 +303,7 @@ struct MultipartReassembly {
   uint8_t totalParts;
   uint8_t receivedParts;
   uint8_t dataType;
+  uint8_t hops;          // v0.4.0 — mesh hop count from the multipart `reserved` byte
   unsigned long startTime;
   char assembledData[MAX_MULTIPART_PARTS * MULTIPART_CHUNK_SIZE];
   bool partsReceived[MAX_MULTIPART_PARTS];
@@ -417,8 +443,14 @@ void setup() {
   // Initialize control messages with loaded/default address
   InitControlMessages();
 
-  // v0.3.6 — Start BLE Nordic UART service
-  setupBLE();
+  // v0.4.0 — Load ble_enabled from NVS; only start BLE if enabled
+  loadBleEnabled();
+  if (ble_enabled) {
+    // v0.3.6 — Start BLE Nordic UART service
+    setupBLE();
+  } else {
+    Serial.println("BLE disabled (stored in NVS)");
+  }
   
   // Setup WiFi in dual mode (AP + Station)
   setupDualWiFi();
@@ -889,6 +921,26 @@ bool loadWifiEnabled() {
   nvs_close(h);
   if (err != ESP_OK) return false; // key not set yet; keep default
   wifi_enabled = (val != 0);
+  return true;
+}
+
+// v0.4.0 — BLE advertising NVS persistence (CMD_BLE_TOGGLE 0x28)
+void saveBleEnabledQuiet(bool enabled) {
+  nvs_handle_t h;
+  if (nvs_open("rd_settings", NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_u8(h, "ble_on", enabled ? 1 : 0);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+bool loadBleEnabled() {
+  nvs_handle_t h;
+  uint8_t val = 1; // default: BLE on
+  if (nvs_open("rd_settings", NVS_READONLY, &h) != ESP_OK) return false;
+  esp_err_t err = nvs_get_u8(h, "ble_on", &val);
+  nvs_close(h);
+  if (err != ESP_OK) return false; // key not set yet; keep default
+  ble_enabled = (val != 0);
   return true;
 }
 
@@ -2018,30 +2070,30 @@ void SendMultipartTransaction(nodeAddress destination, String transaction, Strin
 }
 
 // Send a large broadcast using multipart packets
-void SendMultipartBroadcast(String message, String type, String priority) {
+void SendMultipartBroadcast(String message, String type, String priority, uint8_t hops) {
   // Prepare broadcast data
   String broadcastData = type + ":" + priority + ":" + message;
   int totalLength = broadcastData.length();
-  
+
   // Calculate number of parts needed
   int totalParts = (totalLength + MULTIPART_CHUNK_SIZE - 1) / MULTIPART_CHUNK_SIZE;
-  
+
   if (totalParts > MAX_MULTIPART_PARTS) {
     addLog("[ERROR] Broadcast too large for multipart - " + String(totalLength) + " bytes, max " + String(MAX_MULTIPART_PARTS * MULTIPART_CHUNK_SIZE) + " bytes");
     return;
   }
-  
-  addLog("[LoRa] Sending MULTIPART BROADCAST - Type: " + type + ", Priority: " + priority + ", Length: " + String(totalLength) + ", Parts: " + String(totalParts));
-  
+
+  addLog("[LoRa] Sending MULTIPART BROADCAST - Type: " + type + ", Priority: " + priority + ", Length: " + String(totalLength) + ", Parts: " + String(totalParts) + ", Hops: " + String(hops));
+
   // Set destination as broadcast
   SetDestinationAsBroadcast();
-  
+
   // Send each part
   for (int part = 0; part < totalParts; part++) {
     int startPos = part * MULTIPART_CHUNK_SIZE;
     int chunkSize = min(MULTIPART_CHUNK_SIZE, totalLength - startPos);
     String chunk = broadcastData.substring(startPos, startPos + chunkSize);
-    
+
     // Create multipart packet
     MultipartPacket mpPacket;
     mpPacket.packetType = (uint8_t)MULTIPART_PACKET;
@@ -2054,7 +2106,7 @@ void SendMultipartBroadcast(String message, String type, String priority) {
     mpPacket.partNumber = part + 1;  // 1-based part numbering
     mpPacket.totalParts = totalParts;
     mpPacket.dataType = 2;  // Broadcast
-    mpPacket.reserved = 0;
+    mpPacket.reserved = hops;  // v0.4.0 — carry the mesh hop count in the reserved byte
     
     // Copy chunk data
     chunk.getBytes((unsigned char*)mpPacket.data, chunkSize + 1);
@@ -2111,12 +2163,12 @@ int FindMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNod
   return -1;  // Not found
 }
 
-int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t totalParts, uint8_t dataType) {
+int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t totalParts, uint8_t dataType, uint8_t hops) {
   if (activeMultipartSessions >= MAX_MULTIPART_PARTS) {
     addLog("[ERROR] No space for new multipart session");
     return -1;
   }
-  
+
   int index = activeMultipartSessions++;
   multipartBuffer[index].srcRegion = srcRegion;
   multipartBuffer[index].srcCommunity = srcCommunity;
@@ -2124,6 +2176,7 @@ int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcN
   multipartBuffer[index].totalParts = totalParts;
   multipartBuffer[index].receivedParts = 0;
   multipartBuffer[index].dataType = dataType;
+  multipartBuffer[index].hops = hops;  // v0.4.0 — from the multipart `reserved` byte
   multipartBuffer[index].startTime = millis();
   
   // Initialize parts received array
@@ -2143,11 +2196,12 @@ bool ProcessMultipartPacket() {
   uint8_t partNumber = rxPacket[7];
   uint8_t totalParts = rxPacket[8];
   uint8_t dataType = rxPacket[9];
-  
+  uint8_t hops = rxPacket[10];  // v0.4.0 — mesh hop count carried in the `reserved` byte
+
   // Find or create session
   int sessionIndex = FindMultipartSession(srcRegion, srcCommunity, srcNode, dataType);
   if (sessionIndex == -1) {
-    sessionIndex = CreateMultipartSession(srcRegion, srcCommunity, srcNode, totalParts, dataType);
+    sessionIndex = CreateMultipartSession(srcRegion, srcCommunity, srcNode, totalParts, dataType, hops);
     if (sessionIndex == -1) {
       addLog("[LoRa] Failed to create multipart session - buffer full");
       return false;
@@ -2254,13 +2308,13 @@ bool ReassembleMultipartPacket(int sessionIndex) {
   // Process based on data type
   switch (session->dataType) {
     case 0:  // Transaction
-      ProcessReassembledTransaction(assembledData, session->srcRegion, session->srcCommunity, session->srcNode);
+      ProcessReassembledTransaction(assembledData, session->srcRegion, session->srcCommunity, session->srcNode, session->hops);
       break;
     case 1:  // Message
-      ProcessReassembledMessage(assembledData, session->srcRegion, session->srcCommunity, session->srcNode);
+      ProcessReassembledMessage(assembledData, session->srcRegion, session->srcCommunity, session->srcNode, session->hops);
       break;
     case 2:  // Broadcast
-      ProcessReassembledBroadcast(assembledData, session->srcRegion, session->srcCommunity, session->srcNode);
+      ProcessReassembledBroadcast(assembledData, session->srcRegion, session->srcCommunity, session->srcNode, session->hops);
       break;
     default:
       addLog("[ERROR] Unknown multipart data type: " + String(session->dataType));
@@ -2272,7 +2326,7 @@ bool ReassembleMultipartPacket(int sessionIndex) {
   return true;
 }
 
-void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode) {
+void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t hops) {
   addLog("[LoRa] Processing reassembled TRANSACTION from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode));
   
   // Set sender address
@@ -2371,15 +2425,16 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
     addLog("[LoRa] No gateway forwarding performed - transaction stored locally only");
     
     // Rebroadcast transaction to other LoRa devices for mesh networking
-    if (ENABLE_MESH_REBROADCAST) {
-      addLog("[LoRa] Rebroadcasting transaction to other LoRa devices for mesh networking");
+    if (ENABLE_MESH_REBROADCAST && hops >= MAX_REBROADCAST_HOPS) {
+      // v0.4.0 — hop limit reached; drop instead of rebroadcasting to bound mesh storms
+      addLog("[LoRa] Mesh hop limit (" + String(MAX_REBROADCAST_HOPS) + ") reached at hop " + String(hops) + " - not rebroadcasting");
+    } else if (ENABLE_MESH_REBROADCAST) {
+      addLog("[LoRa] Rebroadcasting transaction to other LoRa devices for mesh networking (hop " + String(hops + 1) + ")");
       String rebroadcastData = "transaction:" + txType + ":" + txData;
-      if (rebroadcastData.length() > 255) {
-        addLog("[LoRa] Transaction too large for rebroadcast, using multipart");
-        SendMultipartBroadcast(rebroadcastData, "transaction", "normal");
-      } else {
-        SendBroadcast(rebroadcastData, "transaction", "normal");
-      }
+      // Always rebroadcast via multipart so the incremented hop counter (carried
+      // in the multipart `reserved` byte) survives the next relay; single-packet
+      // broadcasts have no header room for it.
+      SendMultipartBroadcast(rebroadcastData, "transaction", "normal", hops + 1);
     } else {
       addLog("[LoRa] Mesh rebroadcasting disabled - transaction stored locally only");
     }
@@ -2388,7 +2443,7 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
   addLog("[LoRa] Reassembled transaction processed and forwarded to host" + String(gateway_forwarded ? " and gateway" : ""));
 }
 
-void ProcessReassembledMessage(String messageData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode) {
+void ProcessReassembledMessage(String messageData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t hops) {
   addLog("[LoRa] Processing reassembled MESSAGE from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode));
   
   // Set sender address
@@ -2465,7 +2520,7 @@ bool isRecentlySeenBroadcast(uint8_t srcRegion, uint8_t srcCommunity, uint8_t sr
   return false;
 }
 
-void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode) {
+void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t hops) {
   // Suppress duplicate deliveries from mesh rebroadcasting
   if (isRecentlySeenBroadcast(srcRegion, srcCommunity, srcNode, broadcastData)) {
     addLog("[LoRa] Duplicate broadcast from " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode) + " suppressed");
@@ -2573,8 +2628,11 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
     addLog("[LoRa] No gateway forwarding performed - broadcast stored locally only");
     
     // Rebroadcast to other LoRa devices for mesh networking
-    if (ENABLE_MESH_REBROADCAST) {
-      addLog("[LoRa] Rebroadcasting to other LoRa devices for mesh networking");
+    if (ENABLE_MESH_REBROADCAST && hops >= MAX_REBROADCAST_HOPS) {
+      // v0.4.0 — hop limit reached; drop instead of rebroadcasting to bound mesh storms
+      addLog("[LoRa] Mesh hop limit (" + String(MAX_REBROADCAST_HOPS) + ") reached at hop " + String(hops) + " - not rebroadcasting");
+    } else if (ENABLE_MESH_REBROADCAST) {
+      addLog("[LoRa] Rebroadcasting to other LoRa devices for mesh networking (hop " + String(hops + 1) + ")");
       // Extract type and priority from original broadcast data
       String rebroadcastType = "transaction";
       String rebroadcastPriority = "normal";
@@ -2588,14 +2646,11 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
           rebroadcastPriority = broadcastData.substring(12, colonPos);
         }
       }
-      
+
       String rebroadcastData = rebroadcastType + ":" + rebroadcastPriority + ":" + txData;
-      if (rebroadcastData.length() > 255) {
-        addLog("[LoRa] Broadcast too large for rebroadcast, using multipart");
-        SendMultipartBroadcast(rebroadcastData, rebroadcastType, rebroadcastPriority);
-      } else {
-        SendBroadcast(rebroadcastData, rebroadcastType, rebroadcastPriority);
-      }
+      // Always rebroadcast via multipart so the incremented hop counter (carried
+      // in the multipart `reserved` byte) survives the next relay.
+      SendMultipartBroadcast(rebroadcastData, rebroadcastType, rebroadcastPriority, hops + 1);
     } else {
       addLog("[LoRa] Mesh rebroadcasting disabled - broadcast stored locally only");
     }
@@ -2736,7 +2791,8 @@ void ProcessNextQueuedRequest() {
 
 void ProcessBroadcastRequest(PendingRequest& req) {
   if (req.isMultipart) {
-    SendMultipartBroadcast(req.message, req.typeStr, req.priority);
+    // Locally-originated broadcast starts at hop 0.
+    SendMultipartBroadcast(req.message, req.typeStr, req.priority, 0);
     addLog("[QUEUE] Sent multipart broadcast - ID: " + req.requestId);
   } else {
     SendBroadcast(req.message, req.typeStr, req.priority);
@@ -2925,22 +2981,50 @@ void HandleDesktopCommand(uint8_t cmdByte) {
   }
 
   switch (cmdByte) {
-    case 0x10: { // CMD_DOGE_TX — forward payload over LoRa
+    case 0x10: { // CMD_DOGE_TX — relay a signed transaction over LoRa.
+      // v0.4.0 (WP1): transmit the FULL desktop-format packet — command byte plus
+      // 8-byte header — so a receiving gateway can hand it to its serial host
+      // (radiodoge-cli daemon) verbatim and broadcast it to the Dogecoin network.
+      // Earlier firmware sent only the raw payload with no header, so a gateway
+      // could not recognise or forward it. hdrRest holds [src_r,src_c,src_n,dst_r,dst_c,dst_n].
       if (extraLen > 0) {
-        Radio.Send(extraPayload, extraLen);
+        uint8_t ota[BUFFER_SIZE];
+        ota[0] = 0x10; ota[1] = 0x00;
+        for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
+        int payLen = extraLen;
+        if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
+        memcpy(ota + 8, extraPayload, payLen);
+        int otaLen = 8 + payLen;
+        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
         pktTxCount++;
         // v0.3.6 — trigger "TX OK!" OLED page after successful send
         showTxOk = true;
         txOkTimestamp = millis();
+        isLoRaIdle = true;
       }
       uint8_t reply[8] = {0x10, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
       bleSend(reply, 8);
       break;
     }
-    case 0x11: { // CMD_REQUEST_BALANCE — ACK only
+    case 0x11: { // CMD_REQUEST_BALANCE — relay over LoRa so a gateway can answer.
+      // v0.4.0 (WP1): forward the full desktop packet over the air; the receiving
+      // gateway hands it to its daemon, which looks up the balance and relays a
+      // "BAL:<koinus>" MESSAGE back to the requester over LoRa.
+      if (extraLen > 0) {
+        uint8_t ota[BUFFER_SIZE];
+        ota[0] = 0x11; ota[1] = 0x00;
+        for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
+        int payLen = extraLen;
+        if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
+        memcpy(ota + 8, extraPayload, payLen);
+        int otaLen = 8 + payLen;
+        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
+        isLoRaIdle = true;
+      }
       uint8_t reply[8] = {0x11, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
+      bleSend(reply, 8);
       break;
     }
     case 0x20: { // CMD_GET_FIRMWARE_VERSION — reply with version string as payload
@@ -3046,6 +3130,25 @@ void HandleDesktopCommand(uint8_t cmdByte) {
       break;
     }
 
+    // v0.4.0 — CMD_BLE_TOGGLE (0x28): enable/disable BLE advertising. Payload byte 0: 1=on, 0=off.
+    // Persists to NVS so the choice survives reboot; reply payload byte reports current state.
+    case 0x28: {
+      if (extraLen > 0) {
+        ble_enabled = (extraPayload[0] != 0);
+        saveBleEnabledQuiet(ble_enabled);
+        bleSetAdvertising(ble_enabled);
+        addLog(String("[BLE] Advertising ") + (ble_enabled ? "enabled" : "disabled") + " by host command");
+      }
+      uint8_t reply[9];
+      reply[0] = 0x28; reply[1] = 0x00;
+      reply[2] = local.region; reply[3] = local.community; reply[4] = local.node;
+      reply[5] = 0xFF; reply[6] = 0xFF; reply[7] = 0xFF;
+      reply[8] = ble_enabled ? 1 : 0;
+      Serial.write(reply, 9);
+      bleSend(reply, 9);
+      break;
+    }
+
     // v0.3.8 — CMD_GET_MAC (0x27): Report the WiFi station MAC address (6 bytes).
     case 0x27: {
       uint8_t mac[6] = {0};
@@ -3065,6 +3168,41 @@ void HandleDesktopCommand(uint8_t cmdByte) {
       bleSend(hostNACK, HOST_ACK_NACK_SIZE);
       break;
   }
+}
+
+// v0.4.0 (WP1) — Relay a desktop CMD_MESSAGE (0x03) from the host out over LoRa.
+// The daemon replies to a relayed transaction or balance request with a desktop
+// CMD_MESSAGE ("TX_ACK:<txid>" / "BAL:<koinus>") addressed to the originating
+// node; a gateway must put that message on the air so it reaches the requester.
+// The full 8-byte desktop packet is transmitted verbatim (CMD_MESSAGE == the
+// firmware's messageType MESSAGE == 0x03), so the destination node forwards it to
+// its own host app, which parses the TX_ACK:/BAL: prefix.
+void RelayDesktopMessageOverLoRa() {
+  // ReadSerialHeader already consumed [0x03, 0x00]; the delay(500) in HostSerialRead
+  // has let the rest arrive: [src_r, src_c, src_n, dst_r, dst_c, dst_n, ...text...].
+  uint8_t rest[BUFFER_SIZE];
+  int restLen = 0;
+  while (Serial.available() > 0 && restLen < BUFFER_SIZE) {
+    rest[restLen++] = (uint8_t)Serial.read();
+  }
+  if (restLen < 6) {
+    Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+    return;
+  }
+  uint8_t ota[BUFFER_SIZE];
+  ota[0] = 0x03;  // CMD_MESSAGE == messageType MESSAGE
+  ota[1] = 0x00;
+  for (int i = 0; i < 6; i++) ota[2 + i] = rest[i];  // src(3) + dst(3)
+  int textLen = restLen - 6;
+  if (8 + textLen > BUFFER_SIZE) textLen = BUFFER_SIZE - 8;
+  for (int i = 0; i < textLen; i++) ota[8 + i] = rest[6 + i];
+  int otaLen = 8 + textLen;
+  nodeAddress relayDest = { ota[5], ota[6], ota[7] };
+  DisplayTXMessage("Relay", relayDest);
+  Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
+  addLog("[GATEWAY] Relayed host MESSAGE over LoRa to " + String(ota[5]) + "." + String(ota[6]) + "." + String(ota[7]) + " (" + String(otaLen) + " bytes)");
+  Serial.write(hostACK, HOST_ACK_NACK_SIZE);
+  isLoRaIdle = true;
 }
 
 // Read serial data from the host and perform the specified command/control function.
@@ -3089,10 +3227,23 @@ void HostSerialRead() {
 
   // OPTIMIZED FOR DESKTOP v0.3.3 – SAFE
   // v0.3.6 — extended with 0x22 (GET_SETTINGS) and 0x23 (SET_GATEWAY)
+  // v0.4.0 — extended with 0x24 (WIFI_TOGGLE), 0x26 (GET_BATTERY), 0x27 (GET_MAC),
+  //          and 0x28 (BLE_TOGGLE). Their handlers existed since v0.3.7/0.3.8 but
+  //          were never routed here, so the board NACKed them.
   // Intercept desktop-only command IDs before the switch (no matching serialCommand enum).
   uint8_t cmdByte = (uint8_t)commandVal;
+
+  // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
+  // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
+  // PING_REQUEST(3) enum value, which carries a non-zero payload size.
+  if (gateway_mode && cmdByte == 0x03 && payloadSize == 0) {
+    RelayDesktopMessageOverLoRa();
+    return;
+  }
+
   if (cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
-      || cmdByte == 0x22 || cmdByte == 0x23) {
+      || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
+      || cmdByte == 0x27 || cmdByte == 0x28) {
     HandleDesktopCommand(cmdByte);
     return;
   }
@@ -3270,11 +3421,36 @@ void ParseHostFormedPacket(uint8_t payloadSize) {
 }
 
 // Parse a LoRa message received over the air from another module
+// v0.4.0 (WP1) — Hand a received LoRa packet to the serial host so the app or the
+// radiodoge-cli daemon can act on it. Desktop-format gateway packets (CMD_DOGE_TX
+// 0x10, CMD_REQUEST_BALANCE 0x11) carry the app command byte and the same 8-byte
+// header the host expects, so they are forwarded verbatim. Native MESSAGE packets
+// (messageType MESSAGE == CMD_MESSAGE == 0x03) are already in the host's format,
+// so relayed "TX_ACK:<txid>" / "BAL:<koinus>" replies reach the app too.
+//
+// Transaction/balance forwarding is limited to gateway mode (only a gateway host
+// runs a daemon); incoming messages are always forwarded so the app sees replies.
+void ForwardReceivedPacketToHost() {
+  uint8_t cmd = rxPacket[0];
+  bool forward = false;
+  if (cmd == 0x10 || cmd == 0x11) {
+    forward = gateway_mode;
+  } else if (cmd == MESSAGE) {
+    forward = true;
+  }
+  if (forward) {
+    Serial.write(rxPacket, rxSize);
+    addLog("[HOST] Forwarded LoRa cmd 0x" + String(cmd, HEX) + " to serial host (" + String(rxSize) + " bytes)");
+  }
+}
+
 void ParseReceivedMessage() {
   addLog("[DEBUG] Received packet - Size: " + String(rxSize) + " bytes, First byte: " + String(rxPacket[0]));
-  
+
   if (CheckIfPacketForMe()) {
     addLog("[DEBUG] Packet is for me - processing...");
+    // v0.4.0 (WP1) — forward to the serial host (daemon/app) before local handling.
+    ForwardReceivedPacketToHost();
     //Serial.println("PACKET FOR ME");
     messageType mType = (messageType)rxPacket[0];
     addLog("[DEBUG] Packet type: " + String(mType) + ", Is multipart: " + String(mType == MULTIPART_PACKET));
@@ -3438,13 +3614,25 @@ bool CheckIfPacketIsGlobalBroadcast()
 
 // Extract the payload message from the given buffer (assists with displaying on screen)
 String ExtractStringMessageFromBuffer(uint8_t *buf, int bufferSize) {
-  int messageSize = bufferSize - 6;
-  char *extractedMessage = new char[messageSize];
-  for (int i = 0; i < messageSize; i++) {
-    extractedMessage[i] = (char)buf[i + 7];
+  // v0.4.x fix — the previous implementation paired new[] with free() (undefined
+  // behavior), read one byte past the end of the buffer, and started at offset 7
+  // (one byte before the payload), prepending the destination-node byte as a
+  // stray leading character. The 8-byte packet header is [type, flags, src(3),
+  // dst(3)] and the payload begins at offset 8. Build the String directly from
+  // offset 8, stopping at the payload end or the first NUL, whichever comes first.
+  String messageString = "";
+  if (bufferSize <= SINGLE_PACKET_HEADER_SIZE) {
+    return messageString;
   }
-  String messageString(extractedMessage);
-  free(extractedMessage);
+  int messageSize = bufferSize - SINGLE_PACKET_HEADER_SIZE;
+  messageString.reserve(messageSize);
+  for (int i = 0; i < messageSize; i++) {
+    char c = (char)buf[SINGLE_PACKET_HEADER_SIZE + i];
+    if (c == '\0') {
+      break;
+    }
+    messageString += c;
+  }
   return messageString;
 }
 

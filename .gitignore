@@ -354,3 +354,7 @@ MigrationBackup/
 # Rust build artifacts
 /target/
 radiodoge-gui/.svelte-kit/
+
+# Local Tauri build artifacts (generated at build time)
+radiodoge-gui/src-tauri/binaries/
+radiodoge-gui/src-tauri/gen/schemas/

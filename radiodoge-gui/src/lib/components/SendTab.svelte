@@ -7,6 +7,7 @@
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
+  import type { ParsedPayment } from '$lib/types';
   import DogeSpinner from './DogeSpinner.svelte';
   interface Props {
     onTriggerConfetti: () => void;
@@ -107,6 +108,41 @@
       // No clipboard permission
     }
   }
+
+  // ── QR code scanning (image file → Rust rqrr decoder) ─────────────────────
+  let qrInput = $state<HTMLInputElement | null>(null);
+  let scanning = $state(false);
+  let scanNote = $state<string | null>(null);
+
+  function openQrPicker() {
+    scanNote = null;
+    qrInput?.click();
+  }
+
+  async function onQrFileSelected(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    // Reset so selecting the same file again re-triggers change.
+    input.value = '';
+    if (!file) return;
+
+    scanning = true;
+    scanNote = null;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const parsed = await invoke<ParsedPayment>('scan_qr_from_image', {
+        imageBytes: Array.from(bytes),
+      });
+      toAddress = parsed.address;
+      if (parsed.amount != null) amountDoge = String(parsed.amount);
+      if (parsed.label && !memo) memo = parsed.label;
+      scanNote = `✅ Scanned ${parsed.address.slice(0, 8)}…${parsed.amount != null ? ` · ${parsed.amount} DOGE` : ''}`;
+    } catch (e: unknown) {
+      scanNote = `❌ ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      scanning = false;
+    }
+  }
 </script>
 
 <div style="padding: 24px; max-width: 600px; margin: 0 auto;">
@@ -151,7 +187,31 @@
         <button onclick={pasteAddress} class="btn-ghost" style="padding: 10px 14px; flex-shrink: 0;">
           📋 Paste
         </button>
+        <button
+          onclick={openQrPicker}
+          disabled={scanning}
+          class="btn-ghost"
+          style="padding: 10px 14px; flex-shrink: 0;"
+          title="Scan a Dogecoin QR code from an image file"
+        >
+          {scanning ? '⏳' : '📷'} Scan QR
+        </button>
+        <!-- Hidden picker: accepts an image; `capture` hints a camera on mobile. -->
+        <input
+          bind:this={qrInput}
+          onchange={onQrFileSelected}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          style="display: none;"
+          aria-hidden="true"
+        />
       </div>
+      {#if scanNote}
+        <p style="font-size: 0.75rem; margin: 6px 0 0 0; color: {scanNote.startsWith('✅') ? 'var(--doge-neon)' : 'var(--doge-red)'};">
+          {scanNote}
+        </p>
+      {/if}
       {#if toAddress && !isValidAddress()}
         <p style="color: var(--doge-red); font-size: 0.75rem; margin: 6px 0 0 0;">
           ⚠️ Dogecoin addresses start with "D" and are 25-34 characters

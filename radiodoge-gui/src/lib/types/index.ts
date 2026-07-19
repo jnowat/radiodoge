@@ -75,6 +75,8 @@ export interface IncomingPacket {
   payloadHex: string;
   decoded?: string;
   rssi: number;
+  /** v0.4.0 — mesh hops relayed before reaching us (0 = heard directly). */
+  hops?: number;
 }
 
 export type ConnectionStatusType = 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting';
@@ -141,6 +143,28 @@ export interface TxHistoryEntry {
   amountDoge: number;
   memo?: string;
   status: 'sent' | 'failed' | string;
+}
+
+/**
+ * Result of decoding a Dogecoin address / BIP21 URI from a scanned QR code.
+ * Mirrors `radiodoge_core::qr::ParsedPayment` (returned by `scan_qr_from_image`).
+ */
+export interface ParsedPayment {
+  address: string;
+  amount: number | null;
+  label: string | null;
+}
+
+/**
+ * Lightweight SPV inclusion result returned by the `verify_tx_inclusion` command.
+ * Mirrors `radiodoge_core::spv::TxInclusion`.
+ */
+export interface TxInclusion {
+  txid: string;
+  confirmed: boolean;
+  confirmations: number;
+  blockHeight: number | null;
+  blockHash: string | null;
 }
 
 /**
