@@ -146,6 +146,16 @@ export interface TxHistoryEntry {
 }
 
 /**
+ * Result of decoding a Dogecoin address / BIP21 URI from a scanned QR code.
+ * Mirrors `radiodoge_core::qr::ParsedPayment` (returned by `scan_qr_from_image`).
+ */
+export interface ParsedPayment {
+  address: string;
+  amount: number | null;
+  label: string | null;
+}
+
+/**
  * Lightweight SPV inclusion result returned by the `verify_tx_inclusion` command.
  * Mirrors `radiodoge_core::spv::TxInclusion`.
  */

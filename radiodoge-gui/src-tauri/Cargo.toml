@@ -65,6 +65,13 @@ bs58 = { version = "0.5", features = ["check"] }
 rand = "0.8"
 hex = "0.4"
 
+# v0.4.0 — QR code scanning for the recipient field.
+# rqrr is a pure-Rust QR decoder; image loads PNG/JPEG bytes from the picker.
+# Both are host-side (no camera dependency), so scanning works on every desktop
+# webview including WebKitGTK where BarcodeDetector is unavailable.
+rqrr = "0.7"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
 # Error handling
 thiserror = "1"
 anyhow = "1"

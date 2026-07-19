@@ -103,7 +103,9 @@ Rock-solid against real hardware, and now on your phone.
   multipart `reserved` byte on the air), surfaced as a "⇄ N hops" badge in the packet log, in the CLI receive /
   daemon output, and in exported logs. Firmware mesh rebroadcast increments the count and enforces
   `MAX_REBROADCAST_HOPS`, so relays are bounded by hop count, not just the dedup table
-- 🔜 **QR code scanning** — camera/image input for the recipient field
+- ✅ **QR code scanning** — a "📷 Scan QR" button on the Send tab decodes a Dogecoin QR from an image file (or
+  camera capture on mobile) via a pure-Rust `rqrr` backend command, and a `radiodoge-core::qr` parser fills the
+  recipient — plus amount and memo — from a bare address or a BIP21 `dogecoin:…?amount=…&label=…` URI
 - 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee
 
 ---

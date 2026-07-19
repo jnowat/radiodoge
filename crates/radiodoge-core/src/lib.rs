@@ -13,6 +13,7 @@
 //! - `radiodoge-cli` (headless CLI replacing RadioDogeSharp and serdog)
 //! - Future Android / embedded targets
 
+pub mod qr;
 pub mod radio;
 pub mod serial;
 pub mod spv;

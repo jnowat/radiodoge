@@ -489,6 +489,35 @@ async fn verify_tx_inclusion(txid: String) -> Result<radiodoge_core::spv::TxIncl
         .map_err(|e| e.to_string())
 }
 
+/// v0.4.0 — Decode a QR code from raw image bytes (PNG/JPEG from a file picker or
+/// camera capture) and parse it as a Dogecoin address / BIP21 payment URI.
+///
+/// Returns the parsed address (+ optional amount/label) so the Send tab can fill
+/// the recipient field. Errors if no QR code is found or it isn't a Dogecoin
+/// address. Decoding runs on a blocking thread so the UI stays responsive.
+#[tauri::command]
+async fn scan_qr_from_image(
+    image_bytes: Vec<u8>,
+) -> Result<radiodoge_core::qr::ParsedPayment, String> {
+    tokio::task::spawn_blocking(move || {
+        let img = image::load_from_memory(&image_bytes)
+            .map_err(|e| format!("Could not read image: {}", e))?
+            .to_luma8();
+        let mut prepared = rqrr::PreparedImage::prepare(img);
+        let grids = prepared.detect_grids();
+        for grid in grids {
+            if let Ok((_meta, text)) = grid.decode() {
+                if let Some(parsed) = radiodoge_core::qr::parse_payment(&text) {
+                    return Ok(parsed);
+                }
+            }
+        }
+        Err("No Dogecoin address QR code found in the image".to_string())
+    })
+    .await
+    .map_err(|e| format!("QR decode task failed: {}", e))?
+}
+
 #[tauri::command]
 async fn send_transaction(
     tx: TransactionRequest,
@@ -1677,6 +1706,7 @@ pub fn run() {
             import_mnemonic_wallet,
             get_balance,
             verify_tx_inclusion,
+            scan_qr_from_image,
             send_transaction,
             update_lora_settings,
             get_lora_settings,
