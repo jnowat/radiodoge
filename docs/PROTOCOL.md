@@ -107,11 +107,28 @@ Consequences, and what the code does about them:
   limit. Add a change output (`+34`) or a second input (`+148`) and it no longer fits, so **most real
   transactions cannot be relayed over LoRa today**. Broadcast them over the internet instead
   (`radiodoge-cli broadcast`, or the Wallet tab).
-- Nothing on the host side reassembles multipart either: the gateway daemon and both framing loops handle
-  single packets only.
+This is the **host → board** direction only. Every other direction reassembles correctly:
+`radio::MultipartReassembler` stitches sequences back together keyed by `(source, session id)`, and both
+framing loops route packets through `radio::ingest_packet`, so a multipart payload arriving **over the air**
+at a gateway is delivered to the daemon as one complete packet.
 
-Fixing this needs a firmware change (a host framing that doesn't overload byte 1) plus host-side reassembly.
-Tracked in the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress).
+What remains is a firmware change: a host framing that doesn't overload byte 1 as a length. Tracked in the
+[Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress).
+
+### Reassembly semantics
+
+`MultipartReassembler` is what any host implementation should match:
+
+| Behaviour | Rule |
+|---|---|
+| Session key | `(source address, session id)` — concurrent senders never interleave |
+| Ordering | Parts may arrive in any order |
+| Duplicates | Ignored; a retransmit never counts twice toward completion |
+| Session timeout | 30 s (`MULTIPART_SESSION_TIMEOUT_SECS`), matching the firmware's `MULTIPART_TIMEOUT_MS` |
+| Concurrent sessions | 8 max (`MAX_CONCURRENT_MULTIPART_SESSIONS`); the oldest is evicted beyond that |
+| Malformed frames | `total_parts == 0`, `total_parts > 20`, or `index >= total_parts` are rejected at parse time |
+| Session-id reuse | A reused id with a different part count or command restarts the session |
+| Hop count | The reassembled packet reports the highest hop count seen across its parts |
 
 ---
 

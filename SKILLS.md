@@ -118,9 +118,23 @@ Packet framing exists in two places:
 - `crates/radiodoge-core/src/serial.rs` — desktop serial read loop
 - `radiodoge-gui/src-tauri/src/lib.rs` → `mobile_push_bytes` — Android USB/BLE bridge
 
-They now share `radio::frame_packet_len` and `radio::is_known_command`. **Keep it that way.** Both bugs found
-in the last review were the two copies drifting apart. If you add a command byte, add it to
-`is_known_command` — a byte missing there is discarded as noise, which shifts every packet behind it.
+They now share `radio::frame_packet_len`, `radio::is_known_command`, and `radio::ingest_packet`. **Keep it that
+way.** Both bugs found in the last review were the two copies drifting apart. If you add a command byte, add it
+to `is_known_command` — a byte missing there is discarded as noise, which shifts every packet behind it.
+
+### Multipart reassembly happens in the framing layer
+
+`radio::ingest_packet` is the entry point both loops use. It returns `None` for a multipart fragment and the
+complete packet once the sequence finishes, so **everything downstream — GUI, packet log, gateway daemon —
+only ever sees whole payloads.** Don't add reassembly at a higher layer; that's how you get two
+implementations again.
+
+The frame is drained from the accumulator whether or not a packet comes out; a fragment has still been
+consumed. Getting that backwards makes the loop spin on the same bytes forever.
+
+Multipart is identified by the **flags byte**, not the command byte — a multipart `CMD_DOGE_TX` frame still
+starts with `0x10`. Use `radio::is_multipart_flags`, which masks off the hop nibble so relayed frames are
+still recognised.
 
 ### `exact_packet_len` is a contract with the firmware
 

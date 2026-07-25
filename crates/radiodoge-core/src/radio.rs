@@ -84,6 +84,14 @@ pub fn flags_with_hops(base: u8, hops: u8) -> u8 {
     (base & 0x0F) | ((hops.min(0x0F)) << 4)
 }
 
+/// `true` if a flags byte marks the packet as part of a multipart sequence.
+///
+/// Only the low nibble carries the multipart bit; the high nibble is the mesh
+/// hop count, so a relayed multipart frame still reports `true`.
+pub fn is_multipart_flags(flags: u8) -> bool {
+    (flags & 0x0F) == FLAG_MULTIPART
+}
+
 /// Produce the relayed form of a packet: the same bytes with the header's hop
 /// count incremented by one.
 ///
@@ -333,6 +341,17 @@ pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
         return None;
     }
 
+    // A multipart frame is identified by its flags byte, not its command byte —
+    // it reuses the carried command (e.g. CMD_DOGE_TX). It has a 12-byte header
+    // and, like other variable-length frames, no in-band chunk length.
+    if is_multipart_flags(buf[1]) {
+        if buf.len() < MULTIPART_HDR_LEN {
+            return None;
+        }
+        let chunk = &buf[MULTIPART_HDR_LEN..];
+        return Some(MULTIPART_HDR_LEN + chunk.len().min(MULTIPART_CHUNK_LEN));
+    }
+
     if let Some(n) = exact_packet_len(cmd) {
         // A fixed-size reply split across two reads must wait for its tail,
         // not be emitted short.
@@ -458,6 +477,217 @@ pub fn try_build_multipart_packets(
         .collect())
 }
 
+// ─── Multipart reassembly ────────────────────────────────────────────────────
+
+/// One parsed multipart frame, as produced by [`parse_multipart`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultipartPart<'a> {
+    /// The command the reassembled payload carries (e.g. [`CMD_DOGE_TX`]).
+    pub command: u8,
+    pub source: NodeAddress,
+    pub destination: NodeAddress,
+    /// Mesh hop count from the flags byte's upper nibble.
+    pub hops: u8,
+    /// How many parts make up the complete payload.
+    pub total_parts: u8,
+    /// This part's 0-based position.
+    pub index: u8,
+    /// Random id shared by every part of one payload.
+    pub session_id: u16,
+    pub chunk: &'a [u8],
+}
+
+/// Parse a multipart frame. Returns `None` if `buf` is not a well-formed
+/// multipart packet — including structurally impossible part counts/indices,
+/// which are rejected here so the reassembler never has to defend against them.
+pub fn parse_multipart(buf: &[u8]) -> Option<MultipartPart<'_>> {
+    if buf.len() < MULTIPART_HDR_LEN || !is_multipart_flags(buf[1]) {
+        return None;
+    }
+    let total_parts = buf[8];
+    let index = buf[9];
+    if total_parts == 0 || total_parts > MAX_MULTIPART_PARTS || index >= total_parts {
+        return None;
+    }
+    Some(MultipartPart {
+        command: buf[0],
+        source: NodeAddress::new(buf[2], buf[3], buf[4]),
+        destination: NodeAddress::new(buf[5], buf[6], buf[7]),
+        hops: hops_from_flags(buf[1]),
+        total_parts,
+        index,
+        session_id: u16::from_be_bytes([buf[10], buf[11]]),
+        chunk: &buf[MULTIPART_HDR_LEN..],
+    })
+}
+
+/// How long an incomplete multipart session is kept before being discarded.
+/// Matches the firmware's `MULTIPART_TIMEOUT_MS` (30 s) so both ends give up together.
+pub const MULTIPART_SESSION_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum multipart payloads being assembled at once. Beyond this the oldest
+/// session is evicted, bounding memory against a node that starts many
+/// sequences and finishes none.
+pub const MAX_CONCURRENT_MULTIPART_SESSIONS: usize = 8;
+
+#[derive(Debug)]
+struct MultipartSession {
+    command: u8,
+    destination: NodeAddress,
+    hops: u8,
+    total_parts: u8,
+    /// One slot per part; `None` until that part arrives.
+    parts: Vec<Option<Vec<u8>>>,
+    received: usize,
+    started_at: u64,
+}
+
+/// Reassembles multipart payloads split by [`try_build_multipart_packets`].
+///
+/// Parts may arrive out of order, duplicated, or interleaved with other
+/// sequences — sessions are keyed by `(source, session_id)`. Incomplete
+/// sessions are dropped after [`MULTIPART_SESSION_TIMEOUT_SECS`], and at most
+/// [`MAX_CONCURRENT_MULTIPART_SESSIONS`] are tracked at once, so a peer that
+/// never finishes a sequence cannot grow memory without bound.
+///
+/// Time is passed in rather than read from the clock, which keeps the type
+/// deterministic and lets the tests drive expiry directly.
+///
+/// ```
+/// # use radiodoge_core::radio::*;
+/// # use radiodoge_core::types::NodeAddress;
+/// let (src, dst) = (NodeAddress::new(10, 0, 1), NodeAddress::new(10, 0, 2));
+/// let payload = vec![7u8; 400];
+/// let packets = try_build_multipart_packets(&src, &dst, CMD_DOGE_TX, &payload).unwrap();
+///
+/// let mut rx = MultipartReassembler::new();
+/// let mut done = None;
+/// for pkt in &packets {
+///     done = rx.push(&parse_multipart(pkt).unwrap(), 0);
+/// }
+/// assert_eq!(done.unwrap().payload, payload);
+/// ```
+#[derive(Debug, Default)]
+pub struct MultipartReassembler {
+    sessions: Vec<((NodeAddress, u16), MultipartSession)>,
+}
+
+/// A fully reassembled multipart payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssembledPayload {
+    pub command: u8,
+    pub source: NodeAddress,
+    pub destination: NodeAddress,
+    pub hops: u8,
+    pub payload: Vec<u8>,
+}
+
+impl MultipartReassembler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of sequences currently being assembled (for diagnostics/tests).
+    pub fn pending_sessions(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Absorb one part. Returns the complete payload once the final missing
+    /// part arrives, otherwise `None`.
+    ///
+    /// `now_secs` is a monotonic-ish wall clock in seconds, used only for
+    /// session expiry.
+    pub fn push(&mut self, part: &MultipartPart<'_>, now_secs: u64) -> Option<AssembledPayload> {
+        self.expire(now_secs);
+
+        let key = (part.source.clone(), part.session_id);
+
+        let slot = self.sessions.iter().position(|(k, _)| *k == key);
+        let slot = match slot {
+            Some(i) => {
+                // A sender reusing a session id with a different shape means the
+                // previous sequence was abandoned; start over rather than mixing
+                // parts of two payloads into one buffer.
+                let stale = {
+                    let s = &self.sessions[i].1;
+                    s.total_parts != part.total_parts || s.command != part.command
+                };
+                if stale {
+                    self.sessions[i].1 = MultipartSession::new(part, now_secs);
+                }
+                i
+            }
+            None => {
+                if self.sessions.len() >= MAX_CONCURRENT_MULTIPART_SESSIONS {
+                    // Evict the least recently started session.
+                    if let Some(oldest) = self
+                        .sessions
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, (_, s))| s.started_at)
+                        .map(|(i, _)| i)
+                    {
+                        self.sessions.remove(oldest);
+                    }
+                }
+                self.sessions
+                    .push((key, MultipartSession::new(part, now_secs)));
+                self.sessions.len() - 1
+            }
+        };
+
+        let session = &mut self.sessions[slot].1;
+
+        // A duplicate part is ignored rather than counted twice; a retransmit
+        // must not make the session look complete when parts are still missing.
+        let cell = &mut session.parts[part.index as usize];
+        if cell.is_none() {
+            *cell = Some(part.chunk.to_vec());
+            session.received += 1;
+        }
+        // Track the highest hop count seen — the payload travelled at least that far.
+        session.hops = session.hops.max(part.hops);
+
+        if session.received < session.total_parts as usize {
+            return None;
+        }
+
+        let (_, session) = self.sessions.remove(slot);
+        let mut payload = Vec::new();
+        for chunk in session.parts.into_iter() {
+            payload.extend_from_slice(&chunk.expect("all parts present when received == total"));
+        }
+        Some(AssembledPayload {
+            command: session.command,
+            source: part.source.clone(),
+            destination: session.destination,
+            hops: session.hops,
+            payload,
+        })
+    }
+
+    /// Drop sessions that have been incomplete for too long.
+    fn expire(&mut self, now_secs: u64) {
+        self.sessions.retain(|(_, s)| {
+            now_secs.saturating_sub(s.started_at) < MULTIPART_SESSION_TIMEOUT_SECS
+        });
+    }
+}
+
+impl MultipartSession {
+    fn new(part: &MultipartPart<'_>, now_secs: u64) -> Self {
+        MultipartSession {
+            command: part.command,
+            destination: part.destination.clone(),
+            hops: part.hops,
+            total_parts: part.total_parts,
+            parts: vec![None; part.total_parts as usize],
+            received: 0,
+            started_at: now_secs,
+        }
+    }
+}
+
 /// Parse an incoming byte buffer into an IncomingPacket.
 ///
 /// Returns None if the buffer is too short or malformed.
@@ -493,6 +723,50 @@ pub fn parse_incoming(buf: &[u8], rssi: i16) -> Option<IncomingPacket> {
         rssi,
         hops,
     })
+}
+
+/// Turn one framed packet into an [`IncomingPacket`], transparently reassembling
+/// multipart sequences.
+///
+/// This is what both framing loops call, so the desktop serial path and the
+/// Android USB/BLE bridge treat multipart identically and every downstream
+/// consumer — GUI, packet log, gateway daemon — sees a single complete packet
+/// rather than fragments it would have to stitch together itself.
+///
+/// Returns `None` for a fragment that does not yet complete a payload.
+pub fn ingest_packet(
+    buf: &[u8],
+    rssi: i16,
+    reassembler: &mut MultipartReassembler,
+    now_secs: u64,
+) -> Option<IncomingPacket> {
+    if buf.len() >= SINGLE_HDR_LEN && is_multipart_flags(buf[1]) {
+        // A malformed multipart frame is dropped rather than surfaced as a
+        // bogus single packet with multipart header bytes in its payload.
+        let part = parse_multipart(buf)?;
+        let done = reassembler.push(&part, now_secs)?;
+        return Some(assembled_to_packet(done, rssi));
+    }
+    parse_incoming(buf, rssi)
+}
+
+/// Build the `IncomingPacket` a completed multipart payload represents, as if it
+/// had arrived as one packet.
+fn assembled_to_packet(a: AssembledPayload, rssi: i16) -> IncomingPacket {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    IncomingPacket {
+        timestamp,
+        source: a.source,
+        destination: a.destination,
+        command: a.command,
+        payload_hex: hex::encode(&a.payload),
+        decoded: decode_payload(a.command, &a.payload),
+        rssi,
+        hops: a.hops,
+    }
 }
 
 /// Attempt to decode a packet payload based on command type.
@@ -899,6 +1173,271 @@ mod tests {
         let ascii = "a".repeat(200);
         let pkt = build_message(&test_src(), &test_dst(), &ascii);
         assert_eq!(pkt.len() - SINGLE_HDR_LEN, MAX_SINGLE_PAYLOAD_LEN);
+    }
+
+    // ─── Multipart reassembly ────────────────────────────────────────────────
+
+    fn multipart_for(payload: &[u8]) -> Vec<Vec<u8>> {
+        try_build_multipart_packets(&test_src(), &test_dst(), CMD_DOGE_TX, payload)
+            .expect("payload should encode")
+    }
+
+    #[test]
+    fn test_reassembles_split_payload_in_order() {
+        let payload: Vec<u8> = (0..500u32).map(|i| (i % 251) as u8).collect();
+        let packets = multipart_for(&payload);
+        assert!(packets.len() > 1, "payload should actually split");
+
+        let mut rx = MultipartReassembler::new();
+        let mut out = None;
+        for (i, pkt) in packets.iter().enumerate() {
+            let part = parse_multipart(pkt).expect("each frame parses");
+            let done = rx.push(&part, 0);
+            if i + 1 < packets.len() {
+                assert!(done.is_none(), "must not complete before the last part");
+            } else {
+                out = done;
+            }
+        }
+        let done = out.expect("final part completes the payload");
+        assert_eq!(done.payload, payload, "reassembled payload must be byte-exact");
+        assert_eq!(done.command, CMD_DOGE_TX);
+        assert_eq!(done.source, test_src());
+        assert_eq!(done.destination, test_dst());
+        assert_eq!(rx.pending_sessions(), 0, "completed session must be released");
+    }
+
+    #[test]
+    fn test_reassembles_out_of_order_and_ignores_duplicates() {
+        let payload = vec![0x5Au8; 600];
+        let packets = multipart_for(&payload);
+        assert!(packets.len() >= 3);
+
+        let mut rx = MultipartReassembler::new();
+        // Deliver last-to-first, and send every part twice.
+        let mut out = None;
+        for pkt in packets.iter().rev() {
+            let part = parse_multipart(pkt).unwrap();
+            if let Some(done) = rx.push(&part, 0) {
+                out = Some(done);
+            }
+            // A duplicate must not double-count toward completion.
+            if let Some(done) = rx.push(&part, 0) {
+                out = Some(done);
+            }
+        }
+        assert_eq!(out.expect("completes despite reordering").payload, payload);
+    }
+
+    /// A duplicate must never let a session look complete while parts are missing.
+    #[test]
+    fn test_duplicates_alone_never_complete_a_session() {
+        let payload = vec![0x11u8; 600];
+        let packets = multipart_for(&payload);
+        let first = parse_multipart(&packets[0]).unwrap();
+
+        let mut rx = MultipartReassembler::new();
+        for _ in 0..50 {
+            assert!(
+                rx.push(&first, 0).is_none(),
+                "resending one part must never complete a multi-part payload"
+            );
+        }
+    }
+
+    /// Two senders transmitting at once must not have their chunks interleaved.
+    #[test]
+    fn test_concurrent_sessions_stay_separate() {
+        let a_payload = vec![0xAAu8; 400];
+        let b_payload = vec![0xBBu8; 400];
+        let src_b = NodeAddress::new(20, 5, 9);
+
+        let a = try_build_multipart_packets(&test_src(), &test_dst(), CMD_DOGE_TX, &a_payload).unwrap();
+        let b = try_build_multipart_packets(&src_b, &test_dst(), CMD_MESSAGE, &b_payload).unwrap();
+
+        let mut rx = MultipartReassembler::new();
+        let mut a_done = None;
+        let mut b_done = None;
+        // Interleave the two streams.
+        for i in 0..a.len().max(b.len()) {
+            if let Some(p) = a.get(i) {
+                if let Some(d) = rx.push(&parse_multipart(p).unwrap(), 0) { a_done = Some(d); }
+            }
+            if let Some(p) = b.get(i) {
+                if let Some(d) = rx.push(&parse_multipart(p).unwrap(), 0) { b_done = Some(d); }
+            }
+        }
+        let a_done = a_done.expect("stream A completes");
+        let b_done = b_done.expect("stream B completes");
+        assert_eq!(a_done.payload, a_payload);
+        assert_eq!(a_done.command, CMD_DOGE_TX);
+        assert_eq!(b_done.payload, b_payload);
+        assert_eq!(b_done.command, CMD_MESSAGE);
+        assert_eq!(b_done.source, src_b);
+    }
+
+    #[test]
+    fn test_stale_session_expires_and_does_not_corrupt_a_retry() {
+        let payload = vec![0xC3u8; 600];
+        let packets = multipart_for(&payload);
+
+        let mut rx = MultipartReassembler::new();
+        rx.push(&parse_multipart(&packets[0]).unwrap(), 0);
+        assert_eq!(rx.pending_sessions(), 1);
+
+        // Long after the timeout, the abandoned session is dropped.
+        let later = MULTIPART_SESSION_TIMEOUT_SECS + 1;
+        rx.push(&parse_multipart(&packets[1]).unwrap(), later);
+        assert_eq!(rx.pending_sessions(), 1, "the expired session was replaced, not added to");
+
+        // A clean retransmission of the whole sequence still assembles correctly.
+        let mut out = None;
+        for pkt in &packets {
+            if let Some(d) = rx.push(&parse_multipart(pkt).unwrap(), later) {
+                out = Some(d);
+            }
+        }
+        assert_eq!(out.expect("retry completes").payload, payload);
+    }
+
+    /// A peer that opens sequences and never finishes them must not grow memory.
+    #[test]
+    fn test_session_table_is_bounded() {
+        let payload = vec![0x77u8; 600];
+        let mut rx = MultipartReassembler::new();
+
+        for n in 0..(MAX_CONCURRENT_MULTIPART_SESSIONS * 4) {
+            // A distinct source each time forces a distinct session key.
+            let src = NodeAddress::new(30, (n / 256) as u8, (n % 256) as u8);
+            let packets =
+                try_build_multipart_packets(&src, &test_dst(), CMD_DOGE_TX, &payload).unwrap();
+            rx.push(&parse_multipart(&packets[0]).unwrap(), 0);
+            assert!(
+                rx.pending_sessions() <= MAX_CONCURRENT_MULTIPART_SESSIONS,
+                "session table must stay bounded, saw {}",
+                rx.pending_sessions()
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_multipart_rejects_malformed_frames() {
+        let payload = vec![0x01u8; 400];
+        let good = multipart_for(&payload);
+
+        // A single (non-multipart) packet is not a multipart frame.
+        assert!(parse_multipart(&build_ping(&test_src(), &test_dst())).is_none());
+        // Too short to hold a 12-byte multipart header.
+        assert!(parse_multipart(&good[0][..MULTIPART_HDR_LEN - 1]).is_none());
+
+        // total_parts = 0 is structurally impossible.
+        let mut zero = good[0].clone();
+        zero[8] = 0;
+        assert!(parse_multipart(&zero).is_none());
+
+        // index >= total_parts would index past the session buffer.
+        let mut oob = good[0].clone();
+        oob[9] = oob[8];
+        assert!(parse_multipart(&oob).is_none(), "out-of-range index must be rejected");
+
+        // total_parts beyond the protocol maximum.
+        let mut huge = good[0].clone();
+        huge[8] = MAX_MULTIPART_PARTS + 1;
+        huge[9] = 0;
+        assert!(parse_multipart(&huge).is_none());
+    }
+
+    /// A relayed multipart frame carries hops in the flags' upper nibble; that
+    /// must not stop it being recognised as multipart.
+    #[test]
+    fn test_multipart_survives_relay_hops() {
+        let payload = vec![0x42u8; 400];
+        let packets = multipart_for(&payload);
+
+        let mut rx = MultipartReassembler::new();
+        let mut out = None;
+        for pkt in &packets {
+            let relayed = relay_packet(pkt).expect("multipart frames relay");
+            assert!(is_multipart_flags(relayed[1]), "relay must preserve the multipart bit");
+            if let Some(d) = rx.push(&parse_multipart(&relayed).unwrap(), 0) {
+                out = Some(d);
+            }
+        }
+        let done = out.expect("relayed sequence still assembles");
+        assert_eq!(done.payload, payload);
+        assert_eq!(done.hops, 1, "hop count should survive reassembly");
+    }
+
+    /// ingest_packet is what both framing loops call: single packets pass
+    /// straight through, multipart surfaces only once complete.
+    #[test]
+    fn test_ingest_packet_handles_both_shapes() {
+        let mut rx = MultipartReassembler::new();
+
+        // A single packet is returned immediately.
+        let ping = build_ping(&test_src(), &test_dst());
+        let got = ingest_packet(&ping, -70, &mut rx, 0).expect("single packet passes through");
+        assert_eq!(got.command, CMD_PING);
+        assert_eq!(got.rssi, -70);
+
+        // A multipart sequence yields nothing until the last frame.
+        let payload = vec![0x9Eu8; 400];
+        let packets = multipart_for(&payload);
+        for pkt in &packets[..packets.len() - 1] {
+            assert!(ingest_packet(pkt, -70, &mut rx, 0).is_none());
+        }
+        let done = ingest_packet(packets.last().unwrap(), -70, &mut rx, 0)
+            .expect("final frame completes the payload");
+        assert_eq!(hex::decode(&done.payload_hex).unwrap(), payload);
+        assert_eq!(done.command, CMD_DOGE_TX);
+    }
+
+    /// A signed transaction too large for one packet must survive the
+    /// split → reassemble round trip intact, and be recognised as signed.
+    #[test]
+    fn test_signed_tx_round_trips_through_multipart() {
+        // A plausible signed-tx shape: version prefix plus body, over the limit.
+        let mut tx = vec![0x01, 0x00, 0x00, 0x00];
+        tx.extend((0..300u32).map(|i| (i % 256) as u8));
+        assert!(tx.len() > MAX_SINGLE_PAYLOAD_LEN);
+        assert!(crate::wallet::is_signed_tx_payload(&tx));
+
+        let packets = multipart_for(&tx);
+        let mut rx = MultipartReassembler::new();
+        let mut out = None;
+        for pkt in &packets {
+            if let Some(d) = ingest_packet(pkt, 0, &mut rx, 0) {
+                out = Some(d);
+            }
+        }
+        let done = out.expect("transaction reassembles");
+        let recovered = hex::decode(&done.payload_hex).unwrap();
+        assert_eq!(recovered, tx, "a signed transaction must survive byte-exact");
+        assert!(
+            crate::wallet::is_signed_tx_payload(&recovered),
+            "the gateway must still recognise it as a signed transaction"
+        );
+    }
+
+    /// Framing must size multipart frames by their 12-byte header, not the
+    /// 8-byte single-packet one.
+    #[test]
+    fn test_frame_packet_len_handles_multipart() {
+        let payload = vec![0xEEu8; 400];
+        let packets = multipart_for(&payload);
+        let first = &packets[0];
+
+        assert_eq!(
+            frame_packet_len(first[0], first),
+            Some(first.len()),
+            "a complete multipart frame is consumed whole"
+        );
+        // Still arriving: not even the header is in yet.
+        assert_eq!(frame_packet_len(first[0], &first[..MULTIPART_HDR_LEN - 1]), None);
+        // Back-to-back frames: the first must not swallow the second.
+        let mut two = first.clone();
+        two.extend_from_slice(&packets[1]);
+        assert_eq!(frame_packet_len(two[0], &two), Some(first.len()));
     }
 
     /// Verify exact_packet_len returns the correct size for every fixed-length command

@@ -147,13 +147,18 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   writes its *flags* byte there. The protocol works only while flags are `0x00`; a multipart frame sets
   `0x01`, and the board then swallows a source-address byte and misframes the rest. A signed P2PKH transaction
   is exactly 192 bytes at its smallest (1 input, 1 output, no change), so a change output (`+34`) or a second
-  input (`+148`) pushes it over. Nothing on the host side reassembles multipart either — not the gateway
-  daemon, not either framing loop.
-  *Mitigated, not fixed:* `radio::check_host_payload_fits` now rejects oversized sends across the GUI, CLI, and
-  Android bridge with an explanatory error, instead of transmitting frames the board will garble. Use
-  `radiodoge-cli broadcast` (or the Wallet tab) to push those transactions over the internet. A real fix needs
-  a firmware host-framing change plus host-side reassembly. Full analysis:
-  [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
+  input (`+148`) pushes it over.
+  **Half fixed.** The full repair needs two things: host-side reassembly, and a firmware host-framing change.
+  - ✅ *Host-side reassembly is done.* `radio::MultipartReassembler` reassembles sequences keyed by
+    `(source, session id)`, tolerating out-of-order and duplicated parts, with a 30 s session timeout and a
+    bounded session table. Both framing loops call `radio::ingest_packet`, so the GUI, the packet log, and the
+    gateway daemon all receive one complete packet instead of fragments. **A gateway now correctly reassembles
+    a multipart transaction arriving over the air.**
+  - 🔨 *The firmware host-framing change is not.* Sending multipart from a host to its own board still
+    mis-frames, so `radio::check_host_payload_fits` continues to reject oversized sends across the GUI, CLI,
+    and Android bridge with an explanatory error. Use `radiodoge-cli broadcast` (or the Wallet tab) for those.
+
+  Full analysis: [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
 - **BLE is notify-oriented in firmware.** The app can scan, connect, and receive board notifications over
   Bluetooth LE, and the app's BLE write path is wired end-to-end — but the firmware currently buffers inbound
   BLE writes without consuming them, so **commands sent over BLE are not yet executed on the board**. Use
