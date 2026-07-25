@@ -890,6 +890,21 @@ void saveLoRaConfigurationQuiet(uint8_t region, uint8_t community, uint8_t node)
   nvs_close(nvs_handle);
 }
 
+// v0.4.1 — Is this board acting as an internet gateway right now?
+//
+// `gateway_mode` used to be a reporting flag only: the transaction/broadcast
+// forwarders checked whether a gateway was *configured* (gateway_type + ip) and
+// never consulted the toggle, so switching gateway mode off in the app did not
+// stop the board pushing other people's transactions to the internet. The
+// toggle is now authoritative and every forwarding path goes through here.
+//
+// Saving a gateway from the web UI enables gateway_mode (see handleApiGatewaySave),
+// so a board configured entirely through the web interface keeps forwarding as
+// it did before this change.
+bool gatewayForwardingEnabled() {
+  return gateway_mode;
+}
+
 // ─── v0.4.1 — Runtime LoRa radio reconfiguration (CMD_SET_LORA_PARAMS 0x21) ───
 
 // Push the current lora_* globals into the radio.
@@ -2444,7 +2459,7 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
   String internetResponse = "";
   bool gateway_forwarded = false;
   
-  if (gateway_type != "none" && gateway_ip.length() > 0) {
+  if (gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
     String gatewayUrl = "http://" + gateway_ip + ":" + gateway_port;
     if (gateway_type != "core" && gateway_endpoint.length() > 0) {
       gatewayUrl += gateway_endpoint;
@@ -2469,7 +2484,7 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
       addLog("[GATEWAY] " + gateway_type + " response: " + internetResponse);
       gateway_forwarded = true;
     }
-  } else if (internet_connected) {
+  } else if (gatewayForwardingEnabled() && internet_connected) {
     // Fallback to default internet gateway
     addLog("[GATEWAY] No configured gateway, using default internet gateway (BlockCypher)");
     addLog("[GATEWAY] Transaction data length: " + String(txData.length()) + " bytes");
@@ -2645,7 +2660,7 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
     }
   }
   
-  if (gateway_type != "none" && gateway_ip.length() > 0) {
+  if (gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
     String gatewayUrl = "http://" + gateway_ip + ":" + gateway_port;
     if (gateway_type != "core" && gateway_endpoint.length() > 0) {
       gatewayUrl += gateway_endpoint;
@@ -2670,7 +2685,7 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
       addLog("[GATEWAY] " + gateway_type + " response: " + internetResponse);
       gateway_forwarded = true;
     }
-  } else if (internet_connected) {
+  } else if (gatewayForwardingEnabled() && internet_connected) {
     // Fallback to default internet gateway
     addLog("[GATEWAY] No configured gateway, using default internet gateway (BlockCypher)");
     addLog("[GATEWAY] Broadcast transaction data length: " + String(txData.length()) + " bytes");
@@ -5522,6 +5537,16 @@ void handleApiGatewaySave() {
       gateway_endpoint = endpoint;
       gateway_username = username;
       gateway_password = password;
+
+      // v0.4.1 — Forwarding now requires gateway_mode (see gatewayForwardingEnabled).
+      // Configuring a gateway here is an explicit statement of intent to act as
+      // one, so enable and persist the mode. Without this, a board set up purely
+      // through the web UI would silently stop forwarding after the upgrade.
+      if (type != "none" && !gateway_mode) {
+        gateway_mode = true;
+        saveGatewayModeQuiet(true);
+        addLog("[GATEWAY] Gateway configured - gateway mode enabled");
+      }
       
       response += "\"action\":\"gateway_save\",";
       response += "\"message\":\"Gateway credentials saved successfully\"";
@@ -5992,6 +6017,16 @@ void handleApiGatewayConfigSet() {
       gateway_endpoint = endpoint;
       gateway_username = username;
       gateway_password = password;
+
+      // v0.4.1 — Forwarding now requires gateway_mode (see gatewayForwardingEnabled).
+      // Configuring a gateway here is an explicit statement of intent to act as
+      // one, so enable and persist the mode. Without this, a board set up purely
+      // through the web UI would silently stop forwarding after the upgrade.
+      if (type != "none" && !gateway_mode) {
+        gateway_mode = true;
+        saveGatewayModeQuiet(true);
+        addLog("[GATEWAY] Gateway configured - gateway mode enabled");
+      }
       
       addLog("Gateway configuration updated via API");
       

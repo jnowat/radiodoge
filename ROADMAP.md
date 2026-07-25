@@ -176,8 +176,14 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   with TX power moved to `[7]` — a safe wire change, since no released firmware ever read those bytes.
 - ~~**No hop limit on mesh rebroadcast.**~~ *Fixed in v0.4.0:* multipart rebroadcasts carry a hop count in the
   `reserved` byte and are dropped once they reach `MAX_REBROADCAST_HOPS` (3), on top of the 2-minute dedup table.
-- **`gateway_mode` is a reporting flag, not a forwarding switch.** Actual forwarding is decided by the board's
-  configured gateway type / IP / internet state, independent of the `gateway_mode` toggle.
+- ~~**`gateway_mode` is a reporting flag, not a forwarding switch.**~~ *Fixed in v0.4.1 firmware (needs
+  hardware validation):* the transaction and broadcast forwarders checked only whether a gateway was
+  *configured* (`gateway_type` + `gateway_ip`) and never consulted the toggle, so switching gateway mode off in
+  the app did not stop the board pushing other nodes' transactions to the internet. All four relay paths now go
+  through `gatewayForwardingEnabled()`, making the toggle authoritative. Saving a gateway from the web UI
+  enables the mode, so a board configured entirely through the web interface keeps forwarding as before. The
+  web UI's *own* "send transaction" endpoint is deliberately not gated — that is the operator acting directly,
+  not the board relaying someone else's traffic.
 - **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP.
   Treat a firmware gateway as trusted-network only until authentication lands.
   - ✅ *The credential disclosure is fixed (v0.4.1, needs hardware validation).* `GET /api/password/status`
@@ -204,8 +210,8 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   resynced byte-by-byte. Both paths now share `radio::is_known_command`.
 - ~~**`ping()` could report a false timeout.**~~ *Fixed:* it subscribed to the packet channel *after* sending,
   losing the reply whenever the board answered before the task was rescheduled.
-- **The declared MSRV is Rust 1.88.** Several transitive dependencies (`image`, `time`, `darling`) require it;
-  the manifests previously claimed 1.77.2, which could not actually build.
+- ~~**The declared MSRV was unbuildable.**~~ *Fixed:* the manifests claimed Rust 1.77.2 while `image`, `time`,
+  and `darling` require 1.88. All three crates now declare **1.88**, which is the real minimum.
 
 Found something else? [Open an issue](https://github.com/jnowat/RadioDoge/issues) — much appreciated. 🐕
 
