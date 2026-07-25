@@ -53,8 +53,8 @@ Offset  Field
 ```
 
 - `MAX_SINGLE_PAYLOAD_LEN = 192`. Longer payloads split into multipart frames (§3) — but see
-  [Host → board is single-packet only](#host--board-single-packet-only): a host may not send multipart to a
-  board on today's firmware.
+  [Host → board is single-packet only](#host--board-single-packet-only): the host still caps host→board
+  payloads at one packet pending hardware validation of the firmware fix.
 - `SINGLE_HDR_LEN = 8`.
 - **Mesh hop count (v0.4.0):** the flags byte's upper nibble carries a 0–15 hop count. Freshly built packets have
   0 hops (upper nibble clear), so this is fully backward compatible. A relay increments it and drops the packet
@@ -92,29 +92,41 @@ Offset  Field
 
 ### ⚠️ Host → board is single-packet only
 
-**A host cannot currently send multipart frames to a board.** The firmware reads the host header as
-`[command, payload_size]` (§7) — byte 1 is a *length* to it, while the host writes its *flags* byte there. The
-whole desktop protocol works only because flags are normally `0x00`, which the firmware reads as
-`payload_size = 0`. A multipart frame sets `FLAG_MULTIPART` (`0x01`), so the board reads one payload byte,
-swallows the first source-address byte, and misframes everything after it.
+**The host still enforces a single-packet limit, by choice.** The underlying defect is fixed in firmware
+v0.4.1, but the host-side guard stays until that path is validated on hardware.
 
-Consequences, and what the code does about them:
+The defect: the firmware read the host header as `[command, payload_size]` (§7) — byte 1 is a *length* to it,
+while the host writes its *flags* byte there. The whole desktop protocol worked only because flags are normally
+`0x00`, which reads as `payload_size = 0`. A multipart frame sets `FLAG_MULTIPART` (`0x01`), so the board
+consumed one payload byte, swallowing the first source-address byte, and misframed everything after it.
 
-- **Host→board payloads must fit in one 192-byte packet.** `radio::check_host_payload_fits` enforces this, and
-  every send path (GUI, CLI, Android bridge) calls it. Oversized sends fail with an explanatory error instead
-  of transmitting frames the board will garble.
+Firmware v0.4.1 dispatches desktop commands *before* `ReadSerialPayload`, so byte 1 is never treated as a
+length for them, and the `0x10`/`0x11` relay paths preserve the flags byte rather than hardcoding `0x00`. A
+multipart frame now reaches the air intact; the board forwards each part verbatim and the receiving gateway's
+host reassembles it, so the firmware needs no reassembly buffer of its own.
+
+What the code does about it today:
+
+- **Host→board payloads must still fit in one 192-byte packet.** `radio::check_host_payload_fits` enforces
+  this, and every send path (GUI, CLI, Android bridge) calls it. Oversized sends fail with an explanatory
+  error. This guard is intentionally kept even though the firmware fix has landed: lifting it before the path
+  is validated on real hardware would re-expose the original failure — silently transmitting a transaction no
+  receiver can reconstruct.
 - **A signed P2PKH transaction is 192 bytes at its smallest** (1 input, 1 output, no change) — exactly the
   limit. Add a change output (`+34`) or a second input (`+148`) and it no longer fits, so **most real
-  transactions cannot be relayed over LoRa today**. Broadcast them over the internet instead
+  transactions still cannot be relayed over LoRa**. Broadcast them over the internet instead
   (`radiodoge-cli broadcast`, or the Wallet tab).
+- **To lift the limit:** flash firmware v0.4.1 (`FIRMWARE_VERSION 10`), verify a >192-byte transaction survives
+  host → board → air → gateway → daemon byte-for-byte, then relax `check_host_payload_fits` to
+  `MAX_MULTIPART_PAYLOAD_LEN` and restore the multipart branches in the send paths — gated on the board's
+  reported firmware version, so older boards keep the single-packet limit.
 
 This is the **host → board** direction only. Every other direction reassembles correctly:
 `radio::MultipartReassembler` stitches sequences back together keyed by `(source, session id)`, and both
 framing loops route packets through `radio::ingest_packet`, so a multipart payload arriving **over the air**
 at a gateway is delivered to the daemon as one complete packet.
 
-What remains is a firmware change: a host framing that doesn't overload byte 1 as a length. Tracked in the
-[Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress).
+Tracked in the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress).
 
 ### Reassembly semantics
 

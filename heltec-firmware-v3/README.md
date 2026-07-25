@@ -4,8 +4,8 @@ A comprehensive firmware for the Heltec **WiFi LoRa 32 V3** (and V2) modules tha
 transactions over LoRa radio, with dual WiFi connectivity, persistent NVS configuration, Bluetooth LE, and a
 web-based management interface.
 
-> **Version:** this firmware reports `FIRMWARE_VERSION 9` — i.e. **v0.4.0**. On a `GET_FIRMWARE_VERSION` query
-> it answers with a string like `RadioDoge NV3FW09` (board version + zero-padded firmware number). The `v3.1` /
+> **Version:** this firmware reports `FIRMWARE_VERSION 10` — i.e. **v0.4.1**. On a `GET_FIRMWARE_VERSION` query
+> it answers with a string like `RadioDoge NV3FW10` (board version + zero-padded firmware number). The `v3.1` /
 > `v3.2` labels in the feature notes below are historical names for feature waves, not the firmware's version.
 >
 > **Two ways to talk to this board:** the **web/REST interface** documented here (over WiFi), and the
@@ -22,23 +22,29 @@ web-based management interface.
 Please read before deploying:
 
 - **The web/REST interface has no authentication.** Any device on the board's WiFi AP can call every `/api/*`
-  route. Worse, `GET /api/gateway/load` returns the stored gateway RPC password and `GET /api/password/status`
-  returns the AP password **in plaintext**. Treat a firmware gateway as a device on a **trusted network only**.
+  route. Treat a firmware gateway as a device on a **trusted network only**.
+  *(v0.4.1 did fix the credential disclosure: `GET /api/password/status` and `GET /api/gateway/load` no longer
+  return the AP password or the gateway RPC password. The RPC password is now write-only — the UI shows whether
+  one is stored and submitting the field blank keeps it. Route authentication itself is still outstanding.)*
 - **"Gateway discovery" is not a discovery protocol.** There is no election or negotiation: any node that
   receives a broadcast and happens to have a configured gateway (or internet) forwards it; others simply
   rebroadcast. Rebroadcast is bounded by a hop count (`MAX_REBROADCAST_HOPS`, currently 3) carried in the
   multipart `reserved` byte, on top of a 2-minute broadcast-dedup table.
-- **The board cannot receive multipart packets from its serial host.** The host header is read as
-  `[command, payload_size]`, so the app's flags byte must be `0x00`; a multipart packet (flags `0x01`) is
-  mis-framed. Host→board payloads must therefore fit in one 192-byte packet. See
-  [`docs/PROTOCOL.md`](../docs/PROTOCOL.md#host--board-single-packet-only).
-- **LoRa parameters are compile-time.** Frequency, spreading factor, and bandwidth are `#define`s; the
-  `SET_LORA_PARAMS` (`0x21`) serial command is currently an ACK-only no-op. Only the node **address** is
-  reconfigurable at runtime (and persisted to NVS).
-- **A few app commands aren't wired up yet.** The serial handlers for `WIFI_TOGGLE` (`0x24`), `GET_BATTERY`
-  (`0x26`), and `GET_MAC` (`0x27`) exist but aren't reachable from the desktop-command dispatch. **Bluetooth LE
-  is notify-oriented**: the board mirrors replies out over BLE but does not yet execute commands *received* over
-  BLE. Use **USB serial** for reliable two-way control.
+- **Host→board multipart is fixed here but not yet hardware-validated.** Desktop commands are dispatched
+  before `ReadSerialPayload`, so header byte 1 is no longer read as a length for them, and the relay paths
+  preserve the flags byte. The host still caps host→board payloads at one 192-byte packet until this is
+  confirmed on a board. See [`docs/PROTOCOL.md`](../docs/PROTOCOL.md#host--board-single-packet-only).
+- **LoRa parameters are runtime-adjustable since v0.4.1** *(not yet hardware-validated)*. `SET_LORA_PARAMS`
+  (`0x21`) used to be an ACK-only no-op; it now applies frequency, SF, bandwidth, coding rate, and TX power to
+  the radio and persists them to NVS. Values are validated first (SF 7–12, BW 0–2, CR 1–4, 150–960 MHz,
+  2–22 dBm) and out-of-range requests are NACKed with the radio untouched, so a bad setting cannot strand the
+  board off-channel.
+- **Bluetooth LE executes commands since v0.4.1** *(not yet hardware-validated)*. BLE was previously
+  notify-only: inbound writes were buffered and never read. `HandleDesktopCommand` no longer reads `Serial`
+  itself, so the USB and BLE paths share one implementation, and `ProcessBleCommands()` drains the BLE buffer
+  each loop. Use **USB serial** for reliable two-way control until this is confirmed on hardware.
+  *(`WIFI_TOGGLE` (`0x24`), `GET_BATTERY` (`0x26`), and `GET_MAC` (`0x27`) were wired into the dispatch in
+  v0.4.0.)*
 
 See the project [Roadmap](../ROADMAP.md#-known-limitations--in-progress) for status on each of these.
 
@@ -77,8 +83,8 @@ See the project [Roadmap](../ROADMAP.md#-known-limitations--in-progress) for sta
 - **Credential Storage**: WiFi credentials stored in NVS
 
 > ⚠️ The AP password controls **who can join the WiFi network**, not who can call the API. Once on the AP, the
-> `/api/*` routes are **unauthenticated** and a couple of endpoints return stored credentials in plaintext — see
-> [Known Limitations & Security](#limitations).
+> `/api/*` routes are **unauthenticated** — see [Known Limitations & Security](#limitations). Stored credentials
+> are no longer returned by any endpoint as of v0.4.1.
 
 ### Network Features
 - **Internet Gateway**: Forward transactions to Dogecoin network

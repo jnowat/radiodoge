@@ -148,15 +148,27 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   `0x01`, and the board then swallows a source-address byte and misframes the rest. A signed P2PKH transaction
   is exactly 192 bytes at its smallest (1 input, 1 output, no change), so a change output (`+34`) or a second
   input (`+148`) pushes it over.
-  **Half fixed.** The full repair needs two things: host-side reassembly, and a firmware host-framing change.
-  - ✅ *Host-side reassembly is done.* `radio::MultipartReassembler` reassembles sequences keyed by
+  **Both halves are now implemented; the host guard stays on until hardware confirms it.**
+  - ✅ *Host-side reassembly (tested).* `radio::MultipartReassembler` reassembles sequences keyed by
     `(source, session id)`, tolerating out-of-order and duplicated parts, with a 30 s session timeout and a
     bounded session table. Both framing loops call `radio::ingest_packet`, so the GUI, the packet log, and the
-    gateway daemon all receive one complete packet instead of fragments. **A gateway now correctly reassembles
-    a multipart transaction arriving over the air.**
-  - 🔨 *The firmware host-framing change is not.* Sending multipart from a host to its own board still
-    mis-frames, so `radio::check_host_payload_fits` continues to reject oversized sends across the GUI, CLI,
-    and Android bridge with an explanatory error. Use `radiodoge-cli broadcast` (or the Wallet tab) for those.
+    gateway daemon all receive one complete packet instead of fragments. A gateway correctly reassembles a
+    multipart transaction arriving over the air.
+  - ✅ *Firmware host-framing (v0.4.1, compile-unverified).* Desktop commands are now dispatched **before**
+    `ReadSerialPayload`, so header byte 1 is never interpreted as a length for them and any flags value frames
+    correctly. The `0x10`/`0x11` relay paths preserve the flags byte instead of hardcoding `0x00`, so a
+    multipart frame reaches the air intact — the board forwards each part verbatim and the receiving gateway's
+    host reassembles, meaning the firmware needs no reassembly buffer of its own.
+  - 🔒 *The host guard is deliberately still enforced.* `radio::check_host_payload_fits` continues to reject
+    oversized sends. Lifting it before the firmware path is validated on hardware would re-expose the original
+    failure — silently transmitting a transaction no receiver can reconstruct — so this is the one change that
+    should not be made blind.
+
+  **To finish this:** flash firmware v0.4.1 (`FIRMWARE_VERSION 10`), confirm a >192-byte signed transaction
+  survives host → board → air → gateway → daemon intact, then relax `check_host_payload_fits` to allow up to
+  `MAX_MULTIPART_PAYLOAD_LEN` and restore the multipart branches in the send paths (GUI `send_transaction`,
+  `mobile_build_tx_packets`, CLI `cmd_send`). Gate it on the reported firmware version so older boards keep the
+  single-packet limit.
 
   Full analysis: [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
 - ~~**BLE is notify-oriented in firmware.**~~ *Fixed in v0.4.1 firmware (needs hardware validation):* inbound

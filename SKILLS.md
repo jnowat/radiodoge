@@ -41,7 +41,7 @@ are creating a second implementation that will drift — and it has, twice (see 
 
 ```bash
 cargo build --workspace          # all three crates
-cargo test  --workspace          # 47 tests, no hardware required
+cargo test  --workspace          # 59 tests + doc tests, no hardware required
 cargo clippy --workspace --all-targets   # expected to be warning-clean
 ```
 
@@ -91,18 +91,36 @@ These are non-obvious and have each caused a real bug.
 ### The firmware reads header byte 1 as a length
 
 The host writes `[command, flags, src×3, dst×3, payload…]`. The firmware reads `[command, payload_size, …]`.
-The whole desktop protocol works **only because flags are normally `0x00`**, which the board happens to read as
-"zero payload bytes follow".
+The whole desktop protocol worked **only because flags are normally `0x00`**, which the board happens to read
+as "zero payload bytes follow". Anything else — multipart (`0x01`), or a relayed packet with a non-zero hop
+nibble — was mis-framed.
 
-Consequences you must respect:
+Firmware v0.4.1 dispatches desktop commands *before* `ReadSerialPayload`, so byte 1 is no longer read as a
+length for them. But note what you must still respect:
 
-- **Never send a host→board packet with a non-zero flags byte.** Multipart (`0x01`) and any relayed packet with
-  a non-zero hop nibble will be mis-framed by the board.
-- Host→board payloads must fit in **one 192-byte packet**. Call `radio::check_host_payload_fits` before
-  sending; every send path already does.
-- This is why most real signed transactions can't go over LoRa yet. Full analysis in
-  [PROTOCOL.md](docs/PROTOCOL.md#host--board-single-packet-only). Fixing it properly is a firmware + host
-  project, not a patch.
+- **`radio::check_host_payload_fits` is still enforced on every send path, deliberately.** The firmware fix is
+  compile-unverified and untested on hardware. Do not relax the guard until someone confirms a >192-byte
+  transaction survives host → board → air → gateway → daemon byte-for-byte. Relaxing it early re-creates the
+  original failure: silently transmitting a transaction no receiver can reconstruct.
+- When you do lift it, gate it on the board's reported firmware version so older boards keep the limit.
+- Full analysis: [PROTOCOL.md](docs/PROTOCOL.md#host--board-single-packet-only).
+
+### Firmware changes cannot be built in a container
+
+There is no Arduino toolchain here and the Heltec board-package hosts are blocked by network policy, so
+`heltec-firmware-v3/heltec-firmware.ino` cannot be compiled or flashed from a review environment. Anything you
+change there is unverified until someone builds it.
+
+What that means in practice:
+
+- Prefer APIs the sketch **already uses** over ones you believe exist — `Radio.Sleep()` over `Radio.Standby()`,
+  for instance. A wrong symbol is a hard compile failure for the user.
+- Keep firmware changes in **separate commits** from Rust changes, so a bad one can be reverted without losing
+  the tested work.
+- Say plainly in the commit message that a change is compile-unverified. Never describe untested firmware as
+  "fixed" without that qualifier.
+- Weigh blast radius. A localized handler change is a reasonable thing to write blind; adding auth to 40 route
+  handlers, where a mistake locks the operator out of their own board, is not.
 
 ### Framing must wait, never truncate
 

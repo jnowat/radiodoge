@@ -282,7 +282,7 @@ struct PendingRequest {
   bool requiresConfirmation;
   String requestId;      // Unique identifier for tracking
 };
-#define FIRMWARE_VERSION 9  // v0.4.0
+#define FIRMWARE_VERSION 10  // v0.4.1
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -3111,14 +3111,16 @@ bool ReadSerialPayload(uint8_t payloadSize) {
 // passed in, so USB and BLE share one implementation of every command rather
 // than growing a second copy that drifts.
 //
+//   flags        header byte 1: low nibble 0x1 = multipart, high nibble = hops
 //   hdrRest      the 6 header bytes after [cmd, flags]:
 //                [src_r, src_c, src_n, dst_r, dst_c, dst_n]
-//   extraPayload payload bytes following the 8-byte header
+//   extraPayload payload bytes following the 8-byte header. For a multipart
+//                frame this starts with [total, index, session_hi, session_lo].
 //   extraLen     number of valid bytes in extraPayload
 //
 // Replies already go to both transports (Serial.write + bleSend), so a command
 // arriving over either link is answered on both.
-void HandleDesktopCommand(uint8_t cmdByte, const uint8_t* hdrRest, const uint8_t* extraPayload, uint8_t extraLen) {
+void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest, const uint8_t* extraPayload, uint8_t extraLen) {
   switch (cmdByte) {
     case 0x10: { // CMD_DOGE_TX — relay a signed transaction over LoRa.
       // v0.4.0 (WP1): transmit the FULL desktop-format packet — command byte plus
@@ -3128,7 +3130,10 @@ void HandleDesktopCommand(uint8_t cmdByte, const uint8_t* hdrRest, const uint8_t
       // could not recognise or forward it. hdrRest holds [src_r,src_c,src_n,dst_r,dst_c,dst_n].
       if (extraLen > 0) {
         uint8_t ota[BUFFER_SIZE];
-        ota[0] = 0x10; ota[1] = 0x00;
+        // v0.4.1 — preserve the flags byte. It used to be hardcoded to 0x00,
+        // which flattened FLAG_MULTIPART and made a multipart frame
+        // indistinguishable from a truncated single packet on the air.
+        ota[0] = 0x10; ota[1] = flags;
         for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
         int payLen = extraLen;
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
@@ -3152,7 +3157,7 @@ void HandleDesktopCommand(uint8_t cmdByte, const uint8_t* hdrRest, const uint8_t
       // "BAL:<koinus>" MESSAGE back to the requester over LoRa.
       if (extraLen > 0) {
         uint8_t ota[BUFFER_SIZE];
-        ota[0] = 0x11; ota[1] = 0x00;
+        ota[0] = 0x11; ota[1] = flags;  // v0.4.1 — preserve multipart/hop flags
         for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
         int payLen = extraLen;
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
@@ -3426,6 +3431,8 @@ void ProcessBleCommands() {
     need = (uint16_t)bleRxLen;
   }
 
+  // Capture the header fields before the buffer is shifted below.
+  uint8_t flags = bleRxBuffer[1];
   uint8_t hdrRest[6];
   memcpy(hdrRest, bleRxBuffer + 2, 6);
 
@@ -3447,7 +3454,7 @@ void ProcessBleCommands() {
 
   addLog("[BLE] Executing desktop cmd 0x" + String(cmdByte, HEX) +
          " (" + String(payloadLen) + " payload bytes)");
-  HandleDesktopCommand(cmdByte, hdrRest, extraPayload, payloadLen);
+  HandleDesktopCommand(cmdByte, flags, hdrRest, extraPayload, payloadLen);
 }
 #else
 void ProcessBleCommands() {}
@@ -3464,7 +3471,42 @@ void HostSerialRead() {
     return;
   }
   hostCommandReply[0] = commandVal;
-  // v0.3.6 — removed DisplayCommandAndControl; status display now cycles independently
+  uint8_t cmdByte = (uint8_t)commandVal;
+
+  // ── v0.4.1 — Desktop commands are dispatched BEFORE ReadSerialPayload ───────
+  //
+  // ReadSerialHeader treats byte 1 as a payload length, but the desktop protocol
+  // puts its FLAGS byte there. That only ever worked because flags are normally
+  // 0x00, which reads as "no payload". A multipart frame sets FLAG_MULTIPART
+  // (0x01), so ReadSerialPayload used to consume one byte — the first byte of
+  // the source address — and every byte after it was misaligned. That is why a
+  // host could not send multipart to a board, which in turn capped host->board
+  // payloads at a single 192-byte packet.
+  //
+  // Reading the desktop dispatch first means byte 1 is never interpreted as a
+  // length for these commands, so any flags value frames correctly.
+  if (isDesktopCommandByte(cmdByte)) {
+    uint8_t flags = payloadSize;  // byte 1 is FLAGS for desktop commands
+    delay(500);                   // let the rest of the packet arrive
+
+    // The 6 remaining header bytes: [src_r, src_c, src_n, dst_r, dst_c, dst_n].
+    uint8_t hdrRest[6] = {0};
+    Serial.readBytes(hdrRest, 6);
+
+    // Everything after the 8-byte header. For a multipart frame this begins
+    // with [total_parts, part_index, session_hi, session_lo] followed by the
+    // chunk, which HandleDesktopCommand forwards over the air verbatim.
+    uint8_t extraPayload[BUFFER_SIZE];
+    memset(extraPayload, 0, sizeof(extraPayload));
+    uint8_t extraLen = 0;
+    while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
+      extraPayload[extraLen++] = (uint8_t)Serial.read();
+    }
+
+    HandleDesktopCommand(cmdByte, flags, hdrRest, extraPayload, extraLen);
+    return;
+  }
+
   // Now we will read in the host's payload
   bool payloadSuccess = ReadSerialPayload(payloadSize);
   if (!payloadSuccess) {
@@ -3473,38 +3515,11 @@ void HostSerialRead() {
   }
   delay(500);
 
-  // OPTIMIZED FOR DESKTOP v0.3.3 – SAFE
-  // v0.3.6 — extended with 0x22 (GET_SETTINGS) and 0x23 (SET_GATEWAY)
-  // v0.4.0 — extended with 0x24 (WIFI_TOGGLE), 0x26 (GET_BATTERY), 0x27 (GET_MAC),
-  //          and 0x28 (BLE_TOGGLE). Their handlers existed since v0.3.7/0.3.8 but
-  //          were never routed here, so the board NACKed them.
-  // Intercept desktop-only command IDs before the switch (no matching serialCommand enum).
-  uint8_t cmdByte = (uint8_t)commandVal;
-
   // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
   // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
   // PING_REQUEST(3) enum value, which carries a non-zero payload size.
   if (gateway_mode && cmdByte == 0x03 && payloadSize == 0) {
     RelayDesktopMessageOverLoRa();
-    return;
-  }
-
-  if (isDesktopCommandByte(cmdByte)) {
-    // v0.4.1 — HandleDesktopCommand no longer reads Serial itself (so BLE can
-    // reach it too), so collect its bytes here: the 6 remaining header bytes
-    // [src_r, src_c, src_n, dst_r, dst_c, dst_n] then whatever payload is
-    // waiting (everything has arrived by now thanks to the delay(500) above).
-    uint8_t hdrRest[6] = {0};
-    Serial.readBytes(hdrRest, 6);
-
-    uint8_t extraPayload[BUFFER_SIZE];
-    memset(extraPayload, 0, sizeof(extraPayload));
-    uint8_t extraLen = 0;
-    while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
-      extraPayload[extraLen++] = (uint8_t)Serial.read();
-    }
-
-    HandleDesktopCommand(cmdByte, hdrRest, extraPayload, extraLen);
     return;
   }
 
