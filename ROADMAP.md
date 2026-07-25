@@ -106,7 +106,12 @@ Rock-solid against real hardware, and now on your phone.
 - ✅ **QR code scanning** — a "📷 Scan QR" button on the Send tab decodes a Dogecoin QR from an image file (or
   camera capture on mobile) via a pure-Rust `rqrr` backend command, and a `radiodoge-core::qr` parser fills the
   recipient — plus amount and memo — from a bare address or a BIP21 `dogecoin:…?amount=…&label=…` URI
-- 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee
+- 🔨 **Host → board multipart framing** — the one gap that keeps most real transactions off the air. Needs a
+  firmware host header that doesn't overload byte 1 as a length, plus reassembly in the framing loops and the
+  gateway daemon. Oversized sends currently fail fast with an explanatory error; see
+  [Known Limitations](#-known-limitations--in-progress)
+- 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee.
+  Today the fee is a flat 1 DOGE regardless of transaction size
 
 ---
 
@@ -137,6 +142,18 @@ Bridge RadioDoge with the existing Meshtastic community.
 
 Honesty keeps the mesh healthy. These are real gaps in the current build, each already on a roadmap line above:
 
+- **🔴 Host → board is limited to one 192-byte packet, so most signed transactions can't go over LoRa.**
+  The firmware parses the host header as `[command, payload_size]`, reading byte 1 as a length — but the app
+  writes its *flags* byte there. The protocol works only while flags are `0x00`; a multipart frame sets
+  `0x01`, and the board then swallows a source-address byte and misframes the rest. A signed P2PKH transaction
+  is exactly 192 bytes at its smallest (1 input, 1 output, no change), so a change output (`+34`) or a second
+  input (`+148`) pushes it over. Nothing on the host side reassembles multipart either — not the gateway
+  daemon, not either framing loop.
+  *Mitigated, not fixed:* `radio::check_host_payload_fits` now rejects oversized sends across the GUI, CLI, and
+  Android bridge with an explanatory error, instead of transmitting frames the board will garble. Use
+  `radiodoge-cli broadcast` (or the Wallet tab) to push those transactions over the internet. A real fix needs
+  a firmware host-framing change plus host-side reassembly. Full analysis:
+  [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
 - **BLE is notify-oriented in firmware.** The app can scan, connect, and receive board notifications over
   Bluetooth LE, and the app's BLE write path is wired end-to-end — but the firmware currently buffers inbound
   BLE writes without consuming them, so **commands sent over BLE are not yet executed on the board**. Use
@@ -155,6 +172,21 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   only until authentication lands.
 - ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
   crate version via clap's `version` attribute, so it always matches the package.
+- ~~**`cargo build --workspace` failed on a fresh clone.**~~ *Fixed:* `tauri.conf.json` declared an
+  `externalBin` sidecar whose binary is gitignored and only produced by CI, so every clean build died with
+  `resource path binaries/radiodoge-cli-<triple> doesn't exist`. The sidecar moved to an opt-in
+  `tauri.sidecar.conf.json` overlay that release CI merges in with `--config`.
+- ~~**Partial serial reads emitted truncated packets.**~~ *Fixed:* both framing loops clamped a packet's length
+  to the bytes available, so a 13-byte `GET_SETTINGS` split across two reads was parsed as a 9-byte packet and
+  its tail misread as a new one. Framing now waits for the full packet (`radio::frame_packet_len`), shared by
+  the desktop and Android paths.
+- ~~**Android discarded the board's ACK/Ping notifications.**~~ *Fixed:* the mobile bridge's known-command table
+  had drifted from the desktop one and was missing `0x29`/`0x2A`, so those packets were dropped as noise and
+  resynced byte-by-byte. Both paths now share `radio::is_known_command`.
+- ~~**`ping()` could report a false timeout.**~~ *Fixed:* it subscribed to the packet channel *after* sending,
+  losing the reply whenever the board answered before the task was rescheduled.
+- **The declared MSRV is Rust 1.88.** Several transitive dependencies (`image`, `time`, `darling`) require it;
+  the manifests previously claimed 1.77.2, which could not actually build.
 
 Found something else? [Open an issue](https://github.com/jnowat/RadioDoge/issues) — much appreciated. 🐕
 

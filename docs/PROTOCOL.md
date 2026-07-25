@@ -52,7 +52,9 @@ Offset  Field
   8+    Payload             (0 … MAX_SINGLE_PAYLOAD_LEN bytes)
 ```
 
-- `MAX_SINGLE_PAYLOAD_LEN = 192`. Payloads longer than this are split into multipart frames (§3).
+- `MAX_SINGLE_PAYLOAD_LEN = 192`. Longer payloads split into multipart frames (§3) — but see
+  [Host → board is single-packet only](#host--board-single-packet-only): a host may not send multipart to a
+  board on today's firmware.
 - `SINGLE_HDR_LEN = 8`.
 - **Mesh hop count (v0.4.0):** the flags byte's upper nibble carries a 0–15 hop count. Freshly built packets have
   0 hops (upper nibble clear), so this is fully backward compatible. A relay increments it and drops the packet
@@ -78,13 +80,38 @@ Offset  Field
 ```
 
 - `MULTIPART_HDR_LEN = 12`; chunk size = `192 − (12 − 8) = 188` bytes per part.
-- `MAX_MULTIPART_PARTS = 20` → up to ~3.76 KB reassembled by the app path.
-- The CLI/app space multipart frames ~50 ms apart; the Android bridge uses ~120 ms.
+- `MAX_MULTIPART_PARTS = 20` → a hard ceiling of 3,760 bytes. A payload larger than that cannot be encoded;
+  `try_build_multipart_packets` returns an error rather than truncating it.
 
 > The **firmware's** over-the-air multipart layout differs (it carries its own 12-byte header with `partNumber`,
 > `totalParts`, and a `dataType` field, chunked at 200 bytes, up to 20 parts = 4000 bytes, spaced 500 ms for
 > transactions/broadcasts and 100 ms for messages). The two schemes meet at the gateway; app-originated packets
 > use the layout above.
+
+<a id="host--board-single-packet-only"></a>
+
+### ⚠️ Host → board is single-packet only
+
+**A host cannot currently send multipart frames to a board.** The firmware reads the host header as
+`[command, payload_size]` (§7) — byte 1 is a *length* to it, while the host writes its *flags* byte there. The
+whole desktop protocol works only because flags are normally `0x00`, which the firmware reads as
+`payload_size = 0`. A multipart frame sets `FLAG_MULTIPART` (`0x01`), so the board reads one payload byte,
+swallows the first source-address byte, and misframes everything after it.
+
+Consequences, and what the code does about them:
+
+- **Host→board payloads must fit in one 192-byte packet.** `radio::check_host_payload_fits` enforces this, and
+  every send path (GUI, CLI, Android bridge) calls it. Oversized sends fail with an explanatory error instead
+  of transmitting frames the board will garble.
+- **A signed P2PKH transaction is 192 bytes at its smallest** (1 input, 1 output, no change) — exactly the
+  limit. Add a change output (`+34`) or a second input (`+148`) and it no longer fits, so **most real
+  transactions cannot be relayed over LoRa today**. Broadcast them over the internet instead
+  (`radiodoge-cli broadcast`, or the Wallet tab).
+- Nothing on the host side reassembles multipart either: the gateway daemon and both framing loops handle
+  single packets only.
+
+Fixing this needs a firmware change (a host framing that doesn't overload byte 1) plus host-side reassembly.
+Tracked in the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress).
 
 ---
 
@@ -107,15 +134,16 @@ board originates.
 | `0x21` | `SET_LORA_PARAMS` | host→board | Set SF/BW/CR/frequency/TX-power *(ACK-only in firmware today)* |
 | `0x22` | `GET_SETTINGS` | host→board | Read live board state (address + gateway + WiFi) |
 | `0x23` | `SET_GATEWAY` | host→board | Set/persist gateway mode |
-| `0x24` | `WIFI_TOGGLE` | host→board | Enable/disable the WiFi radio *(firmware wiring pending)* |
+| `0x24` | `WIFI_TOGGLE` | host→board | Enable/disable the WiFi radio |
 | `0x25` | `ADDR_CONFLICT` | board→host | Duplicate node address detected |
-| `0x26` | `GET_BATTERY` | host→board | Query battery voltage *(firmware wiring pending)* |
-| `0x27` | `GET_MAC` | host→board | Query the board's WiFi-station MAC *(firmware wiring pending)* |
+| `0x26` | `GET_BATTERY` | host→board | Query battery voltage |
+| `0x27` | `GET_MAC` | host→board | Query the board's WiFi-station MAC |
 | `0x28` | `BLE_TOGGLE` | host→board | Enable/disable BLE advertising |
 | `0x29` | `RECEIVED_ACK` | board→host | The board heard an over-the-air ACK |
 | `0x2A` | `RECEIVED_PING` | board→host | The board heard an over-the-air Ping |
 
-See the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress) for the *"pending"* items.
+See the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress) for commands whose
+firmware behaviour is partial, such as `SET_LORA_PARAMS`.
 
 ---
 
@@ -149,7 +177,7 @@ All other commands (`MESSAGE`, `BROADCAST`, `MULTIPART`, `DOGE_TX`, `REQUEST_BAL
 
 - **`SET_LORA_PARAMS` (`0x21`)** — 8-byte payload:
   `[SF(7–12), BW index(0=125,1=250,2=500 kHz), CR denom(5–8), freq_hi, freq_lo (kHz), TX power(dBm), 0x00, 0x00]`.
-- **`GET_FIRMWARE_VERSION` (`0x20`)** — the board replies with a version string such as `RadioDoge NV3FW08`.
+- **`GET_FIRMWARE_VERSION` (`0x20`)** — the board replies with a version string such as `RadioDoge NV3FW09`.
   The app strips the `RadioDoge ` prefix for display.
 - **`REQUEST_BALANCE` (`0x11`)** — payload is the ASCII Dogecoin address. A gateway replies with a `MESSAGE`
   containing `BAL:<koinus>`, which the app renders as `💰 Balance: N DOGE`.

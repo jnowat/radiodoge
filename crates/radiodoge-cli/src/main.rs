@@ -337,21 +337,18 @@ async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Op
             .context("Failed to encode transaction")?
     };
 
+    // The board mis-frames multipart over serial, so refuse rather than
+    // transmitting a corrupted transaction. See radio::check_host_payload_fits.
+    if let Err(msg) = radio::check_host_payload_fits(payload.len()) {
+        manager.disconnect().await.ok();
+        anyhow::bail!("{}", msg);
+    }
+
     let src = manager.get_node_address().await;
     let dst = NodeAddress::broadcast();
 
-    if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
-        let pkt = radio::build_doge_tx(&src, &dst, &payload);
-        manager.send_raw(pkt).await.context("Failed to send packet")?;
-    } else {
-        let pkts = radio::build_multipart_packets(&src, &dst, radio::CMD_DOGE_TX, &payload);
-        let total = pkts.len();
-        for (i, pkt) in pkts.into_iter().enumerate() {
-            println!("  Sending part {}/{} ...", i + 1, total);
-            manager.send_raw(pkt).await.context("Failed to send multipart packet")?;
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
+    let pkt = radio::build_doge_tx(&src, &dst, &payload);
+    manager.send_raw(pkt).await.context("Failed to send packet")?;
 
     if wif.is_some() {
         println!("✅ Signed tx sent! {:.8} DOGE → {} via LoRa 🐕🌙", amount, to);
@@ -529,26 +526,17 @@ async fn cmd_connect(port: &str) -> Result<()> {
                             match payload {
                                 Err(e) => println!("❌ Encode error: {}", e),
                                 Ok(bytes) => {
-                                    let src = manager.get_node_address().await;
-                                    let dst = NodeAddress::broadcast();
-                                    let pkt = if bytes.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
-                                        vec![radio::build_doge_tx(&src, &dst, &bytes)]
+                                    if let Err(e) = radio::check_host_payload_fits(bytes.len()) {
+                                        println!("❌ {}", e);
                                     } else {
-                                        radio::build_multipart_packets(
-                                            &src, &dst, radio::CMD_DOGE_TX, &bytes,
-                                        )
-                                    };
-                                    let mut ok = true;
-                                    for p in pkt {
-                                        if manager.send_raw(p).await.is_err() {
-                                            ok = false;
-                                            break;
+                                        let src = manager.get_node_address().await;
+                                        let dst = NodeAddress::broadcast();
+                                        let pkt = radio::build_doge_tx(&src, &dst, &bytes);
+                                        if manager.send_raw(pkt).await.is_ok() {
+                                            println!("✅ Sent {:.8} DOGE → {} 🐕🌙", amount, to_addr);
+                                        } else {
+                                            println!("❌ Failed to send packet");
                                         }
-                                    }
-                                    if ok {
-                                        println!("✅ Sent {:.8} DOGE → {} 🐕🌙", amount, to_addr);
-                                    } else {
-                                        println!("❌ Failed to send packet");
                                     }
                                 }
                             }

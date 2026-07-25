@@ -10,7 +10,8 @@
 [![Rust](https://img.shields.io/badge/Built%20with-Rust%20🦀-orange)](https://rust-lang.org)
 [![Tauri 2](https://img.shields.io/badge/Tauri-v2-blue)](https://tauri.app)
 [![Dogecoin](https://img.shields.io/badge/Powered%20by-Dogecoin-f7d02c?logo=dogecoin)](https://dogecoin.com)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android-informational)]()
+[![Platform](https://img.shields.io/badge/App-Windows%20%7C%20Android-informational)]()
+[![CLI](https://img.shields.io/badge/CLI-Windows%20%7C%20Linux%20%7C%20macOS-informational)]()
 [![Windows CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml/badge.svg)](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml)
 [![Android CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-android.yml/badge.svg)](https://github.com/jnowat/RadioDoge/actions/workflows/build-android.yml)
 [![Cargo Audit](https://github.com/jnowat/RadioDoge/actions/workflows/cargo-audit.yml/badge.svg)](https://github.com/jnowat/RadioDoge/actions/workflows/cargo-audit.yml)
@@ -104,41 +105,124 @@ Every push also builds a debug APK, signed with the Gradle debug key so it insta
 1. The app **builds and signs a real Dogecoin P2PKH transaction** locally — UTXO fetch → coin selection
    (largest-first) → secp256k1 `SIGHASH_ALL` signing.
 2. The raw signed transaction is sent to the Heltec over USB-C serial (or BLE) and broadcast over LoRa.
-3. Relay nodes forward the packet through the mesh; large payloads are split into multipart frames automatically.
+3. Relay nodes forward the packet through the mesh, decrementing a hop budget as they go.
 4. A **gateway** — either a host running `radiodoge-cli daemon`, or a Heltec with the firmware WiFi gateway
    configured — receives the packet and **POSTs the raw transaction to Trezor Blockbook** for broadcast.
 5. The gateway radios a `TX_ACK:<txid>` message back to the sender.
 6. 🎉 Your transaction lands on-chain.
 
-> **End-to-end status:** the app-side signing/broadcast path and the `radiodoge-cli daemon` gateway are
-> complete. Forwarding an *incoming LoRa* packet from a gateway Heltec's radio to its serial host is still being
-> finalized in firmware — see the [Roadmap](ROADMAP.md#-known-limitations--in-progress).
+> **⚠️ End-to-end status — read this before trying to move real money over the air.**
+> Every link above works *except* one size limit. A host can only hand the board a **single 192-byte packet**;
+> the firmware reads the host header's byte 1 as a payload length, so multipart frames get mis-framed. A signed
+> transaction is 192 bytes at its very smallest (1 input, 1 output, **no change**) — add a change output or a
+> second input and it no longer fits. In practice, **most real transactions can't be relayed over LoRa yet**;
+> the app now refuses them with a clear message instead of transmitting a corrupt packet. Broadcast those over
+> the internet (`radiodoge-cli broadcast`, or the Wallet tab) until the firmware framing is fixed. Full analysis:
+> [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
 
 ---
 
 ## ⚡ Quick Start
 
-### Prerequisites
+### To *run* the app
 
 - Windows 10/11 (x64) **or** Android 7.0+ (API 24)
-- A [Heltec ESP32 LoRa V3](https://heltec.org/project/wifi-lora-32-v3/) board + USB-C cable
-- For building from source: [Node.js 20+](https://nodejs.org) and [Rust](https://rustup.rs)
+- A [Heltec ESP32 LoRa V3](https://heltec.org/project/wifi-lora-32-v3/) board + a USB-C **data** cable
+  (charge-only cables are a common cause of "no ports found")
+
+### To *build* from source
+
+- [Rust](https://rustup.rs) **1.88 or newer** (`rustup update stable`) — several dependencies require it
+- [Node.js 20+](https://nodejs.org) — only needed for the GUI, not the CLI
+- **Platform libraries**, listed below. These are the usual reason a first build fails.
+
+<details>
+<summary><b>Linux</b> — required system packages</summary>
+
+The `serialport` crate needs `libudev`, and Tauri needs GTK/WebKit:
+
+```bash
+# Debian / Ubuntu
+sudo apt update && sudo apt install -y \
+  build-essential pkg-config libudev-dev \
+  libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+# Fedora
+sudo dnf install -y @development-tools pkgconf-pkg-config systemd-devel \
+  gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel
+
+# Arch
+sudo pacman -S --needed base-devel pkgconf systemd-libs gtk3 webkit2gtk-4.1 libappindicator-gtk3 librsvg
+```
+
+Building **only the CLI** (`-p radiodoge-cli`) needs just `pkg-config` and `libudev-dev`.
+
+You'll also need permission to open serial devices — add yourself to the `dialout` group
+(`sudo usermod -aG dialout $USER`, then log out and back in), or the app will report "permission denied".
+
+</details>
+
+<details>
+<summary><b>macOS</b> — required tooling</summary>
+
+```bash
+xcode-select --install     # Command Line Tools (provides WebKit + the linker)
+```
+
+No extra libraries are needed; `serialport` uses IOKit from the system SDK.
+
+</details>
+
+<details>
+<summary><b>Windows</b> — required tooling</summary>
+
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the
+  **Desktop development with C++** workload (supplies the MSVC linker)
+- WebView2 — preinstalled on Windows 11 and current Windows 10; otherwise
+  [download the Evergreen runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+- A [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) or
+  [CH340](https://www.wch-ic.com/products/CH340.html) USB-UART driver for your board
+
+</details>
 
 ### Option A — Install a prebuilt binary
 
 Grab the [Windows MSI or Android APK](#-get-the-app) from CI artifacts (above).
 
-### Option B — Build the GUI from source
+### Option B — Build everything from source
 
 ```bash
 git clone https://github.com/jnowat/RadioDoge.git
-cd RadioDoge/radiodoge-gui
+cd RadioDoge
 
-npm ci                # install frontend dependencies
-cargo tauri dev       # run with hot-reloading
+cargo build --workspace     # all three Rust crates
+cargo test  --workspace     # 47 unit tests, no hardware needed
 ```
 
-### Option C — Use the headless CLI
+### Option C — Run the GUI with hot-reloading
+
+```bash
+cd RadioDoge/radiodoge-gui
+npm install                 # frontend dependencies
+npm run tauri dev           # builds the Rust backend and opens the app
+```
+
+`npm run tauri` uses the `@tauri-apps/cli` dev-dependency, so there's nothing to install globally.
+To produce an installer instead, use `npm run tauri build`.
+
+> **Bundling the CLI with the app.** The GUI's gateway button spawns `radiodoge-cli`, looking for it next to
+> the app executable and then on `PATH`. Release builds ship it as a Tauri sidecar; that's an opt-in config
+> overlay so a plain source build never fails on a missing binary:
+>
+> ```bash
+> cargo build -p radiodoge-cli --release
+> mkdir -p radiodoge-gui/src-tauri/binaries
+> cp target/release/radiodoge-cli \
+>    "radiodoge-gui/src-tauri/binaries/radiodoge-cli-$(rustc -vV | sed -n 's/^host: //p')"
+> cd radiodoge-gui && npm run tauri build -- --config src-tauri/tauri.sidecar.conf.json
+> ```
+
+### Option D — Use the headless CLI
 
 `radiodoge-cli` is a pure-Rust binary that replaces the old `RadioDogeSharp` (C#) and `serdog` (C) tools —
 no native dependencies.
@@ -157,7 +241,7 @@ BIN=./target/release/radiodoge-cli
 | `radiodoge-cli wallet import-wif <WIF>` | Import a wallet from a WIF key (starts with `Q`) |
 | `radiodoge-cli wallet validate <ADDRESS>` | Check whether an address is a valid Dogecoin address |
 | `radiodoge-cli ping -p <PORT>` | Ping the Heltec and report round-trip time |
-| `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub |
+| `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub. Fails if the payload exceeds one 192-byte packet — [see the size limit](docs/PROTOCOL.md#host--board-single-packet-only) |
 | `radiodoge-cli receive -p <PORT> [-T <SECS>]` | Listen for incoming packets (`-T 0` = forever; default 30 s) |
 | `radiodoge-cli connect <PORT>` | Interactive REPL (`port` is positional, no `-p`) |
 | `radiodoge-cli balance -a <ADDRESS>` | Query a confirmed balance via Blockbook (internet, no board) |
@@ -226,11 +310,14 @@ Rust core as desktop** (`mobile_build_*` / `mobile_push_bytes`) — zero protoco
 ## 🧩 Serial & Packet Protocol
 
 The app talks to the Heltec at **115,200 baud** using a compact binary frame. Single packets carry an 8-byte
-header; payloads over 192 bytes are split into 12-byte-header multipart frames automatically.
+header. A multipart form with a 12-byte header exists for larger payloads, but
+[today's firmware can't receive it from a host](docs/PROTOCOL.md#host--board-single-packet-only) — host→board
+payloads must fit in one 192-byte packet.
 
 ```
 Byte 0   Command   (see table)
-Byte 1   Flags     (0x00 = single, 0x01 = multipart)
+Byte 1   Flags     (low nibble: 0x0 single, 0x1 multipart
+                    high nibble: mesh hop count 0–15)
 Byte 2   Source region
 Byte 3   Source community
 Byte 4   Source node
@@ -270,16 +357,20 @@ RadioDoge is a Cargo workspace of three Rust crates plus the Arduino firmware:
 ```
 radiodoge/
 ├── Cargo.toml                Workspace root — shared dependency versions
+├── SKILLS.md                 Orientation guide for contributors and coding agents
 ├── crates/
-│   ├── radiodoge-core/       Pure-Rust core: types, wallet, radio protocol, serial manager (no Tauri)
-│   │   └── src/              types.rs · radio.rs · serial.rs · wallet.rs
+│   ├── radiodoge-core/       Pure-Rust core, no Tauri — the single source of protocol truth
+│   │   └── src/              types.rs · radio.rs · serial.rs · wallet.rs · spv.rs · qr.rs
 │   └── radiodoge-cli/        Headless CLI + gateway daemon (replaces RadioDogeSharp + serdog)
 │       └── src/main.rs       ports · wallet · send · receive · ping · connect · balance · broadcast · daemon
 ├── radiodoge-gui/            Tauri 2 desktop + Android app (the primary client)
 │   ├── src/                  Svelte 5 + TypeScript frontend
 │   └── src-tauri/            Rust backend — depends on radiodoge-core
-├── heltec-firmware-v3/       Production Arduino firmware (WiFi, BLE, web UI, mesh)
-├── heltec-firmware/          v2 prototype firmware (serial + LoRa only)
+│       ├── tauri.conf.json           Base config (builds anywhere, no sidecar)
+│       ├── tauri.sidecar.conf.json   Overlay that bundles radiodoge-cli — used by release CI
+│       └── tauri.android.conf.json   Android overrides (auto-merged by Tauri)
+├── heltec-firmware-v3/       Production Arduino firmware (WiFi, BLE, web UI, mesh) — flash this one
+├── heltec-firmware/          v2 prototype firmware; does NOT speak the app's protocol (reference only)
 ├── .github/workflows/        CI: Windows MSI · Android APK · cargo-audit
 ├── images/                   Artwork
 └── docs/                     User manual, protocol reference, design PDF
@@ -346,9 +437,11 @@ interop, iOS), and an honest **Known Limitations** section — lives in [**ROADM
 
 **Shipped:** Tauri + Svelte GUI · pure-Rust wallet · real P2PKH signing & broadcast · wallet encryption ·
 BIP39/BIP44 HD wallet · balance queries · Android APK · Android USB-C · Android BLE (preview) · headless CLI +
-gateway daemon · broadcast dedup + host ACK/Ping notifications.
+gateway daemon · broadcast dedup + host ACK/Ping notifications · SPV inclusion checks · multi-hop relay status ·
+QR scanning.
 
-**Next up:** SPV verification · multi-hop relay status · QR scanning · fee estimation · Meshtastic bridging.
+**Next up:** host→board multipart framing (the size limit above) · runtime `SET_LORA_PARAMS` · fee estimation ·
+firmware BLE command execution · Meshtastic bridging.
 
 ---
 
