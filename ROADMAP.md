@@ -166,15 +166,29 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
 - ~~**Three desktop commands aren't reachable in firmware yet.**~~ *Fixed in v0.4.0 firmware:* `WIFI_TOGGLE`
   (`0x24`), `GET_BATTERY` (`0x26`), and `GET_MAC` (`0x27`) are now routed to their handlers, and `BLE_TOGGLE`
   (`0x28`) toggles BLE advertising and persists to NVS. Flash the updated Heltec V3 firmware to use these.
-- **`SET_LORA_PARAMS` (`0x21`) is a no-op ACK.** LoRa frequency/SF/bandwidth are compile-time constants in the
-  firmware; the app can send new parameters but the radio isn't reconfigured at runtime yet.
+- ~~**`SET_LORA_PARAMS` (`0x21`) is a no-op ACK.**~~ *Fixed in v0.4.1 firmware (needs hardware validation):*
+  the radio parameters are now runtime variables applied via `SetChannel`/`SetTxConfig`/`SetRxConfig` and
+  persisted to NVS, so a retuned board comes back retuned. Values are validated first (SF 7–12, BW 0–2,
+  CR 1–4, 150–960 MHz, 2–22 dBm) and out-of-range requests are NACKed with the radio left untouched, so a bad
+  setting can't strand the board off-channel.
+  While wiring this up, the **frequency field turned out to be too narrow to carry 915 MHz**: it was two bytes
+  for a 20-bit value, so 915000 kHz was transmitted as 63032 kHz. It is now a big-endian `u32` in bytes `[3..7]`
+  with TX power moved to `[7]` — a safe wire change, since no released firmware ever read those bytes.
 - ~~**No hop limit on mesh rebroadcast.**~~ *Fixed in v0.4.0:* multipart rebroadcasts carry a hop count in the
   `reserved` byte and are dropped once they reach `MAX_REBROADCAST_HOPS` (3), on top of the 2-minute dedup table.
 - **`gateway_mode` is a reporting flag, not a forwarding switch.** Actual forwarding is decided by the board's
   configured gateway type / IP / internet state, independent of the `gateway_mode` toggle.
-- **The firmware web UI is unauthenticated.** Every `/api/*` route is open to anyone on the board's WiFi AP, and
-  a couple of status endpoints return stored credentials in plaintext. Treat a firmware gateway as trusted-network
-  only until authentication lands.
+- **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP.
+  Treat a firmware gateway as trusted-network only until authentication lands.
+  - ✅ *The credential disclosure is fixed (v0.4.1, needs hardware validation).* `GET /api/password/status`
+    returned the AP password and `GET /api/gateway/load` returned the stored gateway RPC password, both in
+    plaintext to any unauthenticated caller. Neither is returned now: the password endpoint reports only
+    `is_default` and `length`, and the gateway endpoint reports `has_password`. The RPC password is write-only —
+    the web UI leaves the field blank with a placeholder showing whether one is saved, and submitting it blank
+    keeps the stored value rather than erasing it.
+  - 🔜 *Route authentication itself is still open.* The remaining work is a guard on all 40 handlers; it is not
+    done here because it cannot be compile- or hardware-tested in the review environment, and a mistake locks
+    the operator out of their own board.
 - ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
   crate version via clap's `version` attribute, so it always matches the package.
 - ~~**`cargo build --workspace` failed on a fresh clone.**~~ *Fixed:* `tauri.conf.json` declared an

@@ -373,16 +373,24 @@ pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
     Some(SINGLE_HDR_LEN + after_hdr.len().min(MAX_SINGLE_PAYLOAD_LEN))
 }
 
-/// Build a SET_LORA_PARAMS packet (CMD 0x21) — v0.3.3 additive.
+/// Build a SET_LORA_PARAMS packet (CMD 0x21).
 ///
 /// Payload format (8 bytes):
-///   [0]  Spreading factor (7–12)
-///   [1]  Bandwidth index (0=125kHz, 1=250kHz, 2=500kHz)
-///   [2]  Coding rate denominator (5–8, meaning 4/5 .. 4/8)
-///   [3]  Frequency high byte  (freq_khz >> 8)
-///   [4]  Frequency low byte   (freq_khz & 0xFF)  — freq in kHz, e.g. 915000
-///   [5]  TX power in dBm (2–22)
-///   [6-7] Reserved (0x00)
+///   [0]    Spreading factor (7–12)
+///   [1]    Bandwidth index (0=125kHz, 1=250kHz, 2=500kHz)
+///   [2]    Coding rate denominator (5–8, meaning 4/5 .. 4/8)
+///   [3..7] Frequency in kHz, big-endian `u32` (e.g. 915000)
+///   [7]    TX power in dBm (2–22)
+///
+/// **v0.4.1 — the frequency field was widened from 2 bytes to 4.** It previously
+/// sent only `freq_khz >> 8` and `freq_khz & 0xFF`, which is 16 bits for a value
+/// that needs 20: 915000 kHz went out as 63032 kHz, with the top 4 bits dropped.
+/// The two formerly-reserved trailing bytes now carry the missing range, and TX
+/// power moved from `[5]` to `[7]` so the frequency is a contiguous `u32`.
+///
+/// This is a safe wire change because no shipped firmware ever read these bytes
+/// — `0x21` was a no-op ACK until the same release that widened the field, so
+/// there is no deployed board parsing the old layout.
 pub fn build_set_lora_params(
     src: &NodeAddress,
     sf: u8,
@@ -392,10 +400,20 @@ pub fn build_set_lora_params(
     tx_power: u8,
 ) -> Vec<u8> {
     let mut packet = build_header(CMD_SET_LORA_PARAMS, FLAG_STANDARD, src, &NodeAddress::broadcast());
-    let freq_hi = ((freq_khz >> 8) & 0xFF) as u8;
-    let freq_lo = (freq_khz & 0xFF) as u8;
-    packet.extend_from_slice(&[sf, bw_idx, cr, freq_hi, freq_lo, tx_power, 0x00, 0x00]);
+    packet.extend_from_slice(&[sf, bw_idx, cr]);
+    packet.extend_from_slice(&freq_khz.to_be_bytes());
+    packet.push(tx_power);
     packet
+}
+
+/// Read back a [`build_set_lora_params`] payload (the 8 bytes after the header).
+/// Returns `(sf, bw_idx, cr, freq_khz, tx_power)`, or `None` if it is too short.
+pub fn parse_set_lora_params(payload: &[u8]) -> Option<(u8, u8, u8, u32, u8)> {
+    if payload.len() < 8 {
+        return None;
+    }
+    let freq_khz = u32::from_be_bytes([payload[3], payload[4], payload[5], payload[6]]);
+    Some((payload[0], payload[1], payload[2], freq_khz, payload[7]))
 }
 
 /// Build a SET_NODE_ADDRS packet to configure the device's LoRa address.
@@ -1173,6 +1191,38 @@ mod tests {
         let ascii = "a".repeat(200);
         let pkt = build_message(&test_src(), &test_dst(), &ascii);
         assert_eq!(pkt.len() - SINGLE_HDR_LEN, MAX_SINGLE_PAYLOAD_LEN);
+    }
+
+    /// The frequency field must survive a round trip. The old 2-byte encoding
+    /// turned 915000 kHz into 63032 kHz by dropping the top 4 bits.
+    #[test]
+    fn test_set_lora_params_round_trip() {
+        for freq_khz in [433_050u32, 470_000, 868_000, 915_000, 923_000] {
+            let pkt = build_set_lora_params(&test_src(), 9, 1, 7, freq_khz, 17);
+            assert_eq!(pkt[0], CMD_SET_LORA_PARAMS);
+            let payload = &pkt[SINGLE_HDR_LEN..];
+            assert_eq!(payload.len(), 8, "payload stays 8 bytes");
+
+            let (sf, bw, cr, freq, power) =
+                parse_set_lora_params(payload).expect("payload parses");
+            assert_eq!(sf, 9);
+            assert_eq!(bw, 1);
+            assert_eq!(cr, 7);
+            assert_eq!(power, 17);
+            assert_eq!(
+                freq, freq_khz,
+                "frequency must round-trip exactly; the old 16-bit field could not hold {}",
+                freq_khz
+            );
+        }
+
+        // The specific regression: 915 MHz no longer truncates.
+        let pkt = build_set_lora_params(&test_src(), 7, 0, 5, 915_000, 5);
+        let (_, _, _, freq, _) = parse_set_lora_params(&pkt[SINGLE_HDR_LEN..]).unwrap();
+        assert_eq!(freq, 915_000);
+        assert_ne!(freq, 63_032, "this was the truncated value before v0.4.1");
+
+        assert!(parse_set_lora_params(&[0u8; 7]).is_none(), "short payloads are rejected");
     }
 
     // ─── Multipart reassembly ────────────────────────────────────────────────

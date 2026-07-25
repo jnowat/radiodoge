@@ -107,6 +107,7 @@ Consequences, and what the code does about them:
   limit. Add a change output (`+34`) or a second input (`+148`) and it no longer fits, so **most real
   transactions cannot be relayed over LoRa today**. Broadcast them over the internet instead
   (`radiodoge-cli broadcast`, or the Wallet tab).
+
 This is the **host → board** direction only. Every other direction reassembles correctly:
 `radio::MultipartReassembler` stitches sequences back together keyed by `(source, session id)`, and both
 framing loops route packets through `radio::ingest_packet`, so a multipart payload arriving **over the air**
@@ -148,7 +149,7 @@ board originates.
 | `0x10` | `DOGE_TX` | any | Dogecoin transaction payload |
 | `0x11` | `REQUEST_BALANCE` | host→gateway | Ask a gateway to look up a balance |
 | `0x20` | `GET_FIRMWARE_VERSION` | host→board | Query the firmware version string |
-| `0x21` | `SET_LORA_PARAMS` | host→board | Set SF/BW/CR/frequency/TX-power *(ACK-only in firmware today)* |
+| `0x21` | `SET_LORA_PARAMS` | host→board | Set SF/BW/CR/frequency/TX-power (applied and persisted since v0.4.1) |
 | `0x22` | `GET_SETTINGS` | host→board | Read live board state (address + gateway + WiFi) |
 | `0x23` | `SET_GATEWAY` | host→board | Set/persist gateway mode |
 | `0x24` | `WIFI_TOGGLE` | host→board | Enable/disable the WiFi radio |
@@ -193,7 +194,18 @@ All other commands (`MESSAGE`, `BROADCAST`, `MULTIPART`, `DOGE_TX`, `REQUEST_BAL
 ## 6. Notable payloads
 
 - **`SET_LORA_PARAMS` (`0x21`)** — 8-byte payload:
-  `[SF(7–12), BW index(0=125,1=250,2=500 kHz), CR denom(5–8), freq_hi, freq_lo (kHz), TX power(dBm), 0x00, 0x00]`.
+  `[SF(7–12), BW index(0=125,1=250,2=500 kHz), CR denom(5–8), freq_khz(u32 big-endian), TX power(dBm)]`.
+
+  > **Changed in v0.4.1.** The frequency was a 2-byte field, which cannot hold 915000 kHz (a 20-bit value) —
+  > it went out as 63032 kHz with the top 4 bits dropped. The field is now a 4-byte big-endian `u32` occupying
+  > bytes `[3..7]`, using the two previously-reserved bytes, and TX power moved from `[5]` to `[7]`. This was a
+  > safe wire change: `0x21` was a no-op ACK in every firmware released before v0.4.1, so no deployed board
+  > parsed the old layout. Build it with `radio::build_set_lora_params` and read it with
+  > `radio::parse_set_lora_params`.
+  >
+  > The firmware validates before applying (SF 7–12, BW 0–2, CR 1–4, 150–960 MHz, 2–22 dBm) and NACKs
+  > out-of-range values rather than retuning to somewhere it can't be reached. Accepted values are applied to
+  > the radio and persisted to NVS.
 - **`GET_FIRMWARE_VERSION` (`0x20`)** — the board replies with a version string such as `RadioDoge NV3FW09`.
   The app strips the `RadioDoge ` prefix for display.
 - **`REQUEST_BALANCE` (`0x11`)** — payload is the ASCII Dogecoin address. A gateway replies with a `MESSAGE`
@@ -236,8 +248,9 @@ The firmware's compile-time LoRa configuration (identical on V2 and V3):
 | Coding rate | 4/5 |
 | Preamble | 8 symbols |
 
-> These are fixed at compile time in the current firmware; the app can *send* new parameters via
-> `SET_LORA_PARAMS`, but runtime reconfiguration is on the [roadmap](../ROADMAP.md#-known-limitations--in-progress).
+> These are the power-on defaults. Since v0.4.1 the app can retune the radio at runtime via
+> `SET_LORA_PARAMS` (`0x21`); accepted values are applied immediately and persisted to NVS, so a retuned board
+> comes back retuned. Out-of-range values are NACKed and the radio is left untouched.
 
 ---
 
