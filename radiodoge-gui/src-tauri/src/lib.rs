@@ -561,6 +561,10 @@ async fn send_transaction(
         .map_err(|e| e.to_string())?
     };
 
+    // The board cannot receive multipart over serial (see check_host_payload_fits).
+    // Reject here rather than transmitting packets the firmware will mis-frame.
+    radio::check_host_payload_fits(payload.len())?;
+
     let src = state.serial.get_node_address().await;
     let dst = NodeAddress::broadcast();
 
@@ -568,11 +572,7 @@ async fn send_transaction(
         // Mobile path: the JS bridge owns the port; emit packet bytes via a
         // Tauri event so the connection-bridge session listener can write them.
         let signed_label = tx.from_private_key_wif.is_some();
-        let packets = if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
-            vec![radio::build_doge_tx(&src, &dst, &payload)]
-        } else {
-            radio::build_multipart_packets(&src, &dst, radio::CMD_DOGE_TX, &payload)
-        };
+        let packets = vec![radio::build_doge_tx(&src, &dst, &payload)];
         for (i, pkt) in packets.iter().enumerate() {
             let label = if signed_label {
                 format!("CMD_DOGE_TX signed (mobile {}/{})", i + 1, packets.len())
@@ -582,21 +582,12 @@ async fn send_transaction(
             emit_debug_traffic(&app, "TX", &hex::encode(pkt), &label);
         }
         let _ = app.emit("mobile-tx-packets", &packets);
-    } else if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
+    } else {
         let pkt = radio::build_doge_tx(&src, &dst, &payload);
         let pkt_hex = hex::encode(&pkt);
         let label = if tx.from_private_key_wif.is_some() { "CMD_DOGE_TX signed (single)" } else { "CMD_DOGE_TX (single packet)" };
         emit_debug_traffic(&app, "TX", &pkt_hex, label);
         state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
-    } else {
-        let pkts = radio::build_multipart_packets(&src, &dst, radio::CMD_DOGE_TX, &payload);
-        let label = if tx.from_private_key_wif.is_some() { "CMD_DOGE_TX signed" } else { "CMD_DOGE_TX" };
-        for (i, pkt) in pkts.iter().enumerate() {
-            let pkt_hex = hex::encode(pkt);
-            emit_debug_traffic(&app, "TX", &pkt_hex, &format!("{} (multipart {}/{})", label, i + 1, pkts.len()));
-            state.serial.send_raw(pkt.clone()).await.map_err(|e| e.to_string())?;
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
     }
 
     let msg = if tx.from_private_key_wif.is_some() {
@@ -1181,13 +1172,9 @@ async fn mobile_push_bytes(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<u32, String> {
-    // Same set of known first-byte values as the desktop read-loop
-    const KNOWN_CMDS: &[u8] = &[
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
-        0x10, 0x11,
-        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, // 0x28 = CMD_BLE_TOGGLE (v0.3.16)
-        0x3F, 0x62, 0x64, 0x68, 0x6D, 0xFE,
-    ];
+    // Same set of known first-byte values as the desktop read-loop.
+    // Keep this in lock-step with radio::is_known_command — a byte missing here
+    // is discarded as noise, which then shifts every following packet by one.
 
     // Guard against unbounded accumulator growth from a misbehaving or spamming board.
     // In normal operation the packet-drain loop below keeps the accumulator small
@@ -1207,7 +1194,7 @@ async fn mobile_push_bytes(
     loop {
         // Discard leading bytes whose first byte is not a known command (sync recovery).
         // This mirrors the desktop loop's behavior for stale firmware debug output.
-        while !acc.is_empty() && !KNOWN_CMDS.contains(&acc[0]) {
+        while !acc.is_empty() && !radio::is_known_command(acc[0]) {
             acc.remove(0);
         }
         if acc.len() < radio::SINGLE_HDR_LEN {
@@ -1221,30 +1208,13 @@ async fn mobile_push_bytes(
         // when two packets arrive in a single USB read callback.
         let cmd = acc[0];
 
-        // Determine the byte count for this packet.
-        let packet_len = match radio::exact_packet_len(cmd) {
+        // Same framing rule as the desktop serial read loop (radiodoge-core).
+        // `None` means the packet is still arriving — keep the bytes buffered
+        // and wait for the next USB/BLE chunk rather than emitting a short packet.
+        let packet_len = match radio::frame_packet_len(cmd, &acc) {
             Some(n) => n,
-            None => {
-                // Variable-length packet.  For CMD_GET_FIRMWARE_VERSION the
-                // board sends a null-terminated ASCII string — scan for the
-                // '\0' so a GET_SETTINGS reply that immediately follows is not
-                // consumed as part of the firmware-version payload.
-                // For all other variable-length commands fall back to consuming
-                // the header + all available payload bytes (up to MAX).
-                let after_hdr = acc.get(radio::SINGLE_HDR_LEN..).unwrap_or(&[]);
-                let payload_len = if cmd == radio::CMD_GET_FIRMWARE_VERSION {
-                    after_hdr
-                        .iter()
-                        .position(|&b| b == 0)
-                        .map(|i| i + 1) // include the '\0'
-                        .unwrap_or_else(|| after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN))
-                } else {
-                    after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN)
-                };
-                radio::SINGLE_HDR_LEN + payload_len
-            }
+            None => break,
         };
-        let packet_len = packet_len.min(acc.len());
 
         // Parse exactly the bytes for this packet so payload_hex is clean.
         let packet = match radio::parse_incoming(&acc[..packet_len], rssi) {
@@ -1510,11 +1480,8 @@ async fn mobile_build_tx_packets(
         .map_err(|e| e.to_string())?
     };
 
-    if payload.len() <= radio::MAX_SINGLE_PAYLOAD_LEN {
-        Ok(vec![radio::build_doge_tx(&src, &dst, &payload)])
-    } else {
-        Ok(radio::build_multipart_packets(&src, &dst, radio::CMD_DOGE_TX, &payload))
-    }
+    radio::check_host_payload_fits(payload.len())?;
+    Ok(vec![radio::build_doge_tx(&src, &dst, &payload)])
 }
 
 /// Build a SET_LORA_PARAMS packet (CMD 0x21) for the Android USB bridge.

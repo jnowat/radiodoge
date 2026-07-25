@@ -355,6 +355,10 @@ MigrationBackup/
 /target/
 radiodoge-gui/.svelte-kit/
 
+# Compiled Svelte frontend (tauri.conf.json frontendDist) — produced by `npm run build`
+radiodoge-gui/build/
+radiodoge-gui/node_modules/
+
 # Local Tauri build artifacts (generated at build time)
 radiodoge-gui/src-tauri/binaries/
 radiodoge-gui/src-tauri/gen/schemas/

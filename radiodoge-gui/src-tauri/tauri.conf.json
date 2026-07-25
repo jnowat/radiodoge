@@ -43,7 +43,6 @@
       "icons/icon.ico"
     ],
     "resources": [],
-    "externalBin": ["binaries/radiodoge-cli"],
     "copyright": "© 2026 RadioDoge Contributors",
     "category": "Finance",
     "shortDescription": "Wireless P2P Dogecoin transactions over LoRa radio",

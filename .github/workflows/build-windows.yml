@@ -99,6 +99,12 @@ jobs:
       # Build the headless CLI and copy it into the src-tauri directory so Tauri
       # bundles it alongside the main executable in the MSI.
       # Tauri sidecar convention: binary name must end in the target triple.
+      #
+      # The sidecar is declared in tauri.sidecar.conf.json, NOT the base
+      # tauri.conf.json — an externalBin entry in the base config makes every
+      # local `cargo build --workspace` fail with "resource path ... doesn't
+      # exist" on a fresh clone, because binaries/ is gitignored and only
+      # produced here. Step 7b merges the overlay in with `--config`.
       - name: 🔨 Build radiodoge-cli sidecar
         env:
           CARGO_INCREMENTAL: "0"
@@ -133,7 +139,7 @@ jobs:
             $attempt++
             Write-Host "🐕 Build attempt $attempt / $maxAttempts ..."
 
-            npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
+            npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose --config src-tauri/tauri.sidecar.conf.json
 
             if ($LASTEXITCODE -eq 0) {
               Write-Host "✅ Succeeded on attempt $attempt. Such build. Wow."

@@ -7,6 +7,87 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — 🔍 Full Review: Build, Framing & Honest Docs — Much Audit. Very Fixed. Wow.
+
+> **A full-repository review pass. The headline: a clean clone could not build at all, both packet-framing
+> loops corrupted split reads, and the LoRa transaction path silently failed for most real transactions.**
+
+### Fixed
+
+#### `cargo build --workspace` failed on every fresh clone
+- `tauri.conf.json` declared `externalBin: ["binaries/radiodoge-cli"]`, but `radiodoge-gui/src-tauri/binaries/`
+  is gitignored and only populated by the Windows CI job. Any clean checkout died with
+  `resource path binaries/radiodoge-cli-<triple> doesn't exist` before compiling a line of app code.
+- The sidecar moved to an opt-in overlay, `src-tauri/tauri.sidecar.conf.json`, which release CI merges in with
+  `npx tauri build --config …`. The base config now builds anywhere.
+
+#### Partial serial reads produced truncated, stream-corrupting packets
+- Both framing loops computed a packet length and then clamped it with `.min(buffer.len())`. A 13-byte
+  `GET_SETTINGS` reply split across two serial reads was therefore parsed as a 9-byte packet with a 1-byte
+  payload, and its remaining 4 bytes were misread as the header of a new packet — corruption that compounds
+  down the stream. At 115,200 baud, split reads are routine, not exotic.
+- Framing is now `radio::frame_packet_len`, which returns `None` for an incomplete packet so callers wait for
+  more bytes. It also waits for the firmware-version NUL terminator instead of emitting a partial string,
+  bounded so a board that never sends one can't wedge the stream.
+
+#### Android silently discarded the board's ACK / Ping notifications
+- The mobile bridge's known-command table had drifted from the desktop one and never gained `0x29`/`0x2A`
+  (added in v0.4.0). Those packets were dropped as noise, and the byte-by-byte resync that followed shifted
+  every subsequent packet.
+- Both transports now share `radio::is_known_command`, with a test asserting the set stays complete.
+
+#### `ping()` could report a false timeout
+- It subscribed to the packet broadcast channel *after* writing the ping. Because a `broadcast::Receiver` only
+  sees packets sent after it subscribes, a board that replied before the task was rescheduled was missed, and
+  the ping reported failure after the full 1500 ms. It now subscribes first.
+
+#### Oversized transactions were transmitted as corrupt packets instead of being refused
+- The firmware parses the host header as `[command, payload_size]` — byte 1 is a length to it, while the host
+  writes its flags byte there. The protocol works only while flags are `0x00`; a multipart frame sets `0x01`,
+  so the board consumed a source-address byte and misframed the remainder. Nothing on the host side
+  reassembles multipart either.
+- A signed P2PKH transaction is exactly 192 bytes at its smallest (1 input, 1 output, no change), so a change
+  output (+34) or a second input (+148) exceeded the single-packet limit — meaning **most real transactions
+  were being sent over the air in a form no receiver could reconstruct, with the UI reporting success**.
+- `radio::check_host_payload_fits` now guards every send path (GUI desktop, GUI mobile, CLI `send`, CLI REPL,
+  `mobile_build_tx_packets`) and fails with an explanation pointing at internet broadcast instead.
+
+#### Silent multipart truncation
+- `build_multipart_packets` capped output at `MAX_MULTIPART_PARTS` and stamped the truncated count as the
+  total, so an oversized payload produced a sequence that would reassemble into corrupt data. Added
+  `try_build_multipart_packets`, which returns an error; the infallible wrapper is documented as returning an
+  empty vec.
+
+#### Miscellaneous correctness
+- `build_message` truncated over-long text on a raw byte index, which could split a multi-byte UTF-8 character
+  and emit an invalid string. It now truncates on a character boundary.
+- The declared MSRV of `1.77.2` was unbuildable — `image`, `time`, and `darling` require 1.88. All three
+  manifests now declare `1.88`.
+- `radiodoge-gui/build/` (the compiled frontend, `frontendDist`) and `node_modules/` were not gitignored.
+
+### Added
+
+- **`SKILLS.md`** — an orientation guide for contributors and coding agents: repository map, working build and
+  test commands, conventions, a checklist for adding a protocol command, and the non-obvious traps (firmware
+  header overloading, framing must-wait semantics, the two framing loops, the opt-in sidecar).
+- Seven regression tests in `radio.rs` covering split-read framing, the version terminator, buffer-bound
+  safety, command-table completeness, multipart limits, the host payload guard, and UTF-8-safe truncation
+  (40 → 47 tests).
+
+### Documentation
+
+- **README:** added real per-platform system prerequisites (the missing `libudev-dev` / GTK / WebKit packages
+  that make a first Linux build fail), corrected the build commands (`npm run tauri dev`, not a global
+  `cargo tauri`), documented the sidecar bundling step, refreshed shipped-vs-next status, and replaced the
+  optimistic end-to-end claim with the actual transaction size limit.
+- **PROTOCOL.md:** new "Host → board is single-packet only" section with the full analysis; corrected the
+  firmware-version string and three commands wrongly marked "firmware wiring pending".
+- **ROADMAP.md:** the size limit added as the leading known limitation; every bug fixed above recorded.
+- **heltec-firmware-v3/README.md:** corrected the reported firmware version (`FW08` → `FW09`) and the stale
+  "no hop limit" claim, which `MAX_REBROADCAST_HOPS` has bounded since v0.4.0.
+
+---
+
 ## [Unreleased] — 🕸️ Mesh Reliability + Supply-Chain CI — Much Robust. Very Audited. Wow.
 
 > **Groundwork for v0.4.x mesh reliability: the firmware now tells the host when it hears an over-the-air ACK or

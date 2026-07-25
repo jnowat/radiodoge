@@ -4,8 +4,8 @@ A comprehensive firmware for the Heltec **WiFi LoRa 32 V3** (and V2) modules tha
 transactions over LoRa radio, with dual WiFi connectivity, persistent NVS configuration, Bluetooth LE, and a
 web-based management interface.
 
-> **Version:** this firmware reports `FIRMWARE_VERSION 8` — i.e. **v0.3.8**. On a `GET_FIRMWARE_VERSION` query
-> it answers with a string like `RadioDoge NV3FW08` (board version + zero-padded firmware number). The `v3.1` /
+> **Version:** this firmware reports `FIRMWARE_VERSION 9` — i.e. **v0.4.0**. On a `GET_FIRMWARE_VERSION` query
+> it answers with a string like `RadioDoge NV3FW09` (board version + zero-padded firmware number). The `v3.1` /
 > `v3.2` labels in the feature notes below are historical names for feature waves, not the firmware's version.
 >
 > **Two ways to talk to this board:** the **web/REST interface** documented here (over WiFi), and the
@@ -26,7 +26,12 @@ Please read before deploying:
   returns the AP password **in plaintext**. Treat a firmware gateway as a device on a **trusted network only**.
 - **"Gateway discovery" is not a discovery protocol.** There is no election or negotiation: any node that
   receives a broadcast and happens to have a configured gateway (or internet) forwards it; others simply
-  rebroadcast. Mesh rebroadcast has **no hop limit** — it's bounded only by a 2-minute broadcast-dedup table.
+  rebroadcast. Rebroadcast is bounded by a hop count (`MAX_REBROADCAST_HOPS`, currently 3) carried in the
+  multipart `reserved` byte, on top of a 2-minute broadcast-dedup table.
+- **The board cannot receive multipart packets from its serial host.** The host header is read as
+  `[command, payload_size]`, so the app's flags byte must be `0x00`; a multipart packet (flags `0x01`) is
+  mis-framed. Host→board payloads must therefore fit in one 192-byte packet. See
+  [`docs/PROTOCOL.md`](../docs/PROTOCOL.md#host--board-single-packet-only).
 - **LoRa parameters are compile-time.** Frequency, spreading factor, and bandwidth are `#define`s; the
   `SET_LORA_PARAMS` (`0x21`) serial command is currently an ACK-only no-op. Only the node **address** is
   reconfigurable at runtime (and persisted to NVS).

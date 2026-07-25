@@ -334,19 +334,11 @@ impl SerialManager {
                         accumulator.extend_from_slice(&bytes);
 
                         // Extract complete packets from the accumulator.
-                        // OPTIMIZED FOR DESKTOP v0.3.3 – SAFE
-                        // If the first byte is not a known command, discard it and re-sync.
+                        // If the first byte cannot start a packet, discard it and re-sync.
                         // This prevents stale firmware text output (e.g. Serial.println debug)
                         // from being misinterpreted as packet headers.
-                        const KNOWN_CMDS: &[u8] = &[
-                            0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
-                            0x10, 0x11, 0x20, 0x21, 0x22, 0x23,  // 0x22/0x23 = v0.3.6
-                            0x24, 0x25, 0x26, 0x27, 0x28,         // v0.3.7/0.3.8/0.3.16 (CMD_BLE_TOGGLE)
-                            0x29, 0x2A,                            // v0.4.0 (CMD_RECEIVED_ACK/PING)
-                            0x3F, 0x62, 0x64, 0x68, 0x6D, 0xFE, // firmware-side IDs
-                        ];
                         while !accumulator.is_empty() {
-                            if !KNOWN_CMDS.contains(&accumulator[0]) {
+                            if !radio::is_known_command(accumulator[0]) {
                                 accumulator.remove(0);
                                 continue;
                             }
@@ -359,22 +351,14 @@ impl SerialManager {
                             // cause next-packet bytes to appear in payload_hex.
                             // Mirrors the equivalent logic in mobile_push_bytes (lib.rs).
                             let cmd = accumulator[0];
-                            let packet_len = {
-                                let after_hdr = accumulator.get(radio::SINGLE_HDR_LEN..).unwrap_or(&[]);
-                                match radio::exact_packet_len(cmd) {
-                                    Some(n) => n,
-                                    None => {
-                                        let payload_len = if cmd == radio::CMD_GET_FIRMWARE_VERSION {
-                                            after_hdr.iter().position(|&b| b == 0)
-                                                .map(|i| i + 1)
-                                                .unwrap_or_else(|| after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN))
-                                        } else {
-                                            after_hdr.len().min(radio::MAX_SINGLE_PAYLOAD_LEN)
-                                        };
-                                        radio::SINGLE_HDR_LEN + payload_len
-                                    }
-                                }
-                            }.min(accumulator.len());
+                            let packet_len = match radio::frame_packet_len(cmd, &accumulator) {
+                                Some(n) => n,
+                                // Not enough bytes yet for a complete packet — leave the
+                                // accumulator untouched and wait for the next serial read.
+                                // Truncating here (the old `.min(accumulator.len())`) emitted
+                                // a short packet and left its tail to be misparsed as a new one.
+                                None => break,
+                            };
                             if let Some(packet) = radio::parse_incoming(&accumulator[..packet_len], 0) {
                                 // Update stats
                                 {
@@ -586,15 +570,22 @@ impl SerialManager {
         let local = self.node_address.lock().await.clone();
         let ping_pkt = radio::build_ping(&local, &local);
 
+        // Subscribe BEFORE sending. The broadcast channel only delivers packets
+        // received after subscription, so subscribing afterwards loses the reply
+        // whenever the board answers faster than this task is rescheduled — the
+        // ping then reports a false "no response" after the full timeout.
+        let mut rx = self.packet_tx.subscribe();
+
         if self.send_raw(ping_pkt).await.is_err() {
             return false;
         }
 
-        let mut rx = self.packet_tx.subscribe();
-        matches!(
-            tokio::time::timeout(Duration::from_millis(1500), rx.recv()).await,
-            Ok(Ok(_))
-        )
+        // Any packet counts as proof of life. `Lagged` means packets were dropped
+        // from this receiver's queue, which still proves the board is talking.
+        tokio::time::timeout(Duration::from_millis(1500), rx.recv())
+            .await
+            .map(|res| !matches!(res, Err(broadcast::error::RecvError::Closed)))
+            .unwrap_or(false)
     }
 
     /// Update the stored node address (called when we receive a GET_NODE_ADDR response).

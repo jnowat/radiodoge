@@ -121,11 +121,27 @@ pub fn build_ping(src: &NodeAddress, dst: &NodeAddress) -> Vec<u8> {
 }
 
 /// Build a text MESSAGE packet.
+///
+/// `text` longer than [`MAX_SINGLE_PAYLOAD_LEN`] is truncated on a UTF-8
+/// character boundary, so the payload is always valid UTF-8 for the receiver to
+/// decode (a plain byte-slice cut can land mid-sequence and produce mojibake).
 pub fn build_message(src: &NodeAddress, dst: &NodeAddress, text: &str) -> Vec<u8> {
     let mut packet = build_header(CMD_MESSAGE, FLAG_STANDARD, src, dst);
-    let payload = &text.as_bytes()[..text.len().min(MAX_SINGLE_PAYLOAD_LEN)];
-    packet.extend_from_slice(payload);
+    packet.extend_from_slice(truncate_on_char_boundary(text, MAX_SINGLE_PAYLOAD_LEN).as_bytes());
     packet
+}
+
+/// Longest prefix of `text` that fits in `max_bytes` without splitting a
+/// multi-byte UTF-8 character.
+fn truncate_on_char_boundary(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Build a BROADCAST packet (sent to all nodes).
@@ -143,7 +159,10 @@ pub fn build_doge_tx(src: &NodeAddress, dst: &NodeAddress, tx_payload: &[u8]) ->
 }
 
 /// Build a GET_SETTINGS command (CMD 0x22) — v0.3.6.
-/// Board replies with 4-byte payload: [region, community, node, gateway_mode_byte].
+/// Board replies with a 5-byte payload:
+/// `[region, community, node, gateway_mode, wifi_enabled]` (13 bytes total).
+/// The `wifi_enabled` byte was added in v0.3.7; parsers accept a 4-byte payload
+/// from older firmware and default `wifi_enabled` to true.
 pub fn build_get_settings(src: &NodeAddress) -> Vec<u8> {
     build_header(CMD_GET_SETTINGS, FLAG_STANDARD, src, &NodeAddress::broadcast())
 }
@@ -219,6 +238,122 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
     }
 }
 
+/// Check that a payload can actually reach the board over the host serial link.
+///
+/// The Heltec firmware reads the host header as `[command, payload_size]` — it
+/// treats byte 1 as a length, while the host writes its flags byte there. That
+/// works only while flags are `0x00`: [`FLAG_MULTIPART`] (`0x01`) makes the
+/// board read one payload byte, swallowing the first source-address byte and
+/// misaligning every byte after it.
+///
+/// So a host→board packet must fit in a single frame. Multipart is real
+/// protocol — the firmware speaks it over the air, and
+/// [`try_build_multipart_packets`] encodes it correctly — but it cannot
+/// currently be handed to the board over serial. Sending it anyway produced no
+/// error and a corrupted transmission, which for a signed transaction is a
+/// silent loss, so callers must check before sending.
+///
+/// Returns `Err` with a user-facing message when `payload_len` is too large.
+pub fn check_host_payload_fits(payload_len: usize) -> Result<(), String> {
+    if payload_len <= MAX_SINGLE_PAYLOAD_LEN {
+        return Ok(());
+    }
+    Err(format!(
+        "Payload is {} bytes; the board's serial protocol accepts at most {} per packet. \
+         Multipart transfer to the board is not supported by the current firmware, so this \
+         cannot be sent over LoRa. A signed transaction exceeds the limit whenever it has a \
+         change output or more than one input — broadcast it over the internet instead \
+         (`radiodoge-cli broadcast`, or the Wallet tab's direct broadcast).",
+        payload_len, MAX_SINGLE_PAYLOAD_LEN
+    ))
+}
+
+/// `true` if `byte` can legitimately start a packet.
+///
+/// The framing loops use this to resynchronise: the firmware also emits plain
+/// `Serial.println` debug text, and any byte that cannot begin a packet is
+/// dropped until the stream lines up again. Every transport must agree on this
+/// set — a command missing here is silently discarded as noise, which then
+/// shifts every packet behind it by one byte.
+///
+/// The trailing values (`0x3F`, `0x62`, `0x64`, `0x68`, `0x6D`, `0xFE`) are
+/// firmware-side message IDs that predate the desktop command range.
+pub fn is_known_command(byte: u8) -> bool {
+    matches!(
+        byte,
+        CMD_GET_NODE_ADDR
+            | CMD_SET_NODE_ADDRS
+            | CMD_PING
+            | CMD_MESSAGE
+            | CMD_BROADCAST
+            | CMD_MULTIPART
+            | CMD_DOGE_TX
+            | CMD_REQUEST_BALANCE
+            | CMD_GET_FIRMWARE_VERSION
+            | CMD_SET_LORA_PARAMS
+            | CMD_GET_SETTINGS
+            | CMD_SET_GATEWAY
+            | CMD_WIFI_TOGGLE
+            | CMD_ADDR_CONFLICT
+            | CMD_GET_BATTERY
+            | CMD_GET_MAC
+            | CMD_BLE_TOGGLE
+            | CMD_RECEIVED_ACK
+            | CMD_RECEIVED_PING
+            | 0x3F
+            | 0x62
+            | 0x64
+            | 0x68
+            | 0x6D
+            | 0xFE
+    )
+}
+
+/// Decide how many bytes of `buf` belong to the packet that starts at `buf[0]`.
+///
+/// This is the single framing rule shared by every transport that has to cut a
+/// byte stream into packets: the desktop serial read loop and the Android
+/// USB/BLE bridge. Keeping it in one place is what stops the two paths from
+/// drifting apart.
+///
+/// Returns `None` when `buf` does not yet hold a complete packet — the caller
+/// must keep the bytes buffered and retry after the next read. It never returns
+/// a length longer than `buf`, so `&buf[..n]` is always a valid slice.
+///
+/// Rules:
+/// - Fixed-length commands ([`exact_packet_len`]) need exactly that many bytes.
+/// - `CMD_GET_FIRMWARE_VERSION` carries a NUL-terminated string; the packet ends
+///   at the NUL. Without one we wait, unless the payload has already reached
+///   [`MAX_SINGLE_PAYLOAD_LEN`] (a board that never sends the terminator must not
+///   wedge the stream forever).
+/// - Other variable-length commands have no in-band length, so all buffered
+///   payload bytes are taken, capped at [`MAX_SINGLE_PAYLOAD_LEN`].
+pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
+    if buf.len() < SINGLE_HDR_LEN {
+        return None;
+    }
+
+    if let Some(n) = exact_packet_len(cmd) {
+        // A fixed-size reply split across two reads must wait for its tail,
+        // not be emitted short.
+        return if buf.len() >= n { Some(n) } else { None };
+    }
+
+    let after_hdr = &buf[SINGLE_HDR_LEN..];
+
+    if cmd == CMD_GET_FIRMWARE_VERSION {
+        return match after_hdr.iter().position(|&b| b == 0) {
+            Some(i) => Some(SINGLE_HDR_LEN + i + 1), // include the NUL
+            None if after_hdr.len() >= MAX_SINGLE_PAYLOAD_LEN => {
+                Some(SINGLE_HDR_LEN + MAX_SINGLE_PAYLOAD_LEN)
+            }
+            None => None, // terminator still in flight
+        };
+    }
+
+    Some(SINGLE_HDR_LEN + after_hdr.len().min(MAX_SINGLE_PAYLOAD_LEN))
+}
+
 /// Build a SET_LORA_PARAMS packet (CMD 0x21) — v0.3.3 additive.
 ///
 /// Payload format (8 bytes):
@@ -254,6 +389,13 @@ pub fn build_set_node_addr(src: &NodeAddress, new_addr: &NodeAddress) -> Vec<u8>
     packet
 }
 
+/// Payload bytes carried by one multipart part (the 4 extra multipart header
+/// bytes come out of the single-packet payload budget).
+pub const MULTIPART_CHUNK_LEN: usize = MAX_SINGLE_PAYLOAD_LEN - (MULTIPART_HDR_LEN - SINGLE_HDR_LEN);
+
+/// The largest payload that can be expressed as a multipart sequence.
+pub const MAX_MULTIPART_PAYLOAD_LEN: usize = MULTIPART_CHUNK_LEN * MAX_MULTIPART_PARTS as usize;
+
 /// Split a large payload into multipart packets (for payloads > MAX_SINGLE_PAYLOAD_LEN).
 ///
 /// Each part has a 12-byte header:
@@ -261,20 +403,49 @@ pub fn build_set_node_addr(src: &NodeAddress, new_addr: &NodeAddress) -> Vec<u8>
 ///   [8]     Total parts count
 ///   [9]     This part's index (0-based)
 ///   [10-11] Unique session ID (random u16, same for all parts)
+///
+/// Returns an empty vec if `payload` exceeds [`MAX_MULTIPART_PAYLOAD_LEN`].
+/// Prefer [`try_build_multipart_packets`], which reports that as an error
+/// instead of leaving the caller to notice nothing was sent.
 pub fn build_multipart_packets(
     src: &NodeAddress,
     dst: &NodeAddress,
     cmd: u8,
     payload: &[u8],
 ) -> Vec<Vec<u8>> {
-    let chunk_size = MAX_SINGLE_PAYLOAD_LEN - (MULTIPART_HDR_LEN - SINGLE_HDR_LEN);
-    let chunks: Vec<&[u8]> = payload.chunks(chunk_size).collect();
-    let total_parts = chunks.len().min(MAX_MULTIPART_PARTS as usize);
+    try_build_multipart_packets(src, dst, cmd, payload).unwrap_or_default()
+}
+
+/// Split a large payload into multipart packets, erroring when it does not fit.
+///
+/// A payload needing more than [`MAX_MULTIPART_PARTS`] parts cannot be encoded:
+/// the part index and count are one byte each in a fixed-size sequence the
+/// receiver reassembles. Earlier revisions silently kept the first 20 parts and
+/// stamped them with a truncated total, so the receiver reassembled a corrupt
+/// payload while the sender reported success — for a signed transaction that is
+/// a silent loss, so it is now a hard error.
+pub fn try_build_multipart_packets(
+    src: &NodeAddress,
+    dst: &NodeAddress,
+    cmd: u8,
+    payload: &[u8],
+) -> Result<Vec<Vec<u8>>, String> {
+    if payload.len() > MAX_MULTIPART_PAYLOAD_LEN {
+        return Err(format!(
+            "payload of {} bytes needs {} multipart parts, but the protocol allows at most {} ({} bytes)",
+            payload.len(),
+            payload.len().div_ceil(MULTIPART_CHUNK_LEN),
+            MAX_MULTIPART_PARTS,
+            MAX_MULTIPART_PAYLOAD_LEN,
+        ));
+    }
+
+    let chunks: Vec<&[u8]> = payload.chunks(MULTIPART_CHUNK_LEN).collect();
+    let total_parts = chunks.len();
     let session_id = rand::random::<u16>();
 
-    chunks
+    Ok(chunks
         .into_iter()
-        .take(total_parts)
         .enumerate()
         .map(|(idx, chunk)| {
             let mut packet = build_header(cmd, FLAG_MULTIPART, src, dst);
@@ -284,7 +455,7 @@ pub fn build_multipart_packets(
             packet.extend_from_slice(chunk);
             packet
         })
-        .collect()
+        .collect())
 }
 
 /// Parse an incoming byte buffer into an IncomingPacket.
@@ -574,6 +745,160 @@ mod tests {
             hex::encode(b"hello"),
             "payload_hex must not include bytes from the subsequent PING packet"
         );
+    }
+
+    /// A fixed-length reply split across two serial reads must not be emitted short.
+    ///
+    /// Regression test: the framing loops used to clamp the packet length with
+    /// `.min(buffer.len())`, so a 13-byte GET_SETTINGS whose first 9 bytes had
+    /// arrived was parsed as a 9-byte packet with a 1-byte payload. The
+    /// remaining 4 bytes were then misread as the start of a new packet.
+    #[test]
+    fn test_frame_packet_len_waits_for_partial_fixed_length_packet() {
+        let full = {
+            let mut p = build_get_settings(&test_src());
+            p.extend_from_slice(&[10, 0, 1, 1, 1]); // 5-byte settings payload
+            p
+        };
+        assert_eq!(full.len(), 13);
+
+        // Every prefix short of the full packet must report "not yet".
+        for n in SINGLE_HDR_LEN..full.len() {
+            assert_eq!(
+                frame_packet_len(CMD_GET_SETTINGS, &full[..n]),
+                None,
+                "a {}-byte prefix of a 13-byte packet must wait for more data",
+                n
+            );
+        }
+        assert_eq!(frame_packet_len(CMD_GET_SETTINGS, &full), Some(13));
+
+        // With a second packet appended, the length is still exactly the first packet.
+        let mut two = full.clone();
+        two.extend_from_slice(&build_ping(&test_src(), &test_dst()));
+        assert_eq!(frame_packet_len(CMD_GET_SETTINGS, &two), Some(13));
+    }
+
+    /// A firmware-version string is NUL-terminated, so framing must wait for the
+    /// terminator instead of emitting whatever bytes happen to have arrived.
+    #[test]
+    fn test_frame_packet_len_waits_for_version_terminator() {
+        let mut pkt = vec![CMD_GET_FIRMWARE_VERSION, 0x00, 10, 0, 1, 0xFF, 0xFF, 0xFF];
+        pkt.extend_from_slice(b"RadioDoge NV3FW08");
+        // No NUL yet and the payload is well under the cap — keep waiting.
+        assert_eq!(frame_packet_len(CMD_GET_FIRMWARE_VERSION, &pkt), None);
+
+        pkt.push(0);
+        assert_eq!(frame_packet_len(CMD_GET_FIRMWARE_VERSION, &pkt), Some(pkt.len()));
+
+        // A board that never sends a terminator must not wedge the stream forever.
+        let mut runaway = vec![CMD_GET_FIRMWARE_VERSION, 0x00, 10, 0, 1, 0xFF, 0xFF, 0xFF];
+        runaway.extend(vec![b'x'; MAX_SINGLE_PAYLOAD_LEN + 40]);
+        assert_eq!(
+            frame_packet_len(CMD_GET_FIRMWARE_VERSION, &runaway),
+            Some(SINGLE_HDR_LEN + MAX_SINGLE_PAYLOAD_LEN)
+        );
+    }
+
+    /// frame_packet_len must never return a length past the end of the buffer,
+    /// so `&buf[..n]` is always sliceable.
+    #[test]
+    fn test_frame_packet_len_never_exceeds_buffer() {
+        for cmd in 0u8..=255 {
+            if !is_known_command(cmd) {
+                continue;
+            }
+            for len in 0..40usize {
+                let buf = vec![cmd; len];
+                if let Some(n) = frame_packet_len(cmd, &buf) {
+                    assert!(
+                        n <= buf.len(),
+                        "cmd 0x{:02X} with {} bytes returned length {}",
+                        cmd, len, n
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every command the framing loops accept as a packet start must be known,
+    /// and the two transports must agree on the set.
+    #[test]
+    fn test_is_known_command_covers_all_protocol_commands() {
+        for cmd in [
+            CMD_GET_NODE_ADDR, CMD_SET_NODE_ADDRS, CMD_PING, CMD_MESSAGE,
+            CMD_BROADCAST, CMD_MULTIPART, CMD_DOGE_TX, CMD_REQUEST_BALANCE,
+            CMD_GET_FIRMWARE_VERSION, CMD_SET_LORA_PARAMS, CMD_GET_SETTINGS,
+            CMD_SET_GATEWAY, CMD_WIFI_TOGGLE, CMD_ADDR_CONFLICT, CMD_GET_BATTERY,
+            CMD_GET_MAC, CMD_BLE_TOGGLE, CMD_RECEIVED_ACK, CMD_RECEIVED_PING,
+        ] {
+            assert!(is_known_command(cmd), "CMD 0x{:02X} must be recognised", cmd);
+        }
+        // Any command with a fixed reply length is by definition a real command.
+        for cmd in 0u8..=255 {
+            if exact_packet_len(cmd).is_some() {
+                assert!(is_known_command(cmd), "CMD 0x{:02X} has a length but is unknown", cmd);
+            }
+        }
+        assert!(!is_known_command(0x99), "arbitrary bytes are not commands");
+    }
+
+    /// Multipart must refuse payloads it cannot encode instead of truncating them.
+    #[test]
+    fn test_multipart_rejects_oversized_payload() {
+        let src = test_src();
+        let dst = test_dst();
+
+        let max_ok = vec![0xAA; MAX_MULTIPART_PAYLOAD_LEN];
+        let parts = try_build_multipart_packets(&src, &dst, CMD_DOGE_TX, &max_ok)
+            .expect("a payload at the limit must encode");
+        assert_eq!(parts.len(), MAX_MULTIPART_PARTS as usize);
+        // Reassembling the chunks must reproduce the original payload exactly.
+        let rebuilt: Vec<u8> = parts
+            .iter()
+            .flat_map(|p| p[MULTIPART_HDR_LEN..].iter().copied())
+            .collect();
+        assert_eq!(rebuilt, max_ok, "no bytes may be lost across the split");
+        // Every part agrees on the total and carries the same session id.
+        let session = &parts[0][10..12];
+        for (i, p) in parts.iter().enumerate() {
+            assert_eq!(p[8] as usize, parts.len(), "part {} has the wrong total", i);
+            assert_eq!(p[9] as usize, i, "part {} has the wrong index", i);
+            assert_eq!(&p[10..12], session, "part {} has a different session id", i);
+        }
+
+        let too_big = vec![0xAA; MAX_MULTIPART_PAYLOAD_LEN + 1];
+        assert!(
+            try_build_multipart_packets(&src, &dst, CMD_DOGE_TX, &too_big).is_err(),
+            "an unencodable payload must error, not be silently truncated"
+        );
+    }
+
+    /// The board reads header byte 1 as a payload length, so only single packets
+    /// can be sent to it over serial.
+    #[test]
+    fn test_check_host_payload_fits() {
+        assert!(check_host_payload_fits(0).is_ok());
+        assert!(check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN).is_ok());
+        let err = check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN + 1)
+            .expect_err("oversized payloads must be rejected");
+        assert!(err.contains("193"), "the error should name the actual size: {}", err);
+    }
+
+    /// Truncating an over-long message must not split a multi-byte character.
+    #[test]
+    fn test_build_message_truncates_on_char_boundary() {
+        // 'é' is 2 bytes, so a naive cut at 192 would land mid-character.
+        let text = "é".repeat(200);
+        let pkt = build_message(&test_src(), &test_dst(), &text);
+        let payload = &pkt[SINGLE_HDR_LEN..];
+        assert!(payload.len() <= MAX_SINGLE_PAYLOAD_LEN);
+        std::str::from_utf8(payload).expect("truncated payload must stay valid UTF-8");
+
+        // ASCII text is unaffected and still fills the packet.
+        let ascii = "a".repeat(200);
+        let pkt = build_message(&test_src(), &test_dst(), &ascii);
+        assert_eq!(pkt.len() - SINGLE_HDR_LEN, MAX_SINGLE_PAYLOAD_LEN);
     }
 
     /// Verify exact_packet_len returns the correct size for every fixed-length command

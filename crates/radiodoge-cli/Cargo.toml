@@ -6,7 +6,7 @@ authors = ["RadioDoge Contributors"]
 license = "MIT"
 repository = "https://github.com/jnowat/RadioDoge"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88"
 
 [[bin]]
 name = "radiodoge-cli"
