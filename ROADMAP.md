@@ -159,10 +159,16 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
     and Android bridge with an explanatory error. Use `radiodoge-cli broadcast` (or the Wallet tab) for those.
 
   Full analysis: [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
-- **BLE is notify-oriented in firmware.** The app can scan, connect, and receive board notifications over
-  Bluetooth LE, and the app's BLE write path is wired end-to-end — but the firmware currently buffers inbound
-  BLE writes without consuming them, so **commands sent over BLE are not yet executed on the board**. Use
-  **USB-C** as the reliable transport today; BLE is a preview. *(Tracked under v0.4.x firmware parity.)*
+- ~~**BLE is notify-oriented in firmware.**~~ *Fixed in v0.4.1 firmware (needs hardware validation):* inbound
+  BLE writes accumulated in `bleRxBuffer` and were never read, so the app could connect and receive
+  notifications but every command it sent over Bluetooth was silently ignored. `HandleDesktopCommand` no longer
+  reads `Serial` itself — its bytes are passed in — so the USB and BLE paths share one implementation of every
+  command instead of growing a second copy. `ProcessBleCommands()` drains the buffer each loop and dispatches
+  through it. Because BLE has no equivalent of the serial path's inter-packet delay and a packet can be split
+  across GATT writes, a packet is executed once its fixed length has arrived, or — for the variable-length
+  `DOGE_TX`/`REQUEST_BALANCE` — after a 60 ms quiet gap. Replies already went to both transports, so a command
+  sent over either link is answered on both. **USB-C remains the better-tested transport until this has hardware
+  validation.**
 - ~~**Three desktop commands aren't reachable in firmware yet.**~~ *Fixed in v0.4.0 firmware:* `WIFI_TOGGLE`
   (`0x24`), `GET_BATTERY` (`0x26`), and `GET_MAC` (`0x27`) are now routed to their handlers, and `BLE_TOGGLE`
   (`0x28`) toggles BLE advertising and persists to NVS. Flash the updated Heltec V3 firmware to use these.

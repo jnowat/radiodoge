@@ -45,6 +45,11 @@ extern nodeAddress local;
   uint8_t bleRxBuffer[256];
   int bleRxLen = 0;
   bool blePendingData = false;
+  // v0.4.1 — millis() of the most recent BLE write. A large packet can be split
+  // across several GATT writes, and the desktop protocol has no in-band length
+  // for CMD_DOGE_TX / CMD_REQUEST_BALANCE, so the framer waits for a short quiet
+  // gap before treating a variable-length packet as complete.
+  unsigned long lastBleRxMillis = 0;
   BLEServer *pBleServer = NULL;
   BLECharacteristic *pBleTxChar = NULL;
   class BleServerCallbacks : public BLEServerCallbacks {
@@ -57,6 +62,7 @@ extern nodeAddress local;
       for (size_t i = 0; i < v.length() && bleRxLen < 255; i++)
         bleRxBuffer[bleRxLen++] = (uint8_t)v[i];
       blePendingData = true;
+      lastBleRxMillis = millis();
     }
   };
   // Send a response packet over BLE TX characteristic (notify)
@@ -493,6 +499,10 @@ void loop() {
   // v0.3.6 — Cycle OLED status pages every 3 seconds
   updateStatusDisplay();
 
+  // v0.4.1 — Execute any command written over BLE. Previously these bytes were
+  // buffered and never read, so BLE was receive-only.
+  ProcessBleCommands();
+
   CommandAndControlLoop();
 }
 
@@ -888,6 +898,28 @@ void saveLoRaConfigurationQuiet(uint8_t region, uint8_t community, uint8_t node)
   nvs_set_u8(nvs_handle, "node", node);
   nvs_commit(nvs_handle);
   nvs_close(nvs_handle);
+}
+
+// v0.4.1 — Command bytes handled by HandleDesktopCommand, i.e. the app/CLI
+// protocol rather than the firmware's legacy serial enum. Both the USB and the
+// BLE dispatch consult this, so the two transports accept exactly the same set.
+bool isDesktopCommandByte(uint8_t cmdByte) {
+  return cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
+      || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
+      || cmdByte == 0x27 || cmdByte == 0x28;
+}
+
+// Total packet length for a desktop command sent host -> board, or 0 when the
+// command has no fixed size (0x10 DOGE_TX and 0x11 REQUEST_BALANCE carry
+// variable payloads). Used only by the BLE framer, which — unlike the serial
+// path — has no inter-packet delay to lean on.
+uint8_t desktopCommandLength(uint8_t cmdByte) {
+  switch (cmdByte) {
+    case 0x20: case 0x22: case 0x26: case 0x27: return 8;   // header only
+    case 0x23: case 0x24: case 0x28:            return 9;   // header + 1 flag byte
+    case 0x21:                                  return 16;  // header + 8 param bytes
+    default:                                    return 0;   // variable length
+  }
 }
 
 // v0.4.1 — Is this board acting as an internet gateway right now?
@@ -3071,19 +3103,22 @@ bool ReadSerialPayload(uint8_t payloadSize) {
 //   0x11  CMD_REQUEST_BALANCE     — ACK (balance fulfillment happens via LoRa network)
 //   0x20  CMD_GET_FIRMWARE_VERSION — reply with version string in payload
 //   0x21  CMD_SET_LORA_PARAMS     — ACK (RF reconfiguration reserved for future revision)
-void HandleDesktopCommand(uint8_t cmdByte) {
-  // Drain the 6 remaining desktop header bytes: [src_r, src_c, src_n, dst_r, dst_c, dst_n]
-  uint8_t hdrRest[6] = {0};
-  Serial.readBytes(hdrRest, 6);
-
-  // Collect any additional payload bytes (all waiting in buffer after delay(500))
-  uint8_t extraPayload[BUFFER_SIZE];
-  memset(extraPayload, 0, sizeof(extraPayload));
-  uint8_t extraLen = 0;
-  while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
-    extraPayload[extraLen++] = (uint8_t)Serial.read();
-  }
-
+// Execute a desktop-protocol command.
+//
+// v0.4.1 — This used to read its own bytes straight off `Serial`, which meant
+// only USB could ever reach it: BLE writes landed in bleRxBuffer and were never
+// consumed, so commands sent over Bluetooth did nothing. The bytes are now
+// passed in, so USB and BLE share one implementation of every command rather
+// than growing a second copy that drifts.
+//
+//   hdrRest      the 6 header bytes after [cmd, flags]:
+//                [src_r, src_c, src_n, dst_r, dst_c, dst_n]
+//   extraPayload payload bytes following the 8-byte header
+//   extraLen     number of valid bytes in extraPayload
+//
+// Replies already go to both transports (Serial.write + bleSend), so a command
+// arriving over either link is answered on both.
+void HandleDesktopCommand(uint8_t cmdByte, const uint8_t* hdrRest, const uint8_t* extraPayload, uint8_t extraLen) {
   switch (cmdByte) {
     case 0x10: { // CMD_DOGE_TX — relay a signed transaction over LoRa.
       // v0.4.0 (WP1): transmit the FULL desktop-format packet — command byte plus
@@ -3353,6 +3388,71 @@ void RelayDesktopMessageOverLoRa() {
   isLoRaIdle = true;
 }
 
+// ─── v0.4.1 — BLE command execution ──────────────────────────────────────────
+//
+// Inbound BLE writes used to accumulate in bleRxBuffer and were never read, so
+// every command sent over Bluetooth was silently ignored — the app could
+// connect and receive notifications but not control the board. This drains the
+// buffer and runs the same HandleDesktopCommand the USB path uses.
+//
+// Framing: BLE has no equivalent of the serial path's delay(500), and a packet
+// can be split across GATT writes, so a packet is dispatched once either its
+// fixed length has arrived (desktopCommandLength) or, for the variable-length
+// commands, the link has been quiet for BLE_FRAME_QUIET_MS.
+#define BLE_FRAME_QUIET_MS 60
+
+#if ENABLE_BLE
+void ProcessBleCommands() {
+  if (!blePendingData) return;
+  if (bleRxLen < SINGLE_PACKET_HEADER_SIZE) return;  // header still arriving
+
+  uint8_t cmdByte = bleRxBuffer[0];
+
+  // Anything we cannot execute is discarded rather than left to accumulate —
+  // otherwise one stray byte wedges the 256-byte buffer permanently.
+  if (!isDesktopCommandByte(cmdByte)) {
+    addLog("[BLE] Dropping unrecognised command 0x" + String(cmdByte, HEX));
+    bleRxLen = 0;
+    blePendingData = false;
+    return;
+  }
+
+  uint16_t need = desktopCommandLength(cmdByte);
+  if (need > 0) {
+    if (bleRxLen < (int)need) return;  // fixed-length packet still arriving
+  } else {
+    // Variable length: no in-band size, so a quiet gap marks the boundary.
+    if (millis() - lastBleRxMillis < BLE_FRAME_QUIET_MS) return;
+    need = (uint16_t)bleRxLen;
+  }
+
+  uint8_t hdrRest[6];
+  memcpy(hdrRest, bleRxBuffer + 2, 6);
+
+  uint8_t payloadLen = (uint8_t)(need - SINGLE_PACKET_HEADER_SIZE);
+  uint8_t extraPayload[BUFFER_SIZE];
+  memset(extraPayload, 0, sizeof(extraPayload));
+  if (payloadLen > 0) {
+    memcpy(extraPayload, bleRxBuffer + SINGLE_PACKET_HEADER_SIZE, payloadLen);
+  }
+
+  // Consume this packet, preserving anything that arrived behind it.
+  if (bleRxLen > (int)need) {
+    memmove(bleRxBuffer, bleRxBuffer + need, bleRxLen - need);
+    bleRxLen -= (int)need;
+  } else {
+    bleRxLen = 0;
+    blePendingData = false;
+  }
+
+  addLog("[BLE] Executing desktop cmd 0x" + String(cmdByte, HEX) +
+         " (" + String(payloadLen) + " payload bytes)");
+  HandleDesktopCommand(cmdByte, hdrRest, extraPayload, payloadLen);
+}
+#else
+void ProcessBleCommands() {}
+#endif
+
 // Read serial data from the host and perform the specified command/control function.
 // This function expects the host to send a header that is 8 bytes in length and then a payload that can range from 0-255 bytes.
 // The header contains the command type and payload size information (see ReadSerialHeader for more info on the header)
@@ -3389,10 +3489,22 @@ void HostSerialRead() {
     return;
   }
 
-  if (cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
-      || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
-      || cmdByte == 0x27 || cmdByte == 0x28) {
-    HandleDesktopCommand(cmdByte);
+  if (isDesktopCommandByte(cmdByte)) {
+    // v0.4.1 — HandleDesktopCommand no longer reads Serial itself (so BLE can
+    // reach it too), so collect its bytes here: the 6 remaining header bytes
+    // [src_r, src_c, src_n, dst_r, dst_c, dst_n] then whatever payload is
+    // waiting (everything has arrived by now thanks to the delay(500) above).
+    uint8_t hdrRest[6] = {0};
+    Serial.readBytes(hdrRest, 6);
+
+    uint8_t extraPayload[BUFFER_SIZE];
+    memset(extraPayload, 0, sizeof(extraPayload));
+    uint8_t extraLen = 0;
+    while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
+      extraPayload[extraLen++] = (uint8_t)Serial.read();
+    }
+
+    HandleDesktopCommand(cmdByte, hdrRest, extraPayload, extraLen);
     return;
   }
 
