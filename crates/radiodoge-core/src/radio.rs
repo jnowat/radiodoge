@@ -246,6 +246,57 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
     }
 }
 
+/// `true` if a flags byte is one the protocol can actually produce.
+///
+/// The low nibble is the single/multipart flag, so it is only ever `0x0` or
+/// `0x1`; the high nibble is a hop count and may be anything. Checking this
+/// rejects 14 of every 16 byte values, which matters for resynchronisation —
+/// see [`looks_like_packet_start`].
+fn is_plausible_flags(flags: u8) -> bool {
+    (flags & 0x0F) <= FLAG_MULTIPART
+}
+
+/// `true` if `buf` plausibly begins a packet.
+///
+/// Stronger than [`is_known_command`] alone, because the command set overlaps
+/// heavily with printable ASCII and the firmware writes plain `Serial.println`
+/// debug text down the same link. `0x20` is both `CMD_GET_FIRMWARE_VERSION` and
+/// the space character, `0x21`–`0x2A` are `!"#$%&'()*`, and `0x62`/`0x64`/`0x68`/`0x6D`
+/// are `b`/`d`/`h`/`m` — so a log line resynchronises on its first space and the
+/// next eight characters get read as a header.
+///
+/// Requiring the following byte to be a valid flags value discards most of
+/// those: in text, the byte after a space is usually a letter, and only two of
+/// every sixteen byte values are a legal flags byte. A packet is never rejected
+/// by this, because every packet this protocol builds has a flags low nibble of
+/// `0x0` or `0x1`.
+///
+/// With only one byte buffered the flags byte has not arrived yet, so the
+/// command byte alone decides and the caller waits for more data.
+pub fn looks_like_packet_start(buf: &[u8]) -> bool {
+    match buf {
+        [] => false,
+        [cmd] => is_known_command(*cmd),
+        [cmd, flags, ..] => is_known_command(*cmd) && is_plausible_flags(*flags),
+    }
+}
+
+/// Index of the first byte in `buf` that could begin a packet.
+///
+/// Everything before it is noise and the caller should discard that prefix in
+/// one operation. Returns `buf.len()` when nothing in the buffer can start a
+/// packet, i.e. discard all of it.
+///
+/// Callers used to drop noise with `remove(0)` in a loop. `Vec::remove(0)`
+/// shifts the entire remaining buffer, so discarding a `k`-byte run of debug
+/// text from an `n`-byte accumulator moved `O(k·n)` bytes — and a single log
+/// line is easily 200 bytes. Scanning first and draining once is `O(n)`.
+pub fn resync_offset(buf: &[u8]) -> usize {
+    (0..buf.len())
+        .find(|&i| looks_like_packet_start(&buf[i..]))
+        .unwrap_or(buf.len())
+}
+
 /// Check that a payload can actually reach the board over the host serial link.
 ///
 /// The Heltec firmware reads the host header as `[command, payload_size]` — it
@@ -1223,6 +1274,112 @@ mod tests {
         assert_ne!(freq, 63_032, "this was the truncated value before v0.4.1");
 
         assert!(parse_set_lora_params(&[0u8; 7]).is_none(), "short payloads are rejected");
+    }
+
+    /// Resync skips noise and never runs past a real packet start.
+    #[test]
+    fn test_resync_offset_skips_noise() {
+        let pkt = build_ping(&test_src(), &test_dst());
+
+        // No noise — nothing to skip.
+        assert_eq!(resync_offset(&pkt), 0);
+
+        // A buffer that is entirely noise is entirely discarded.
+        let all_noise = vec![b'z'; 64];
+        assert_eq!(resync_offset(&all_noise), all_noise.len());
+        assert_eq!(resync_offset(&[]), 0);
+
+        // Resync must never skip past a real packet start.
+        for cmd in 0u8..=255 {
+            if !is_known_command(cmd) {
+                continue;
+            }
+            // 'x','y' cannot start a packet, so the packet begins at index 2.
+            let buf = [b'x', b'y', cmd, 0x00];
+            assert_eq!(
+                resync_offset(&buf), 2,
+                "cmd 0x{:02X} should be found at index 2", cmd
+            );
+        }
+    }
+
+    /// A packet must never be rejected by the plausibility check, at any hop
+    /// count, single or multipart. False negatives would drop real traffic;
+    /// false positives only cost a discarded garbage packet.
+    #[test]
+    fn test_looks_like_packet_start_accepts_every_real_packet() {
+        let (src, dst) = (test_src(), test_dst());
+        for hops in 0..=15u8 {
+            for base in [FLAG_STANDARD, FLAG_MULTIPART] {
+                let mut pkt = build_doge_tx(&src, &dst, b"payload");
+                pkt[1] = flags_with_hops(base, hops);
+                assert!(
+                    looks_like_packet_start(&pkt),
+                    "a packet with base {:#04x} and {} hops must be recognised", base, hops
+                );
+                assert_eq!(resync_offset(&pkt), 0);
+            }
+        }
+    }
+
+    /// Resynchronisation is a heuristic: this protocol has no frame delimiter
+    /// or checksum, and the command set overlaps printable ASCII (`0x20` is both
+    /// CMD_GET_FIRMWARE_VERSION and the space character), so firmware log text
+    /// can still produce a false packet start.
+    ///
+    /// Two things must hold. The flags check must cut the false starts down
+    /// substantially, and — more importantly — a false start must never lose a
+    /// real packet that follows: scanning onward always finds it.
+    #[test]
+    fn test_resync_recovers_from_false_starts_in_log_text() {
+        let lines: [&[u8]; 4] = [
+            b"[LoRa] Sending PING to 10.0.2\n",
+            b"[GATEWAY] broadcast OK txid=abc123\n",
+            b"[DEBUG] Packet type: 3, Is multipart: 0\n",
+            b"Gateway mode restored: ON\n",
+        ];
+
+        // The flags check must reject strictly more noise than the command byte
+        // alone, which is the point of the extra byte.
+        let mut cmd_only = 0usize;
+        let mut with_flags = 0usize;
+        for line in lines {
+            cmd_only += line.iter().filter(|&&b| is_known_command(b)).count();
+            with_flags += (0..line.len()).filter(|&i| looks_like_packet_start(&line[i..])).count();
+        }
+        assert!(
+            with_flags < cmd_only,
+            "the flags check should reduce false starts ({} -> {})", cmd_only, with_flags
+        );
+
+        // A real packet after log text is always reachable: repeatedly resyncing
+        // and stepping past false starts converges on it, exactly as the framing
+        // loop does when it discards a garbage packet and continues.
+        let pkt = build_ping(&test_src(), &test_dst());
+        for line in lines {
+            let mut buf = line.to_vec();
+            let pkt_at = buf.len();
+            buf.extend_from_slice(&pkt);
+
+            let mut pos = 0usize;
+            let mut found = None;
+            while pos < buf.len() {
+                pos += resync_offset(&buf[pos..]);
+                if pos >= buf.len() {
+                    break;
+                }
+                if pos == pkt_at {
+                    found = Some(pos);
+                    break;
+                }
+                pos += 1; // false start — step past it and keep scanning
+            }
+            assert_eq!(
+                found, Some(pkt_at),
+                "the real packet after {:?} must still be found",
+                String::from_utf8_lossy(line)
+            );
+        }
     }
 
     // ─── Multipart reassembly ────────────────────────────────────────────────

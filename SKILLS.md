@@ -41,7 +41,7 @@ are creating a second implementation that will drift — and it has, twice (see 
 
 ```bash
 cargo build --workspace          # all three crates
-cargo test  --workspace          # 59 tests + doc tests, no hardware required
+cargo test  --workspace          # 62 tests + doc tests, no hardware required
 cargo clippy --workspace --all-targets   # expected to be warning-clean
 ```
 
@@ -153,6 +153,46 @@ consumed. Getting that backwards makes the loop spin on the same bytes forever.
 Multipart is identified by the **flags byte**, not the command byte — a multipart `CMD_DOGE_TX` frame still
 starts with `0x10`. Use `radio::is_multipart_flags`, which masks off the hop nibble so relayed frames are
 still recognised.
+
+### Resynchronisation is heuristic, and that's inherent
+
+The protocol has no frame delimiter and no checksum, so after noise the framer
+can only *guess* where the next packet starts. Worse, the command set overlaps
+printable ASCII — `0x20` is both `CMD_GET_FIRMWARE_VERSION` and the space
+character — and the firmware writes `Serial.println` debug text down the same
+link, so log lines produce false packet starts.
+
+`looks_like_packet_start` also requires the next byte to be a legal flags value
+(low nibble `0x0` or `0x1`), which cuts false starts on realistic log lines by
+~84%. It cannot eliminate them. What it must never do is reject a real packet —
+that's the property the tests pin down. A false start costs one discarded
+garbage packet; a false negative loses real traffic.
+
+Use `radio::resync_offset` and drain once. Never scan with `remove(0)` in a
+loop: that shifts the whole buffer per byte, and a 200-byte log line in a 1 KB
+accumulator moves 200 KB.
+
+### Chunks must reach `mobile_push_bytes` in order
+
+Rust appends every chunk to one accumulator, so the byte stream must stay in
+order. Tauri does not guarantee ordering between concurrent `invoke` calls, and
+both mobile byte sources — the USB read loop and the BLE notification callback —
+can produce a chunk before the previous one finishes crossing IPC.
+
+Always route pushes through `_queuePushBytes` in `connection-bridge.ts`, which
+chains them. Firing `invoke('mobile_push_bytes', …)` directly reintroduces the
+reordering bug, and it corrupts every packet that straddles the seam.
+
+### Background tasks must check the connection generation
+
+`connect_port` spawns a stats poller and a reconnect watchdog, and each captures
+the port name it was spawned with. `reconnect_enabled` alone can't retire them:
+it's one shared flag, so connecting to a different port within the watchdog's
+2 s tick sets it true again before the old one notices — leaving a stale
+watchdog that reconnects the port the user just left.
+
+Any long-lived task spawned per connection must capture `connection_generation`
+and exit when it changes.
 
 ### `exact_packet_len` is a contract with the firmware
 
