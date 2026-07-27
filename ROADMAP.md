@@ -147,29 +147,72 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   writes its *flags* byte there. The protocol works only while flags are `0x00`; a multipart frame sets
   `0x01`, and the board then swallows a source-address byte and misframes the rest. A signed P2PKH transaction
   is exactly 192 bytes at its smallest (1 input, 1 output, no change), so a change output (`+34`) or a second
-  input (`+148`) pushes it over. Nothing on the host side reassembles multipart either — not the gateway
-  daemon, not either framing loop.
-  *Mitigated, not fixed:* `radio::check_host_payload_fits` now rejects oversized sends across the GUI, CLI, and
-  Android bridge with an explanatory error, instead of transmitting frames the board will garble. Use
-  `radiodoge-cli broadcast` (or the Wallet tab) to push those transactions over the internet. A real fix needs
-  a firmware host-framing change plus host-side reassembly. Full analysis:
-  [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
-- **BLE is notify-oriented in firmware.** The app can scan, connect, and receive board notifications over
-  Bluetooth LE, and the app's BLE write path is wired end-to-end — but the firmware currently buffers inbound
-  BLE writes without consuming them, so **commands sent over BLE are not yet executed on the board**. Use
-  **USB-C** as the reliable transport today; BLE is a preview. *(Tracked under v0.4.x firmware parity.)*
+  input (`+148`) pushes it over.
+  **Both halves are now implemented; the host guard stays on until hardware confirms it.**
+  - ✅ *Host-side reassembly (tested).* `radio::MultipartReassembler` reassembles sequences keyed by
+    `(source, session id)`, tolerating out-of-order and duplicated parts, with a 30 s session timeout and a
+    bounded session table. Both framing loops call `radio::ingest_packet`, so the GUI, the packet log, and the
+    gateway daemon all receive one complete packet instead of fragments. A gateway correctly reassembles a
+    multipart transaction arriving over the air.
+  - ✅ *Firmware host-framing (v0.4.1, compile-unverified).* Desktop commands are now dispatched **before**
+    `ReadSerialPayload`, so header byte 1 is never interpreted as a length for them and any flags value frames
+    correctly. The `0x10`/`0x11` relay paths preserve the flags byte instead of hardcoding `0x00`, so a
+    multipart frame reaches the air intact — the board forwards each part verbatim and the receiving gateway's
+    host reassembles, meaning the firmware needs no reassembly buffer of its own.
+  - 🔒 *The host guard is deliberately still enforced.* `radio::check_host_payload_fits` continues to reject
+    oversized sends. Lifting it before the firmware path is validated on hardware would re-expose the original
+    failure — silently transmitting a transaction no receiver can reconstruct — so this is the one change that
+    should not be made blind.
+
+  **To finish this:** flash firmware v0.4.1 (`FIRMWARE_VERSION 10`), confirm a >192-byte signed transaction
+  survives host → board → air → gateway → daemon intact, then relax `check_host_payload_fits` to allow up to
+  `MAX_MULTIPART_PAYLOAD_LEN` and restore the multipart branches in the send paths (GUI `send_transaction`,
+  `mobile_build_tx_packets`, CLI `cmd_send`). Gate it on the reported firmware version so older boards keep the
+  single-packet limit.
+
+  Full analysis: [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
+- ~~**BLE is notify-oriented in firmware.**~~ *Fixed in v0.4.1 firmware (needs hardware validation):* inbound
+  BLE writes accumulated in `bleRxBuffer` and were never read, so the app could connect and receive
+  notifications but every command it sent over Bluetooth was silently ignored. `HandleDesktopCommand` no longer
+  reads `Serial` itself — its bytes are passed in — so the USB and BLE paths share one implementation of every
+  command instead of growing a second copy. `ProcessBleCommands()` drains the buffer each loop and dispatches
+  through it. Because BLE has no equivalent of the serial path's inter-packet delay and a packet can be split
+  across GATT writes, a packet is executed once its fixed length has arrived, or — for the variable-length
+  `DOGE_TX`/`REQUEST_BALANCE` — after a 60 ms quiet gap. Replies already went to both transports, so a command
+  sent over either link is answered on both. **USB-C remains the better-tested transport until this has hardware
+  validation.**
 - ~~**Three desktop commands aren't reachable in firmware yet.**~~ *Fixed in v0.4.0 firmware:* `WIFI_TOGGLE`
   (`0x24`), `GET_BATTERY` (`0x26`), and `GET_MAC` (`0x27`) are now routed to their handlers, and `BLE_TOGGLE`
   (`0x28`) toggles BLE advertising and persists to NVS. Flash the updated Heltec V3 firmware to use these.
-- **`SET_LORA_PARAMS` (`0x21`) is a no-op ACK.** LoRa frequency/SF/bandwidth are compile-time constants in the
-  firmware; the app can send new parameters but the radio isn't reconfigured at runtime yet.
+- ~~**`SET_LORA_PARAMS` (`0x21`) is a no-op ACK.**~~ *Fixed in v0.4.1 firmware (needs hardware validation):*
+  the radio parameters are now runtime variables applied via `SetChannel`/`SetTxConfig`/`SetRxConfig` and
+  persisted to NVS, so a retuned board comes back retuned. Values are validated first (SF 7–12, BW 0–2,
+  CR 1–4, 150–960 MHz, 2–22 dBm) and out-of-range requests are NACKed with the radio left untouched, so a bad
+  setting can't strand the board off-channel.
+  While wiring this up, the **frequency field turned out to be too narrow to carry 915 MHz**: it was two bytes
+  for a 20-bit value, so 915000 kHz was transmitted as 63032 kHz. It is now a big-endian `u32` in bytes `[3..7]`
+  with TX power moved to `[7]` — a safe wire change, since no released firmware ever read those bytes.
 - ~~**No hop limit on mesh rebroadcast.**~~ *Fixed in v0.4.0:* multipart rebroadcasts carry a hop count in the
   `reserved` byte and are dropped once they reach `MAX_REBROADCAST_HOPS` (3), on top of the 2-minute dedup table.
-- **`gateway_mode` is a reporting flag, not a forwarding switch.** Actual forwarding is decided by the board's
-  configured gateway type / IP / internet state, independent of the `gateway_mode` toggle.
-- **The firmware web UI is unauthenticated.** Every `/api/*` route is open to anyone on the board's WiFi AP, and
-  a couple of status endpoints return stored credentials in plaintext. Treat a firmware gateway as trusted-network
-  only until authentication lands.
+- ~~**`gateway_mode` is a reporting flag, not a forwarding switch.**~~ *Fixed in v0.4.1 firmware (needs
+  hardware validation):* the transaction and broadcast forwarders checked only whether a gateway was
+  *configured* (`gateway_type` + `gateway_ip`) and never consulted the toggle, so switching gateway mode off in
+  the app did not stop the board pushing other nodes' transactions to the internet. All four relay paths now go
+  through `gatewayForwardingEnabled()`, making the toggle authoritative. Saving a gateway from the web UI
+  enables the mode, so a board configured entirely through the web interface keeps forwarding as before. The
+  web UI's *own* "send transaction" endpoint is deliberately not gated — that is the operator acting directly,
+  not the board relaying someone else's traffic.
+- **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP.
+  Treat a firmware gateway as trusted-network only until authentication lands.
+  - ✅ *The credential disclosure is fixed (v0.4.1, needs hardware validation).* `GET /api/password/status`
+    returned the AP password and `GET /api/gateway/load` returned the stored gateway RPC password, both in
+    plaintext to any unauthenticated caller. Neither is returned now: the password endpoint reports only
+    `is_default` and `length`, and the gateway endpoint reports `has_password`. The RPC password is write-only —
+    the web UI leaves the field blank with a placeholder showing whether one is saved, and submitting it blank
+    keeps the stored value rather than erasing it.
+  - 🔜 *Route authentication itself is still open.* The remaining work is a guard on all 40 handlers; it is not
+    done here because it cannot be compile- or hardware-tested in the review environment, and a mistake locks
+    the operator out of their own board.
 - ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
   crate version via clap's `version` attribute, so it always matches the package.
 - ~~**`cargo build --workspace` failed on a fresh clone.**~~ *Fixed:* `tauri.conf.json` declared an
@@ -185,8 +228,8 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   resynced byte-by-byte. Both paths now share `radio::is_known_command`.
 - ~~**`ping()` could report a false timeout.**~~ *Fixed:* it subscribed to the packet channel *after* sending,
   losing the reply whenever the board answered before the task was rescheduled.
-- **The declared MSRV is Rust 1.88.** Several transitive dependencies (`image`, `time`, `darling`) require it;
-  the manifests previously claimed 1.77.2, which could not actually build.
+- ~~**The declared MSRV was unbuildable.**~~ *Fixed:* the manifests claimed Rust 1.77.2 while `image`, `time`,
+  and `darling` require 1.88. All three crates now declare **1.88**, which is the real minimum.
 
 Found something else? [Open an issue](https://github.com/jnowat/RadioDoge/issues) — much appreciated. 🐕
 

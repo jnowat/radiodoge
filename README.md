@@ -291,7 +291,7 @@ $BIN daemon -p /dev/ttyUSB0                                                # gat
 |-----------|----------|--------|-------|
 | USB serial | Windows / Linux / macOS | ✅ Supported | Built-in CP2102 at 115,200 baud via the `serialport` crate |
 | USB-C OTG | Android | ✅ Supported | `tauri-plugin-serialplugin` → `usb-serial-for-android`; identical protocol to desktop |
-| Bluetooth LE | Android | 🧪 Preview | Nordic UART Service; scan/connect/notify work end-to-end. Firmware BLE is notify-oriented today — see [known limitations](ROADMAP.md#-known-limitations--in-progress) |
+| Bluetooth LE | Android | 🧪 Preview | Nordic UART Service; scan/connect/notify work end-to-end. Firmware v0.4.1 also executes commands received over BLE, but that path is not yet hardware-validated — see [known limitations](ROADMAP.md#-known-limitations--in-progress) |
 
 **Bluetooth LE UUIDs** (Nordic UART Service — matched between firmware and app):
 

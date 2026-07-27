@@ -47,7 +47,7 @@ impl Default for RadioStats {
 
 /// RadioDoge mesh network address: Region.Community.Node
 /// Example: 10.0.2 means Region=10, Community=0, Node=2
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeAddress {
     pub region: u8,

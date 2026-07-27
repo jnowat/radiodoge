@@ -53,8 +53,8 @@ Offset  Field
 ```
 
 - `MAX_SINGLE_PAYLOAD_LEN = 192`. Longer payloads split into multipart frames (§3) — but see
-  [Host → board is single-packet only](#host--board-single-packet-only): a host may not send multipart to a
-  board on today's firmware.
+  [Host → board is single-packet only](#host--board-single-packet-only): the host still caps host→board
+  payloads at one packet pending hardware validation of the firmware fix.
 - `SINGLE_HDR_LEN = 8`.
 - **Mesh hop count (v0.4.0):** the flags byte's upper nibble carries a 0–15 hop count. Freshly built packets have
   0 hops (upper nibble clear), so this is fully backward compatible. A relay increments it and drops the packet
@@ -92,26 +92,56 @@ Offset  Field
 
 ### ⚠️ Host → board is single-packet only
 
-**A host cannot currently send multipart frames to a board.** The firmware reads the host header as
-`[command, payload_size]` (§7) — byte 1 is a *length* to it, while the host writes its *flags* byte there. The
-whole desktop protocol works only because flags are normally `0x00`, which the firmware reads as
-`payload_size = 0`. A multipart frame sets `FLAG_MULTIPART` (`0x01`), so the board reads one payload byte,
-swallows the first source-address byte, and misframes everything after it.
+**The host still enforces a single-packet limit, by choice.** The underlying defect is fixed in firmware
+v0.4.1, but the host-side guard stays until that path is validated on hardware.
 
-Consequences, and what the code does about them:
+The defect: the firmware read the host header as `[command, payload_size]` (§7) — byte 1 is a *length* to it,
+while the host writes its *flags* byte there. The whole desktop protocol worked only because flags are normally
+`0x00`, which reads as `payload_size = 0`. A multipart frame sets `FLAG_MULTIPART` (`0x01`), so the board
+consumed one payload byte, swallowing the first source-address byte, and misframed everything after it.
 
-- **Host→board payloads must fit in one 192-byte packet.** `radio::check_host_payload_fits` enforces this, and
-  every send path (GUI, CLI, Android bridge) calls it. Oversized sends fail with an explanatory error instead
-  of transmitting frames the board will garble.
+Firmware v0.4.1 dispatches desktop commands *before* `ReadSerialPayload`, so byte 1 is never treated as a
+length for them, and the `0x10`/`0x11` relay paths preserve the flags byte rather than hardcoding `0x00`. A
+multipart frame now reaches the air intact; the board forwards each part verbatim and the receiving gateway's
+host reassembles it, so the firmware needs no reassembly buffer of its own.
+
+What the code does about it today:
+
+- **Host→board payloads must still fit in one 192-byte packet.** `radio::check_host_payload_fits` enforces
+  this, and every send path (GUI, CLI, Android bridge) calls it. Oversized sends fail with an explanatory
+  error. This guard is intentionally kept even though the firmware fix has landed: lifting it before the path
+  is validated on real hardware would re-expose the original failure — silently transmitting a transaction no
+  receiver can reconstruct.
 - **A signed P2PKH transaction is 192 bytes at its smallest** (1 input, 1 output, no change) — exactly the
   limit. Add a change output (`+34`) or a second input (`+148`) and it no longer fits, so **most real
-  transactions cannot be relayed over LoRa today**. Broadcast them over the internet instead
+  transactions still cannot be relayed over LoRa**. Broadcast them over the internet instead
   (`radiodoge-cli broadcast`, or the Wallet tab).
-- Nothing on the host side reassembles multipart either: the gateway daemon and both framing loops handle
-  single packets only.
+- **To lift the limit:** flash firmware v0.4.1 (`FIRMWARE_VERSION 10`), verify a >192-byte transaction survives
+  host → board → air → gateway → daemon byte-for-byte, then relax `check_host_payload_fits` to
+  `MAX_MULTIPART_PAYLOAD_LEN` and restore the multipart branches in the send paths — gated on the board's
+  reported firmware version, so older boards keep the single-packet limit.
 
-Fixing this needs a firmware change (a host framing that doesn't overload byte 1) plus host-side reassembly.
+This is the **host → board** direction only. Every other direction reassembles correctly:
+`radio::MultipartReassembler` stitches sequences back together keyed by `(source, session id)`, and both
+framing loops route packets through `radio::ingest_packet`, so a multipart payload arriving **over the air**
+at a gateway is delivered to the daemon as one complete packet.
+
 Tracked in the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress).
+
+### Reassembly semantics
+
+`MultipartReassembler` is what any host implementation should match:
+
+| Behaviour | Rule |
+|---|---|
+| Session key | `(source address, session id)` — concurrent senders never interleave |
+| Ordering | Parts may arrive in any order |
+| Duplicates | Ignored; a retransmit never counts twice toward completion |
+| Session timeout | 30 s (`MULTIPART_SESSION_TIMEOUT_SECS`), matching the firmware's `MULTIPART_TIMEOUT_MS` |
+| Concurrent sessions | 8 max (`MAX_CONCURRENT_MULTIPART_SESSIONS`); the oldest is evicted beyond that |
+| Malformed frames | `total_parts == 0`, `total_parts > 20`, or `index >= total_parts` are rejected at parse time |
+| Session-id reuse | A reused id with a different part count or command restarts the session |
+| Hop count | The reassembled packet reports the highest hop count seen across its parts |
 
 ---
 
@@ -131,7 +161,7 @@ board originates.
 | `0x10` | `DOGE_TX` | any | Dogecoin transaction payload |
 | `0x11` | `REQUEST_BALANCE` | host→gateway | Ask a gateway to look up a balance |
 | `0x20` | `GET_FIRMWARE_VERSION` | host→board | Query the firmware version string |
-| `0x21` | `SET_LORA_PARAMS` | host→board | Set SF/BW/CR/frequency/TX-power *(ACK-only in firmware today)* |
+| `0x21` | `SET_LORA_PARAMS` | host→board | Set SF/BW/CR/frequency/TX-power (applied and persisted since v0.4.1) |
 | `0x22` | `GET_SETTINGS` | host→board | Read live board state (address + gateway + WiFi) |
 | `0x23` | `SET_GATEWAY` | host→board | Set/persist gateway mode |
 | `0x24` | `WIFI_TOGGLE` | host→board | Enable/disable the WiFi radio |
@@ -176,7 +206,18 @@ All other commands (`MESSAGE`, `BROADCAST`, `MULTIPART`, `DOGE_TX`, `REQUEST_BAL
 ## 6. Notable payloads
 
 - **`SET_LORA_PARAMS` (`0x21`)** — 8-byte payload:
-  `[SF(7–12), BW index(0=125,1=250,2=500 kHz), CR denom(5–8), freq_hi, freq_lo (kHz), TX power(dBm), 0x00, 0x00]`.
+  `[SF(7–12), BW index(0=125,1=250,2=500 kHz), CR denom(5–8), freq_khz(u32 big-endian), TX power(dBm)]`.
+
+  > **Changed in v0.4.1.** The frequency was a 2-byte field, which cannot hold 915000 kHz (a 20-bit value) —
+  > it went out as 63032 kHz with the top 4 bits dropped. The field is now a 4-byte big-endian `u32` occupying
+  > bytes `[3..7]`, using the two previously-reserved bytes, and TX power moved from `[5]` to `[7]`. This was a
+  > safe wire change: `0x21` was a no-op ACK in every firmware released before v0.4.1, so no deployed board
+  > parsed the old layout. Build it with `radio::build_set_lora_params` and read it with
+  > `radio::parse_set_lora_params`.
+  >
+  > The firmware validates before applying (SF 7–12, BW 0–2, CR 1–4, 150–960 MHz, 2–22 dBm) and NACKs
+  > out-of-range values rather than retuning to somewhere it can't be reached. Accepted values are applied to
+  > the radio and persisted to NVS.
 - **`GET_FIRMWARE_VERSION` (`0x20`)** — the board replies with a version string such as `RadioDoge NV3FW09`.
   The app strips the `RadioDoge ` prefix for display.
 - **`REQUEST_BALANCE` (`0x11`)** — payload is the ASCII Dogecoin address. A gateway replies with a `MESSAGE`
@@ -219,8 +260,9 @@ The firmware's compile-time LoRa configuration (identical on V2 and V3):
 | Coding rate | 4/5 |
 | Preamble | 8 symbols |
 
-> These are fixed at compile time in the current firmware; the app can *send* new parameters via
-> `SET_LORA_PARAMS`, but runtime reconfiguration is on the [roadmap](../ROADMAP.md#-known-limitations--in-progress).
+> These are the power-on defaults. Since v0.4.1 the app can retune the radio at runtime via
+> `SET_LORA_PARAMS` (`0x21`); accepted values are applied immediately and persisted to NVS, so a retuned board
+> comes back retuned. Out-of-range values are NACKed and the radio is left untouched.
 
 ---
 

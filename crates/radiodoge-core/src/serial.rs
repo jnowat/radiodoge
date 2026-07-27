@@ -283,6 +283,9 @@ impl SerialManager {
         tokio::spawn(async move {
             log::info!("Serial read loop started");
             let mut accumulator: Vec<u8> = Vec::with_capacity(512);
+            // Multipart sequences are stitched back together here, so everything
+            // downstream sees one complete packet instead of fragments.
+            let mut reassembler = radio::MultipartReassembler::new();
 
             loop {
                 if token.is_cancelled() {
@@ -359,7 +362,20 @@ impl SerialManager {
                                 // a short packet and left its tail to be misparsed as a new one.
                                 None => break,
                             };
-                            if let Some(packet) = radio::parse_incoming(&accumulator[..packet_len], 0) {
+                            let now_secs = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let ingested = radio::ingest_packet(
+                                &accumulator[..packet_len],
+                                0,
+                                &mut reassembler,
+                                now_secs,
+                            );
+                            // Consume the frame either way — a multipart fragment
+                            // has been absorbed even though it yields no packet yet.
+                            accumulator.drain(..packet_len);
+                            if let Some(packet) = ingested {
                                 // Update stats
                                 {
                                     let mut stats = stats_clone.lock().await;
@@ -480,14 +496,6 @@ impl SerialManager {
 
                                 // Invoke the caller-supplied callback (GUI emitter, CLI printer…)
                                 on_packet(packet);
-
-                                // Drain the bytes that belong to this packet.
-                                // packet_len was computed above from exact_packet_len / null-scan,
-                                // so this is exact for both fixed- and variable-length commands.
-                                accumulator.drain(..packet_len);
-                            } else {
-                                // parse_incoming returned None (buffer too short) — wait for more data
-                                break;
                             }
                         }
                     }

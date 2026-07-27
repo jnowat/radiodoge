@@ -56,6 +56,9 @@ pub struct AppState {
     /// Rust extracts complete packets using the same framing logic as the desktop
     /// serial read-loop and emits the standard "radio-packet" / "board-sync" events.
     pub mobile_accumulator: Arc<Mutex<Vec<u8>>>,
+    /// Reassembles multipart sequences arriving on the Android USB/BLE path,
+    /// mirroring the one owned by the desktop serial read loop.
+    pub mobile_reassembler: Arc<Mutex<radio::MultipartReassembler>>,
     /// v0.3.10 — Firmware version string cached during the Android USB connect
     /// sequence. Stored when GET_FIRMWARE_VERSION (0x20) response is received,
     /// included in the "connection-status: connected" event emitted after GET_SETTINGS.
@@ -87,6 +90,7 @@ impl AppState {
             gateway_process: Arc::new(Mutex::new(None)),
             connection_type: Arc::new(Mutex::new("usb".to_string())),
             mobile_accumulator: Arc::new(Mutex::new(Vec::new())),
+            mobile_reassembler: Arc::new(Mutex::new(radio::MultipartReassembler::new())),
             mobile_fw_version: Arc::new(Mutex::new(None)),
             ble_device_address: Arc::new(Mutex::new(None)),
             mobile_packets_rx: Arc::new(Mutex::new(0)),
@@ -1119,6 +1123,9 @@ async fn mobile_set_connected(
     // Clear any stale firmware version from a previous session
     *state.mobile_fw_version.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
+    // Drop any half-assembled multipart sequences too — fragments from a
+    // previous session must never be stitched onto the next connection's.
+    *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
     let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&device_path));
     log::info!("mobile_set_connected: {}", device_path);
     Ok(())
@@ -1134,6 +1141,9 @@ async fn mobile_set_disconnected(
     *state.current_port.lock().await = None;
     *state.mobile_fw_version.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
+    // Drop any half-assembled multipart sequences too — fragments from a
+    // previous session must never be stitched onto the next connection's.
+    *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
     *state.mobile_packets_rx.lock().await = 0;
     *state.mobile_packets_tx.lock().await = 0;
     *state.mobile_last_rssi.lock().await = 0;
@@ -1146,6 +1156,9 @@ async fn mobile_set_disconnected(
 #[tauri::command]
 async fn mobile_clear_accumulator(state: State<'_, AppState>) -> Result<(), String> {
     state.mobile_accumulator.lock().await.clear();
+    // Drop any half-assembled multipart sequences too — fragments from a
+    // previous session must never be stitched onto the next connection's.
+    *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
     Ok(())
 }
 
@@ -1201,26 +1214,45 @@ async fn mobile_push_bytes(
             break; // Need more bytes
         }
 
-        // Peek the command byte so we can determine the packet length BEFORE
-        // calling parse_incoming.  This ensures parse_incoming receives exactly
-        // the bytes belonging to one packet, giving a clean payload_hex and
-        // preventing the next packet from being swallowed as spurious payload
-        // when two packets arrive in a single USB read callback.
-        let cmd = acc[0];
+        // Peek the leading byte so we can determine the packet length BEFORE
+        // parsing.  This ensures the parser receives exactly the bytes belonging
+        // to one packet, giving a clean payload_hex and preventing the next
+        // packet from being swallowed as spurious payload when two arrive in a
+        // single USB read callback.  (This is the frame's byte; the command used
+        // for dispatch below comes from the parsed packet, which for a multipart
+        // sequence is the reassembled payload's command.)
+        let frame_cmd = acc[0];
 
         // Same framing rule as the desktop serial read loop (radiodoge-core).
         // `None` means the packet is still arriving — keep the bytes buffered
         // and wait for the next USB/BLE chunk rather than emitting a short packet.
-        let packet_len = match radio::frame_packet_len(cmd, &acc) {
+        let packet_len = match radio::frame_packet_len(frame_cmd, &acc) {
             Some(n) => n,
             None => break,
         };
 
-        // Parse exactly the bytes for this packet so payload_hex is clean.
-        let packet = match radio::parse_incoming(&acc[..packet_len], rssi) {
-            Some(p) => p,
-            None => break, // shouldn't happen: len is guaranteed >= SINGLE_HDR_LEN
+        // Parse exactly the bytes for this packet so payload_hex is clean, and
+        // let multipart sequences reassemble before anything downstream sees them.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let ingested = {
+            let mut reasm = state.mobile_reassembler.lock().await;
+            radio::ingest_packet(&acc[..packet_len], rssi, &mut reasm, now_secs)
         };
+        // Consume the frame either way — a multipart fragment has been absorbed
+        // even though it does not yield a packet yet.
+        acc.drain(..packet_len);
+
+        let packet = match ingested {
+            Some(p) => p,
+            None => continue, // fragment stored; wait for the rest of the sequence
+        };
+        // A reassembled payload carries the sequence's command, which may differ
+        // from the raw frame's first byte only in malformed input — use the
+        // packet's own command for dispatch below.
+        let cmd = packet.command;
 
         packets_extracted += 1;
 
@@ -1325,9 +1357,6 @@ async fn mobile_push_bytes(
 
             _ => {}
         }
-
-        // Advance the accumulator past the consumed packet.
-        acc.drain(..packet_len);
     }
 
     // v0.3.15 — Emit radio-stats-update so the Dashboard packet counters and
@@ -1567,6 +1596,9 @@ async fn mobile_ble_connect(
     *state.ble_device_address.lock().await = Some(address.clone());
     *state.mobile_fw_version.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
+    // Drop any half-assembled multipart sequences too — fragments from a
+    // previous session must never be stitched onto the next connection's.
+    *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
     let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&address));
     log::info!("mobile_ble_connect: {}", address);
     Ok(())
@@ -1586,6 +1618,9 @@ async fn mobile_ble_disconnect(
     *state.ble_device_address.lock().await = None;
     *state.mobile_fw_version.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
+    // Drop any half-assembled multipart sequences too — fragments from a
+    // previous session must never be stitched onto the next connection's.
+    *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
     let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
     log::info!("mobile_ble_disconnect");
     Ok(())

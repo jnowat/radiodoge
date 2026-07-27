@@ -588,6 +588,10 @@ async fn cmd_connect(port: &str) -> Result<()> {
 /// transaction payload), broadcasts it to the Dogecoin network via Trezor
 /// Blockbook and sends a TX_ACK message back to the originator.
 ///
+/// Multipart sequences are reassembled by the serial read loop before this
+/// callback runs, so a transaction that arrived split across several frames is
+/// delivered here as one complete payload — no reassembly needed at this layer.
+///
 /// Designed for Raspberry Pi gateway deployments.
 async fn cmd_daemon(port: &str) -> Result<()> {
     println!("🐕 RadioDoge Daemon — Gateway Mode (replaces serdog)");

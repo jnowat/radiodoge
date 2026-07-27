@@ -45,6 +45,11 @@ extern nodeAddress local;
   uint8_t bleRxBuffer[256];
   int bleRxLen = 0;
   bool blePendingData = false;
+  // v0.4.1 — millis() of the most recent BLE write. A large packet can be split
+  // across several GATT writes, and the desktop protocol has no in-band length
+  // for CMD_DOGE_TX / CMD_REQUEST_BALANCE, so the framer waits for a short quiet
+  // gap before treating a variable-length packet as complete.
+  unsigned long lastBleRxMillis = 0;
   BLEServer *pBleServer = NULL;
   BLECharacteristic *pBleTxChar = NULL;
   class BleServerCallbacks : public BLEServerCallbacks {
@@ -57,6 +62,7 @@ extern nodeAddress local;
       for (size_t i = 0; i < v.length() && bleRxLen < 255; i++)
         bleRxBuffer[bleRxLen++] = (uint8_t)v[i];
       blePendingData = true;
+      lastBleRxMillis = millis();
     }
   };
   // Send a response packet over BLE TX characteristic (notify)
@@ -202,6 +208,16 @@ Adafruit_SSD1306 radioDogeDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET
                                  //  2: 4/6, \
                                  //  3: 4/7, \
                                  //  4: 4/8]
+// v0.4.1 — Runtime-adjustable radio parameters (CMD_SET_LORA_PARAMS 0x21).
+// The #defines above remain the power-on defaults; these mirror them and are
+// what SetTxConfig/SetRxConfig actually read, so the host can retune the radio
+// without a reflash. Persisted to NVS, so a retuned board comes back retuned.
+uint32_t lora_freq_hz  = RF_FREQUENCY;
+int8_t   lora_tx_power = TX_OUTPUT_POWER;
+uint8_t  lora_bandwidth        = LORA_BANDWIDTH;
+uint8_t  lora_spreading_factor = LORA_SPREADING_FACTOR;
+uint8_t  lora_coding_rate      = LORA_CODINGRATE;
+
 #define LORA_PREAMBLE_LENGTH 8   // Same for Tx and Rx
 #define LORA_SYMBOL_TIMEOUT 0    // Symbols
 #define LORA_FIX_LENGTH_PAYLOAD_ON false
@@ -266,7 +282,7 @@ struct PendingRequest {
   bool requiresConfirmation;
   String requestId;      // Unique identifier for tracking
 };
-#define FIRMWARE_VERSION 9  // v0.4.0
+#define FIRMWARE_VERSION 10  // v0.4.1
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -391,21 +407,18 @@ void setup() {
   RadioEvents.RxTimeout = OnRxTimeout;
 
   Radio.Init(&RadioEvents);
-  Radio.SetChannel(RF_FREQUENCY);
-  Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, LORA_BANDWIDTH,
-                    LORA_SPREADING_FACTOR, LORA_CODINGRATE,
-                    LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
-                    true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
-
-  Radio.SetRxConfig(MODEM_LORA, LORA_BANDWIDTH, LORA_SPREADING_FACTOR,
-                    LORA_CODINGRATE, 0, LORA_PREAMBLE_LENGTH,
-                    LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON,
-                    0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
+  applyLoRaRadioConfig();
 
   delay(100);
-  
+
   // Initialize NVS and load stored configurations
   initNVS();
+  // v0.4.1 — Restore any host-tuned radio parameters and re-apply them, so a
+  // retuned board comes back on the same channel it was retuned to.
+  if (loadLoRaRadioParams()) {
+    applyLoRaRadioConfig();
+    addLog("[LoRa] Restored tuned radio params from NVS");
+  }
   
   // Load stored AP password
   if (loadAPPassword()) {
@@ -485,6 +498,10 @@ void loop() {
 
   // v0.3.6 — Cycle OLED status pages every 3 seconds
   updateStatusDisplay();
+
+  // v0.4.1 — Execute any command written over BLE. Previously these bytes were
+  // buffered and never read, so BLE was receive-only.
+  ProcessBleCommands();
 
   CommandAndControlLoop();
 }
@@ -881,6 +898,125 @@ void saveLoRaConfigurationQuiet(uint8_t region, uint8_t community, uint8_t node)
   nvs_set_u8(nvs_handle, "node", node);
   nvs_commit(nvs_handle);
   nvs_close(nvs_handle);
+}
+
+// v0.4.1 — Command bytes handled by HandleDesktopCommand, i.e. the app/CLI
+// protocol rather than the firmware's legacy serial enum. Both the USB and the
+// BLE dispatch consult this, so the two transports accept exactly the same set.
+bool isDesktopCommandByte(uint8_t cmdByte) {
+  return cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
+      || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
+      || cmdByte == 0x27 || cmdByte == 0x28;
+}
+
+// Total packet length for a desktop command sent host -> board, or 0 when the
+// command has no fixed size (0x10 DOGE_TX and 0x11 REQUEST_BALANCE carry
+// variable payloads). Used only by the BLE framer, which — unlike the serial
+// path — has no inter-packet delay to lean on.
+uint8_t desktopCommandLength(uint8_t cmdByte) {
+  switch (cmdByte) {
+    case 0x20: case 0x22: case 0x26: case 0x27: return 8;   // header only
+    case 0x23: case 0x24: case 0x28:            return 9;   // header + 1 flag byte
+    case 0x21:                                  return 16;  // header + 8 param bytes
+    default:                                    return 0;   // variable length
+  }
+}
+
+// v0.4.1 — Is this board acting as an internet gateway right now?
+//
+// `gateway_mode` used to be a reporting flag only: the transaction/broadcast
+// forwarders checked whether a gateway was *configured* (gateway_type + ip) and
+// never consulted the toggle, so switching gateway mode off in the app did not
+// stop the board pushing other people's transactions to the internet. The
+// toggle is now authoritative and every forwarding path goes through here.
+//
+// Saving a gateway from the web UI enables gateway_mode (see handleApiGatewaySave),
+// so a board configured entirely through the web interface keeps forwarding as
+// it did before this change.
+bool gatewayForwardingEnabled() {
+  return gateway_mode;
+}
+
+// ─── v0.4.1 — Runtime LoRa radio reconfiguration (CMD_SET_LORA_PARAMS 0x21) ───
+
+// Push the current lora_* globals into the radio.
+// Safe to call after Radio.Init(); the radio is put into standby first so the
+// SX126x is not reconfigured mid-transmission.
+void applyLoRaRadioConfig() {
+  // Park the radio before retuning so the SX126x is not reconfigured mid-air.
+  // Radio.Sleep() is used rather than Standby() because this firmware already
+  // relies on Sleep() elsewhere, so it is known to exist in the Heltec
+  // LoRaWan_APP build being targeted. SetChannel/SetTxConfig/SetRxConfig wake
+  // the part again, and the Rx(0) below returns it to continuous receive.
+  Radio.Sleep();
+  Radio.SetChannel(lora_freq_hz);
+  Radio.SetTxConfig(MODEM_LORA, lora_tx_power, 0, lora_bandwidth,
+                    lora_spreading_factor, lora_coding_rate,
+                    LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
+                    true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
+  Radio.SetRxConfig(MODEM_LORA, lora_bandwidth, lora_spreading_factor,
+                    lora_coding_rate, 0, LORA_PREAMBLE_LENGTH,
+                    LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON,
+                    0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
+  Radio.Rx(0);  // back to continuous receive
+  isLoRaIdle = true;
+}
+
+// Reject anything the radio cannot do, or that would put the board somewhere it
+// can never be reached again. Applying an out-of-range value would strand the
+// board off-channel with no way back except a reflash, so validation happens
+// BEFORE anything is written or applied.
+//   sf     7..12
+//   bw     0 (125 kHz), 1 (250 kHz), 2 (500 kHz)
+//   cr     1..4  (4/5 .. 4/8)
+//   freq   150 MHz .. 960 MHz — spans the LoRa sub-GHz bands (433/470/868/915)
+//   power  2..22 dBm
+bool loRaParamsAreValid(uint32_t freq_hz, uint8_t sf, uint8_t bw, uint8_t cr, int8_t power) {
+  if (sf < 7 || sf > 12) return false;
+  if (bw > 2) return false;
+  if (cr < 1 || cr > 4) return false;
+  if (power < 2 || power > 22) return false;
+  if (freq_hz < 150000000UL || freq_hz > 960000000UL) return false;
+  return true;
+}
+
+void saveLoRaRadioParamsQuiet() {
+  nvs_handle_t h;
+  if (nvs_open("rd_settings", NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_u32(h, "lora_freq", lora_freq_hz);
+  nvs_set_u8(h, "lora_sf", lora_spreading_factor);
+  nvs_set_u8(h, "lora_bw", lora_bandwidth);
+  nvs_set_u8(h, "lora_cr", lora_coding_rate);
+  nvs_set_i8(h, "lora_pwr", lora_tx_power);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+// Returns true if a stored, still-valid set was loaded into the globals.
+// A stored set that fails validation (e.g. written by a different firmware
+// build) is ignored so the board falls back to its compile-time defaults
+// rather than booting onto an unusable channel.
+bool loadLoRaRadioParams() {
+  nvs_handle_t h;
+  if (nvs_open("rd_settings", NVS_READONLY, &h) != ESP_OK) return false;
+  uint32_t freq = lora_freq_hz;
+  uint8_t sf = lora_spreading_factor, bw = lora_bandwidth, cr = lora_coding_rate;
+  int8_t pwr = lora_tx_power;
+  bool any = false;
+  if (nvs_get_u32(h, "lora_freq", &freq) == ESP_OK) any = true;
+  if (nvs_get_u8(h, "lora_sf", &sf)     == ESP_OK) any = true;
+  if (nvs_get_u8(h, "lora_bw", &bw)     == ESP_OK) any = true;
+  if (nvs_get_u8(h, "lora_cr", &cr)     == ESP_OK) any = true;
+  if (nvs_get_i8(h, "lora_pwr", &pwr)   == ESP_OK) any = true;
+  nvs_close(h);
+  if (!any) return false;
+  if (!loRaParamsAreValid(freq, sf, bw, cr, pwr)) return false;
+  lora_freq_hz = freq;
+  lora_spreading_factor = sf;
+  lora_bandwidth = bw;
+  lora_coding_rate = cr;
+  lora_tx_power = pwr;
+  return true;
 }
 
 // v0.3.6 — gateway_mode NVS persistence
@@ -2355,7 +2491,7 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
   String internetResponse = "";
   bool gateway_forwarded = false;
   
-  if (gateway_type != "none" && gateway_ip.length() > 0) {
+  if (gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
     String gatewayUrl = "http://" + gateway_ip + ":" + gateway_port;
     if (gateway_type != "core" && gateway_endpoint.length() > 0) {
       gatewayUrl += gateway_endpoint;
@@ -2380,7 +2516,7 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
       addLog("[GATEWAY] " + gateway_type + " response: " + internetResponse);
       gateway_forwarded = true;
     }
-  } else if (internet_connected) {
+  } else if (gatewayForwardingEnabled() && internet_connected) {
     // Fallback to default internet gateway
     addLog("[GATEWAY] No configured gateway, using default internet gateway (BlockCypher)");
     addLog("[GATEWAY] Transaction data length: " + String(txData.length()) + " bytes");
@@ -2556,7 +2692,7 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
     }
   }
   
-  if (gateway_type != "none" && gateway_ip.length() > 0) {
+  if (gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
     String gatewayUrl = "http://" + gateway_ip + ":" + gateway_port;
     if (gateway_type != "core" && gateway_endpoint.length() > 0) {
       gatewayUrl += gateway_endpoint;
@@ -2581,7 +2717,7 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
       addLog("[GATEWAY] " + gateway_type + " response: " + internetResponse);
       gateway_forwarded = true;
     }
-  } else if (internet_connected) {
+  } else if (gatewayForwardingEnabled() && internet_connected) {
     // Fallback to default internet gateway
     addLog("[GATEWAY] No configured gateway, using default internet gateway (BlockCypher)");
     addLog("[GATEWAY] Broadcast transaction data length: " + String(txData.length()) + " bytes");
@@ -2967,19 +3103,24 @@ bool ReadSerialPayload(uint8_t payloadSize) {
 //   0x11  CMD_REQUEST_BALANCE     — ACK (balance fulfillment happens via LoRa network)
 //   0x20  CMD_GET_FIRMWARE_VERSION — reply with version string in payload
 //   0x21  CMD_SET_LORA_PARAMS     — ACK (RF reconfiguration reserved for future revision)
-void HandleDesktopCommand(uint8_t cmdByte) {
-  // Drain the 6 remaining desktop header bytes: [src_r, src_c, src_n, dst_r, dst_c, dst_n]
-  uint8_t hdrRest[6] = {0};
-  Serial.readBytes(hdrRest, 6);
-
-  // Collect any additional payload bytes (all waiting in buffer after delay(500))
-  uint8_t extraPayload[BUFFER_SIZE];
-  memset(extraPayload, 0, sizeof(extraPayload));
-  uint8_t extraLen = 0;
-  while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
-    extraPayload[extraLen++] = (uint8_t)Serial.read();
-  }
-
+// Execute a desktop-protocol command.
+//
+// v0.4.1 — This used to read its own bytes straight off `Serial`, which meant
+// only USB could ever reach it: BLE writes landed in bleRxBuffer and were never
+// consumed, so commands sent over Bluetooth did nothing. The bytes are now
+// passed in, so USB and BLE share one implementation of every command rather
+// than growing a second copy that drifts.
+//
+//   flags        header byte 1: low nibble 0x1 = multipart, high nibble = hops
+//   hdrRest      the 6 header bytes after [cmd, flags]:
+//                [src_r, src_c, src_n, dst_r, dst_c, dst_n]
+//   extraPayload payload bytes following the 8-byte header. For a multipart
+//                frame this starts with [total, index, session_hi, session_lo].
+//   extraLen     number of valid bytes in extraPayload
+//
+// Replies already go to both transports (Serial.write + bleSend), so a command
+// arriving over either link is answered on both.
+void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest, const uint8_t* extraPayload, uint8_t extraLen) {
   switch (cmdByte) {
     case 0x10: { // CMD_DOGE_TX — relay a signed transaction over LoRa.
       // v0.4.0 (WP1): transmit the FULL desktop-format packet — command byte plus
@@ -2989,7 +3130,10 @@ void HandleDesktopCommand(uint8_t cmdByte) {
       // could not recognise or forward it. hdrRest holds [src_r,src_c,src_n,dst_r,dst_c,dst_n].
       if (extraLen > 0) {
         uint8_t ota[BUFFER_SIZE];
-        ota[0] = 0x10; ota[1] = 0x00;
+        // v0.4.1 — preserve the flags byte. It used to be hardcoded to 0x00,
+        // which flattened FLAG_MULTIPART and made a multipart frame
+        // indistinguishable from a truncated single packet on the air.
+        ota[0] = 0x10; ota[1] = flags;
         for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
         int payLen = extraLen;
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
@@ -3013,7 +3157,7 @@ void HandleDesktopCommand(uint8_t cmdByte) {
       // "BAL:<koinus>" MESSAGE back to the requester over LoRa.
       if (extraLen > 0) {
         uint8_t ota[BUFFER_SIZE];
-        ota[0] = 0x11; ota[1] = 0x00;
+        ota[0] = 0x11; ota[1] = flags;  // v0.4.1 — preserve multipart/hop flags
         for (int i = 0; i < 6; i++) ota[2 + i] = hdrRest[i];
         int payLen = extraLen;
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
@@ -3039,8 +3183,52 @@ void HandleDesktopCommand(uint8_t cmdByte) {
       Serial.write(reply, 8 + vLen);
       break;
     }
-    case 0x21: { // CMD_SET_LORA_PARAMS — payload: [sf, bw_idx, cr, freq_hi, freq_lo, power, ...]
-      // Parameters received; RF reconfiguration deferred to safe idle window in future revision.
+    case 0x21: { // CMD_SET_LORA_PARAMS — payload: [sf, bw_idx, cr, freq_khz(u32 BE), power]
+      // v0.4.1 — This used to ACK without touching the radio, so the app could
+      // "save" settings that never took effect. The radio is now really retuned.
+      //
+      // The frequency is a big-endian u32 in kHz occupying bytes [3..7], with TX
+      // power at [7]. It was a 2-byte field until v0.4.1, which could not
+      // represent 915000 kHz (20 bits) — no firmware ever read it, so the field
+      // was widened into the two formerly-reserved bytes rather than kept.
+      if (extraLen >= 8) {
+        uint8_t  sf    = extraPayload[0];
+        uint8_t  bw    = extraPayload[1];
+        uint8_t  cr    = extraPayload[2];
+        uint32_t f_khz = ((uint32_t)extraPayload[3] << 24) |
+                         ((uint32_t)extraPayload[4] << 16) |
+                         ((uint32_t)extraPayload[5] << 8)  |
+                          (uint32_t)extraPayload[6];
+        int8_t   power = (int8_t)extraPayload[7];
+
+        // The desktop sends coding rate as the denominator (5..8); the radio
+        // wants an index (1..4).
+        if (cr >= 5 && cr <= 8) cr -= 4;
+
+        uint32_t new_khz = f_khz;
+        uint32_t freq_hz = new_khz * 1000UL;
+
+        if (loRaParamsAreValid(freq_hz, sf, bw, cr, power)) {
+          lora_freq_hz          = freq_hz;
+          lora_spreading_factor = sf;
+          lora_bandwidth        = bw;
+          lora_coding_rate      = cr;
+          lora_tx_power         = power;
+          applyLoRaRadioConfig();
+          saveLoRaRadioParamsQuiet();
+          addLog("[LoRa] Retuned: SF" + String(sf) + " BW" + String(bw) +
+                 " CR4/" + String(cr + 4) + " " + String(new_khz) + "kHz " +
+                 String(power) + "dBm");
+        } else {
+          // Out of range — leave the radio exactly as it was. Replying with a
+          // NACK lets the host surface a real failure instead of showing
+          // "Verified" for settings that were silently discarded.
+          addLog("[LoRa] Rejected out-of-range radio params from host");
+          Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+          bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+          break;
+        }
+      }
       uint8_t reply[8] = {0x21, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
       bleSend(reply, 8);
@@ -3205,6 +3393,73 @@ void RelayDesktopMessageOverLoRa() {
   isLoRaIdle = true;
 }
 
+// ─── v0.4.1 — BLE command execution ──────────────────────────────────────────
+//
+// Inbound BLE writes used to accumulate in bleRxBuffer and were never read, so
+// every command sent over Bluetooth was silently ignored — the app could
+// connect and receive notifications but not control the board. This drains the
+// buffer and runs the same HandleDesktopCommand the USB path uses.
+//
+// Framing: BLE has no equivalent of the serial path's delay(500), and a packet
+// can be split across GATT writes, so a packet is dispatched once either its
+// fixed length has arrived (desktopCommandLength) or, for the variable-length
+// commands, the link has been quiet for BLE_FRAME_QUIET_MS.
+#define BLE_FRAME_QUIET_MS 60
+
+#if ENABLE_BLE
+void ProcessBleCommands() {
+  if (!blePendingData) return;
+  if (bleRxLen < SINGLE_PACKET_HEADER_SIZE) return;  // header still arriving
+
+  uint8_t cmdByte = bleRxBuffer[0];
+
+  // Anything we cannot execute is discarded rather than left to accumulate —
+  // otherwise one stray byte wedges the 256-byte buffer permanently.
+  if (!isDesktopCommandByte(cmdByte)) {
+    addLog("[BLE] Dropping unrecognised command 0x" + String(cmdByte, HEX));
+    bleRxLen = 0;
+    blePendingData = false;
+    return;
+  }
+
+  uint16_t need = desktopCommandLength(cmdByte);
+  if (need > 0) {
+    if (bleRxLen < (int)need) return;  // fixed-length packet still arriving
+  } else {
+    // Variable length: no in-band size, so a quiet gap marks the boundary.
+    if (millis() - lastBleRxMillis < BLE_FRAME_QUIET_MS) return;
+    need = (uint16_t)bleRxLen;
+  }
+
+  // Capture the header fields before the buffer is shifted below.
+  uint8_t flags = bleRxBuffer[1];
+  uint8_t hdrRest[6];
+  memcpy(hdrRest, bleRxBuffer + 2, 6);
+
+  uint8_t payloadLen = (uint8_t)(need - SINGLE_PACKET_HEADER_SIZE);
+  uint8_t extraPayload[BUFFER_SIZE];
+  memset(extraPayload, 0, sizeof(extraPayload));
+  if (payloadLen > 0) {
+    memcpy(extraPayload, bleRxBuffer + SINGLE_PACKET_HEADER_SIZE, payloadLen);
+  }
+
+  // Consume this packet, preserving anything that arrived behind it.
+  if (bleRxLen > (int)need) {
+    memmove(bleRxBuffer, bleRxBuffer + need, bleRxLen - need);
+    bleRxLen -= (int)need;
+  } else {
+    bleRxLen = 0;
+    blePendingData = false;
+  }
+
+  addLog("[BLE] Executing desktop cmd 0x" + String(cmdByte, HEX) +
+         " (" + String(payloadLen) + " payload bytes)");
+  HandleDesktopCommand(cmdByte, flags, hdrRest, extraPayload, payloadLen);
+}
+#else
+void ProcessBleCommands() {}
+#endif
+
 // Read serial data from the host and perform the specified command/control function.
 // This function expects the host to send a header that is 8 bytes in length and then a payload that can range from 0-255 bytes.
 // The header contains the command type and payload size information (see ReadSerialHeader for more info on the header)
@@ -3216,7 +3471,42 @@ void HostSerialRead() {
     return;
   }
   hostCommandReply[0] = commandVal;
-  // v0.3.6 — removed DisplayCommandAndControl; status display now cycles independently
+  uint8_t cmdByte = (uint8_t)commandVal;
+
+  // ── v0.4.1 — Desktop commands are dispatched BEFORE ReadSerialPayload ───────
+  //
+  // ReadSerialHeader treats byte 1 as a payload length, but the desktop protocol
+  // puts its FLAGS byte there. That only ever worked because flags are normally
+  // 0x00, which reads as "no payload". A multipart frame sets FLAG_MULTIPART
+  // (0x01), so ReadSerialPayload used to consume one byte — the first byte of
+  // the source address — and every byte after it was misaligned. That is why a
+  // host could not send multipart to a board, which in turn capped host->board
+  // payloads at a single 192-byte packet.
+  //
+  // Reading the desktop dispatch first means byte 1 is never interpreted as a
+  // length for these commands, so any flags value frames correctly.
+  if (isDesktopCommandByte(cmdByte)) {
+    uint8_t flags = payloadSize;  // byte 1 is FLAGS for desktop commands
+    delay(500);                   // let the rest of the packet arrive
+
+    // The 6 remaining header bytes: [src_r, src_c, src_n, dst_r, dst_c, dst_n].
+    uint8_t hdrRest[6] = {0};
+    Serial.readBytes(hdrRest, 6);
+
+    // Everything after the 8-byte header. For a multipart frame this begins
+    // with [total_parts, part_index, session_hi, session_lo] followed by the
+    // chunk, which HandleDesktopCommand forwards over the air verbatim.
+    uint8_t extraPayload[BUFFER_SIZE];
+    memset(extraPayload, 0, sizeof(extraPayload));
+    uint8_t extraLen = 0;
+    while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
+      extraPayload[extraLen++] = (uint8_t)Serial.read();
+    }
+
+    HandleDesktopCommand(cmdByte, flags, hdrRest, extraPayload, extraLen);
+    return;
+  }
+
   // Now we will read in the host's payload
   bool payloadSuccess = ReadSerialPayload(payloadSize);
   if (!payloadSuccess) {
@@ -3225,26 +3515,11 @@ void HostSerialRead() {
   }
   delay(500);
 
-  // OPTIMIZED FOR DESKTOP v0.3.3 – SAFE
-  // v0.3.6 — extended with 0x22 (GET_SETTINGS) and 0x23 (SET_GATEWAY)
-  // v0.4.0 — extended with 0x24 (WIFI_TOGGLE), 0x26 (GET_BATTERY), 0x27 (GET_MAC),
-  //          and 0x28 (BLE_TOGGLE). Their handlers existed since v0.3.7/0.3.8 but
-  //          were never routed here, so the board NACKed them.
-  // Intercept desktop-only command IDs before the switch (no matching serialCommand enum).
-  uint8_t cmdByte = (uint8_t)commandVal;
-
   // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
   // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
   // PING_REQUEST(3) enum value, which carries a non-zero payload size.
   if (gateway_mode && cmdByte == 0x03 && payloadSize == 0) {
     RelayDesktopMessageOverLoRa();
-    return;
-  }
-
-  if (cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
-      || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
-      || cmdByte == 0x27 || cmdByte == 0x28) {
-    HandleDesktopCommand(cmdByte);
     return;
   }
 
@@ -4518,7 +4793,10 @@ void handleRoot() {
   html += "function updateGatewayFields(){var type=document.getElementById('gatewayType').value;var customFields=document.getElementById('customFields');var rpcFields=document.getElementById('rpcFields');var ipField=document.getElementById('ipField');var gatewayInfo=document.getElementById('gatewayInfo');var description=document.getElementById('gatewayDescription');var endpoint=document.getElementById('gatewayEndpoint');var requirements=document.getElementById('gatewayRequirements');var endpointField=document.getElementById('endpointField');if(type==='none'){ipField.style.display='none';customFields.style.display='none';rpcFields.style.display='none';gatewayInfo.style.display='none';}else if(type==='core'){ipField.style.display='block';customFields.style.display='block';rpcFields.style.display='block';gatewayInfo.style.display='block';endpointField.style.display='none';description.innerHTML='Connect to your local Dogecoin Core node using RPC for transaction broadcasting.';endpoint.innerHTML='Endpoint: http://[IP]:[PORT] (RPC)';requirements.innerHTML='Requirements: Enable RPC in dogecoin.conf (server=1, rpcuser, rpcpassword, rpcport)';document.getElementById('gatewayIp').placeholder='192.168.1.100';document.getElementById('gatewayPort').value='22555';document.getElementById('gatewayEndpoint').value='';}else if(type==='dogebox'){ipField.style.display='block';customFields.style.display='block';rpcFields.style.display='none';gatewayInfo.style.display='block';endpointField.style.display='block';description.innerHTML='Connect to DogeBox API for transaction broadcasting.';endpoint.innerHTML='Endpoint: http://[IP]:[PORT][ENDPOINT]';requirements.innerHTML='Requirements: DogeBox running on specified port';document.getElementById('gatewayIp').placeholder='192.168.1.100';document.getElementById('gatewayPort').value='420';document.getElementById('gatewayEndpoint').value='/dogebox-api/tx/send';}else if(type==='wallet'){ipField.style.display='block';customFields.style.display='block';rpcFields.style.display='none';gatewayInfo.style.display='block';endpointField.style.display='block';description.innerHTML='Connect to Dogecoin Wallet API for transaction broadcasting.';endpoint.innerHTML='Endpoint: http://[IP]:[PORT][ENDPOINT]';requirements.innerHTML='Requirements: Dogecoin Wallet with API enabled';document.getElementById('gatewayIp').placeholder='192.168.1.100';document.getElementById('gatewayPort').value='80';document.getElementById('gatewayEndpoint').value='/tx/send';}else if(type==='custom'){ipField.style.display='block';customFields.style.display='block';rpcFields.style.display='none';gatewayInfo.style.display='block';endpointField.style.display='block';description.innerHTML='Connect to a custom gateway endpoint.';endpoint.innerHTML='Endpoint: http://[IP]:[PORT][ENDPOINT]';requirements.innerHTML='Requirements: Custom gateway accepting POST requests with transaction data';document.getElementById('gatewayIp').placeholder='192.168.1.100';document.getElementById('gatewayPort').placeholder='8080';document.getElementById('gatewayEndpoint').placeholder='/api/push/tx';}}";
   html += "function sendToGateway(){var type=document.getElementById('gatewayType').value;if(type==='none'){showResponse('Please select a gateway type');return;}var ip=document.getElementById('gatewayIp').value;var tx=document.getElementById('gatewayTransaction').value;if(!tx){showResponse('Please enter transaction data');return;}if(!ip){showResponse('Please enter IP address');return;}var url='';var body='';var endpoint='';if(type==='core'){var rpcUser=document.getElementById('rpcUsername').value;var rpcPass=document.getElementById('rpcPassword').value;var port=document.getElementById('gatewayPort').value||'22555';if(!rpcUser||!rpcPass){showResponse('Please enter RPC username and password');return;}if(!port){showResponse('Please enter port for CORE gateway');return;}url='http://'+ip+':'+port;endpoint='/api/jsonrpc';body='transaction='+encodeURIComponent(tx)+'&url='+encodeURIComponent(url)+'&rpcuser='+encodeURIComponent(rpcUser)+'&rpcpass='+encodeURIComponent(rpcPass);}else if(type==='dogebox'){var port=document.getElementById('gatewayPort').value||'420';var endpoint=document.getElementById('gatewayEndpoint').value||'/dogebox-api/tx/send';if(!port||!endpoint){showResponse('Please enter port and endpoint for DogeBox gateway');return;}url='http://'+ip+':'+port+endpoint;endpoint='/api/gateway';body='transaction='+encodeURIComponent(tx);}else if(type==='wallet'){var port=document.getElementById('gatewayPort').value||'80';var endpoint=document.getElementById('gatewayEndpoint').value||'/tx/send';if(!port||!endpoint){showResponse('Please enter port and endpoint for Wallet gateway');return;}url='http://'+ip+':'+port+endpoint;endpoint='/api/gateway';body='transaction='+encodeURIComponent(tx);}else if(type==='custom'){var port=document.getElementById('gatewayPort').value;var endpoint=document.getElementById('gatewayEndpoint').value;if(!port||!endpoint){showResponse('Please enter port and endpoint for custom gateway');return;}url='http://'+ip+':'+port+endpoint;endpoint='/api/gateway';body='transaction='+encodeURIComponent(tx);}fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body}).then(r=>r.json()).then(d=>{document.getElementById('gatewayStatus').style.display='block';document.getElementById('gatewayStatus').innerHTML=JSON.stringify(d,null,2);});}";
   html += "function testGateway(){var type=document.getElementById('gatewayType').value;if(type==='none'){showResponse('Please select a gateway type');return;}var ip=document.getElementById('gatewayIp').value;if(!ip){showResponse('Please enter IP address');return;}var url='';if(type==='core'){var rpcUser=document.getElementById('rpcUsername').value;var rpcPass=document.getElementById('rpcPassword').value;var port=document.getElementById('gatewayPort').value||'22555';if(!rpcUser||!rpcPass){showResponse('Please enter RPC username and password');return;}if(!port){showResponse('Please enter port for CORE gateway');return;}url='http://'+ip+':'+port;}else if(type==='dogebox'){var port=document.getElementById('gatewayPort').value||'420';var endpoint=document.getElementById('gatewayEndpoint').value||'/dogebox-api/tx/send';if(!port||!endpoint){showResponse('Please enter port and endpoint for DogeBox gateway');return;}url='http://'+ip+':'+port+endpoint;}else if(type==='wallet'){var port=document.getElementById('gatewayPort').value||'80';var endpoint=document.getElementById('gatewayEndpoint').value||'/tx/send';if(!port||!endpoint){showResponse('Please enter port and endpoint for Wallet gateway');return;}url='http://'+ip+':'+port+endpoint;}else if(type==='custom'){var port=document.getElementById('gatewayPort').value;var endpoint=document.getElementById('gatewayEndpoint').value;if(!port||!endpoint){showResponse('Please enter port and endpoint for custom gateway');return;}url='http://'+ip+':'+port+endpoint;}fetch('/api/gateway/test',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'url='+encodeURIComponent(url)}).then(r=>r.json()).then(d=>{document.getElementById('gatewayStatus').style.display='block';document.getElementById('gatewayStatus').innerHTML=JSON.stringify(d,null,2);});}";
-  html += "function loadStoredGatewayCredentials(){fetch('/api/gateway/load').then(r=>r.json()).then(d=>{if(d.success&&d.gateway){document.getElementById('gatewayType').value=d.gateway.type||'none';updateGatewayFields();document.getElementById('gatewayIp').value=d.gateway.ip||'';document.getElementById('gatewayPort').value=d.gateway.port||'';document.getElementById('gatewayEndpoint').value=d.gateway.endpoint||'';document.getElementById('rpcUsername').value=d.gateway.username||'';document.getElementById('rpcPassword').value=d.gateway.password||'';}}).catch(e=>{console.log('No stored gateway credentials found');});}";
+  // The stored RPC password is never sent back by /api/gateway/load (it is write-only).
+  // Leave the field blank and use its placeholder to show whether one is saved; an
+  // empty field on save means "keep the stored password".
+  html += "function loadStoredGatewayCredentials(){fetch('/api/gateway/load').then(r=>r.json()).then(d=>{if(d.success&&d.gateway){document.getElementById('gatewayType').value=d.gateway.type||'none';updateGatewayFields();document.getElementById('gatewayIp').value=d.gateway.ip||'';document.getElementById('gatewayPort').value=d.gateway.port||'';document.getElementById('gatewayEndpoint').value=d.gateway.endpoint||'';document.getElementById('rpcUsername').value=d.gateway.username||'';var p=document.getElementById('rpcPassword');p.value='';p.placeholder=d.gateway.has_password?'(saved - leave blank to keep)':'(none saved)';}}).catch(e=>{console.log('No stored gateway credentials found');});}";
   html += "function saveGatewayCredentials(){var type=document.getElementById('gatewayType').value;if(type==='none'){showResponse('Please select a gateway type');return;}var ip=document.getElementById('gatewayIp').value;var port=document.getElementById('gatewayPort').value;var endpoint=document.getElementById('gatewayEndpoint').value;var username=document.getElementById('rpcUsername').value;var password=document.getElementById('rpcPassword').value;if(!ip){showResponse('Please enter IP address');return;}if(!port){showResponse('Please enter port');return;}if(type!='core'&&!endpoint){showResponse('Please enter endpoint');return;}if(type==='core'&&(!username||!password)){showResponse('Please enter RPC username and password for CORE gateway');return;}var button=event.target;button.disabled=true;button.textContent='Saving...';fetch('/api/gateway/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'type='+encodeURIComponent(type)+'&ip='+encodeURIComponent(ip)+'&port='+encodeURIComponent(port)+'&endpoint='+encodeURIComponent(endpoint)+'&username='+encodeURIComponent(username)+'&password='+encodeURIComponent(password)}).then(r=>r.json()).then(d=>{document.getElementById('gatewayStatus').style.display='block';document.getElementById('gatewayStatus').innerHTML=JSON.stringify(d,null,2);if(d.success){button.textContent='Saved!';setTimeout(()=>{button.disabled=false;button.textContent='SAVE CREDENTIALS';},2000);}else{button.disabled=false;button.textContent='SAVE CREDENTIALS';}}).catch(e=>{document.getElementById('gatewayStatus').style.display='block';document.getElementById('gatewayStatus').innerHTML='Error: '+e.message;button.disabled=false;button.textContent='SAVE CREDENTIALS';});}";
   html += "function clearGatewayCredentials(){if(confirm('Are you sure you want to clear stored gateway credentials?')){fetch('/api/gateway/clear',{method:'POST'}).then(r=>r.json()).then(d=>{document.getElementById('gatewayStatus').style.display='block';document.getElementById('gatewayStatus').innerHTML=JSON.stringify(d,null,2);setTimeout(()=>location.reload(),2000);});}}";
   html += "var autoRefreshInterval=null;function refreshLogs(){fetch('/api/logs').then(r=>r.json()).then(d=>{if(d.success){var container=document.getElementById('logsContainer');container.innerHTML='';d.logs.forEach(log=>{var entry=document.createElement('div');entry.className='log-entry';if(log.includes('ERROR')||log.includes('Error')){entry.className+=' error';entry.style.backgroundColor='#f8d7da';entry.style.borderLeft='4px solid #dc3545';entry.style.color='#000000';}else if(log.includes('WARNING')||log.includes('Warning')){entry.className+=' warning';entry.style.backgroundColor='#fff3cd';entry.style.borderLeft='4px solid #ffc107';entry.style.color='#000000';}else if(log.includes('INFO')||log.includes('Info')){entry.className+=' info';entry.style.backgroundColor='#d1ecf1';entry.style.borderLeft='4px solid #17a2b8';entry.style.color='#000000';}else if(log.includes('DEBUG')||log.includes('Debug')){entry.className+=' debug';entry.style.backgroundColor='#e2e3e5';entry.style.borderLeft='4px solid #6c757d';entry.style.color='#000000';}else if(log.includes('DOGECOIN_RESPONSE')||log.includes('TX_CONFIRM')||log.includes('BC_CONFIRM')||log.includes('confirmation')){entry.className+=' success';entry.style.backgroundColor='#d4edda';entry.style.borderLeft='4px solid #28a745';entry.style.color='#000000';}entry.textContent=log;container.appendChild(entry);});container.scrollTop=container.scrollHeight;}}).catch(e=>{console.error('Error fetching logs:',e);});}function clearLogs(){if(confirm('Clear all logs? This will remove all log entries from memory.')){document.getElementById('logsContainer').innerHTML='<div class=\"log-entry\">Logs cleared</div>';}}function toggleAutoRefresh(){var btn=document.getElementById('autoRefreshBtn');if(autoRefreshInterval){clearInterval(autoRefreshInterval);autoRefreshInterval=null;btn.textContent='AUTO REFRESH: OFF';}else{autoRefreshInterval=setInterval(refreshLogs,2000);btn.textContent='AUTO REFRESH: ON';}}";
@@ -5273,7 +5551,10 @@ void handleApiPasswordStatus() {
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"password\":{";
-  response += "\"current\":\"" + ap_password + "\",";
+  // SECURITY: the AP password is deliberately NOT returned. This route is
+  // unauthenticated, so echoing it handed the credential to anyone who could
+  // reach the board. The fields below tell the UI everything it needs (whether
+  // the default is still in use, and the length) without disclosing the secret.
   response += "\"is_default\":" + String(ap_password == "radiodoge" ? "true" : "false") + ",";
   response += "\"length\":" + String(ap_password.length()) + ",";
   response += "\"requirements\":{";
@@ -5345,7 +5626,15 @@ void handleApiGatewaySave() {
     String endpoint = server.hasArg("endpoint") ? server.arg("endpoint") : "";
     String username = server.hasArg("username") ? server.arg("username") : "";
     String password = server.hasArg("password") ? server.arg("password") : "";
-    
+
+    // The gateway password is write-only: /api/gateway/load no longer returns it,
+    // so the UI's password field arrives blank unless the operator typed a new
+    // one. Treat blank as "keep the stored password" — otherwise simply saving
+    // an unrelated setting would silently erase the credential.
+    if (password.length() == 0) {
+      password = gateway_password;
+    }
+
     addLog("[API] Gateway save request - Type: " + type + ", IP: " + ip + ", Port: " + port + ", Username: " + username + ", Password: [HIDDEN]");
     
     // Validate required fields
@@ -5375,6 +5664,16 @@ void handleApiGatewaySave() {
       gateway_endpoint = endpoint;
       gateway_username = username;
       gateway_password = password;
+
+      // v0.4.1 — Forwarding now requires gateway_mode (see gatewayForwardingEnabled).
+      // Configuring a gateway here is an explicit statement of intent to act as
+      // one, so enable and persist the mode. Without this, a board set up purely
+      // through the web UI would silently stop forwarding after the upgrade.
+      if (type != "none" && !gateway_mode) {
+        gateway_mode = true;
+        saveGatewayModeQuiet(true);
+        addLog("[GATEWAY] Gateway configured - gateway mode enabled");
+      }
       
       response += "\"action\":\"gateway_save\",";
       response += "\"message\":\"Gateway credentials saved successfully\"";
@@ -5491,7 +5790,12 @@ void handleApiGatewayLoad() {
   response += "\"port\":\"" + gateway_port + "\",";
   response += "\"endpoint\":\"" + gateway_endpoint + "\",";
   response += "\"username\":\"" + gateway_username + "\",";
-  response += "\"password\":\"" + gateway_password + "\"";  // Return actual password
+  // SECURITY: the stored gateway RPC password is deliberately NOT returned.
+  // This route is unauthenticated, so returning it disclosed the credential to
+  // anyone on the board's AP. The password is write-only: the UI reports
+  // whether one is stored and leaves the field blank, and an operator who wants
+  // to change it types a new one.
+  response += "\"has_password\":" + String(gateway_password.length() > 0 ? "true" : "false");
   response += "}";
   response += "}";
   server.send(200, "application/json", response);
@@ -5840,6 +6144,16 @@ void handleApiGatewayConfigSet() {
       gateway_endpoint = endpoint;
       gateway_username = username;
       gateway_password = password;
+
+      // v0.4.1 — Forwarding now requires gateway_mode (see gatewayForwardingEnabled).
+      // Configuring a gateway here is an explicit statement of intent to act as
+      // one, so enable and persist the mode. Without this, a board set up purely
+      // through the web UI would silently stop forwarding after the upgrade.
+      if (type != "none" && !gateway_mode) {
+        gateway_mode = true;
+        saveGatewayModeQuiet(true);
+        addLog("[GATEWAY] Gateway configured - gateway mode enabled");
+      }
       
       addLog("Gateway configuration updated via API");
       
