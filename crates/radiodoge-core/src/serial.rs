@@ -334,6 +334,20 @@ impl SerialManager {
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                     Ok(Ok(bytes)) => {
+                        // Bound the accumulator, mirroring the Android bridge's
+                        // MOBILE_ACCUMULATOR_CAP. In normal operation the drain
+                        // loop below keeps this to a few hundred bytes; a board
+                        // stuck in a debug-print loop, or one that leaves a
+                        // partial packet buffered and goes quiet, must not be
+                        // able to grow it without limit.
+                        const ACCUMULATOR_CAP: usize = 8 * 1024;
+                        if accumulator.len() + bytes.len() > ACCUMULATOR_CAP {
+                            log::warn!(
+                                "Serial accumulator overflow ({} bytes) — discarding stale data",
+                                accumulator.len()
+                            );
+                            accumulator.clear();
+                        }
                         accumulator.extend_from_slice(&bytes);
 
                         // Extract complete packets from the accumulator.
