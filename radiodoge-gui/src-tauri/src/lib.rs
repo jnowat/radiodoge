@@ -18,7 +18,7 @@
 //! All protocol, wallet, and serial logic lives in `radiodoge-core`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -45,6 +45,16 @@ pub struct AppState {
     pub lora_settings: Arc<Mutex<LoraSettings>>,
     /// Set to false when the user explicitly disconnects — stops the reconnect watchdog.
     pub reconnect_enabled: Arc<AtomicBool>,
+    /// Incremented by every `connect_port`. Background tasks capture the value
+    /// they were spawned with and exit as soon as it changes, so tasks belonging
+    /// to a previous connection cannot outlive it.
+    ///
+    /// `reconnect_enabled` alone is not enough: it is one shared flag, so
+    /// connecting to a second port within the watchdog's 2 s tick would set it
+    /// back to true before the old watchdog noticed, leaving two watchdogs
+    /// running — and the stale one still holds the *previous* port name, so it
+    /// would happily reconnect the device the user just switched away from.
+    pub connection_generation: Arc<AtomicU64>,
     /// v0.3.6 — Transaction history (last MAX_HISTORY entries), persisted to JSON.
     pub tx_history: Arc<Mutex<Vec<TxHistoryEntry>>>,
     /// v0.3.6 — Background gateway daemon process handle.
@@ -86,6 +96,7 @@ impl AppState {
             current_port: Arc::new(Mutex::new(None)),
             lora_settings: Arc::new(Mutex::new(LoraSettings::default())),
             reconnect_enabled: Arc::new(AtomicBool::new(false)),
+            connection_generation: Arc::new(AtomicU64::new(0)),
             tx_history: Arc::new(Mutex::new(Vec::new())),
             gateway_process: Arc::new(Mutex::new(None)),
             connection_type: Arc::new(Mutex::new("usb".to_string())),
@@ -174,6 +185,10 @@ async fn connect_port(
     let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&port));
 
     state.reconnect_enabled.store(true, Ordering::Relaxed);
+
+    // Claim a new generation. Any stats poller or reconnect watchdog still
+    // running from a previous connection sees the change and exits.
+    let generation = state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1;
 
     let app_for_packets = app.clone();
     let on_packet = Arc::new(move |packet: IncomingPacket| {
@@ -288,8 +303,12 @@ async fn connect_port(
     // Background stats polling every 2 s
     let serial_poll = Arc::clone(&state.serial);
     let app_for_poll = app.clone();
+    let gen_poll = Arc::clone(&state.connection_generation);
     tokio::spawn(async move {
         loop {
+            // Exit if this connection has been superseded, otherwise a poller
+            // from an old session keeps emitting alongside the current one.
+            if gen_poll.load(Ordering::SeqCst) != generation { break; }
             if !serial_poll.is_connected() { break; }
             let stats = serial_poll.get_stats().await;
             let _ = app_for_poll.emit("radio-stats-update", &stats);
@@ -303,10 +322,15 @@ async fn connect_port(
     let reconnect_enabled_wr = Arc::clone(&state.reconnect_enabled);
     let app_wr = app.clone();
     let port_wr = port.clone();
+    let gen_wr = Arc::clone(&state.connection_generation);
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(5);
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
+            // This watchdog belongs to one connection. If the user has since
+            // connected to a different port, `port_wr` is stale — exit rather
+            // than reconnecting the device they switched away from.
+            if gen_wr.load(Ordering::SeqCst) != generation { break; }
             if !reconnect_enabled_wr.load(Ordering::Relaxed) { break; }
             if serial_wr.is_connected() {
                 backoff = Duration::from_secs(5);
@@ -327,9 +351,11 @@ async fn connect_port(
                 }
             });
 
-            // Re-check the flag after building the callback — disconnect_port may have
-            // been called in the narrow window between the check above and here.
+            // Re-check after building the callback — disconnect_port or a
+            // connect to a different port may have happened in the narrow
+            // window between the checks above and here.
             if !reconnect_enabled_wr.load(Ordering::Relaxed) { break; }
+            if gen_wr.load(Ordering::SeqCst) != generation { break; }
 
             match serial_wr.connect(&port_wr, on_pkt).await {
                 Ok(_) => {
@@ -1205,10 +1231,11 @@ async fn mobile_push_bytes(
     let mut packets_extracted: u32 = 0;
 
     loop {
-        // Discard leading bytes whose first byte is not a known command (sync recovery).
-        // This mirrors the desktop loop's behavior for stale firmware debug output.
-        while !acc.is_empty() && !radio::is_known_command(acc[0]) {
-            acc.remove(0);
+        // Discard leading noise (sync recovery), mirroring the desktop loop.
+        // One drain rather than a byte at a time — see radio::resync_offset.
+        let skip = radio::resync_offset(&acc);
+        if skip > 0 {
+            acc.drain(..skip);
         }
         if acc.len() < radio::SINGLE_HDR_LEN {
             break; // Need more bytes

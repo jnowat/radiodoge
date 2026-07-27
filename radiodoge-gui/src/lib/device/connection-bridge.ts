@@ -154,6 +154,31 @@ let bleNotifyTeardown: (() => void) | null = null;
 /** Tauri event unlisten handles registered during a session (both USB and BLE). */
 let sessionUnlistens: UnlistenFn[] = [];
 
+/**
+ * Serialises calls to `mobile_push_bytes`.
+ *
+ * The Rust side appends every chunk to one accumulator and frames packets out of
+ * it, so chunks MUST arrive in the order they came off the wire. Tauri does not
+ * guarantee ordering between concurrent `invoke` calls, and both byte sources —
+ * the USB read loop and the BLE notification callback — can produce a chunk
+ * before the previous one has finished crossing the IPC boundary. Firing them
+ * off concurrently could therefore splice the byte stream out of order and
+ * corrupt every packet that straddles the seam.
+ *
+ * Chaining each push onto the previous one keeps the stream in order. The BLE
+ * path needs this in particular because its callback is synchronous and cannot
+ * await.
+ */
+let _pushChain: Promise<unknown> = Promise.resolve();
+
+/** Queue a chunk for the Rust accumulator, preserving arrival order. */
+function _queuePushBytes(bytes: number[], rssi = 0): Promise<unknown> {
+  _pushChain = _pushChain
+    .then(() => invoke('mobile_push_bytes', { bytes, rssi }))
+    .catch((err) => console.warn('[bridge] mobile_push_bytes error:', err));
+  return _pushChain;
+}
+
 // ─── BLE device discovery (scan) ─────────────────────────────────────────────
 
 /**
@@ -443,9 +468,9 @@ async function _connectBluetoothAndroid(address: string): Promise<void> {
       // for defensive compatibility with any wrapper format.
       const bytes = _extractBytes(data);
       if (bytes.length === 0) return;
-      invoke('mobile_push_bytes', { bytes, rssi: 0 }).catch(
-        (err) => console.warn('[bridge-ble] mobile_push_bytes error:', err),
-      );
+      // Queued rather than fired directly: notifications can arrive faster than
+      // the IPC round trip, and the Rust accumulator needs them in order.
+      void _queuePushBytes(bytes);
     });
     bleNotifyTeardown = () => { void blec.unsubscribe(BLE_NOTIFY_CHAR_UUID); };
   } catch (e) {
@@ -523,6 +548,13 @@ async function _disconnectAndroid(notifyRust: boolean): Promise<void> {
 //   3. "no data within N ms" timeout errors are silently skipped.
 //   4. Any other error (device unplugged, port closed) exits the loop.
 
+/**
+ * Yield between empty reads. Matches the 5 ms the desktop Rust read loop sleeps
+ * on an empty read — long enough to stop a busy loop, short enough not to add
+ * meaningful latency to an incoming packet.
+ */
+const READ_LOOP_IDLE_MS = 5;
+
 async function _startReadLoop(devicePath: string): Promise<void> {
   activeReadLoopRunning = true;
   while (activeReadLoopRunning) {
@@ -534,9 +566,13 @@ async function _startReadLoop(devicePath: string): Promise<void> {
       });
       const bytes = _extractBytes(raw);
       if (bytes.length > 0) {
-        invoke('mobile_push_bytes', { bytes, rssi: 0 }).catch(
-          (err) => console.warn('[bridge] mobile_push_bytes error:', err),
-        );
+        // Awaited so chunks reach the Rust accumulator in wire order.
+        await _queuePushBytes(bytes);
+      } else {
+        // read_binary is not guaranteed to block for the full timeout — some
+        // plugin builds return an empty result straight away. Without a yield
+        // this loop would spin on IPC, pinning a core and draining the battery.
+        await _sleep(READ_LOOP_IDLE_MS);
       }
     } catch (e: unknown) {
       if (!activeReadLoopRunning) break;  // Normal shutdown — silently exit
@@ -548,6 +584,9 @@ async function _startReadLoop(devicePath: string): Promise<void> {
         msg.includes('timed out') ||
         msg.includes('timedout')
       ) {
+        // Same reasoning as the empty-result branch: a plugin that reports the
+        // timeout immediately would otherwise turn this into a busy loop.
+        await _sleep(READ_LOOP_IDLE_MS);
         continue;
       }
       // Any other error means the port is closed or device was unplugged.

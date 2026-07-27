@@ -341,8 +341,11 @@ impl SerialManager {
                         // This prevents stale firmware text output (e.g. Serial.println debug)
                         // from being misinterpreted as packet headers.
                         while !accumulator.is_empty() {
-                            if !radio::is_known_command(accumulator[0]) {
-                                accumulator.remove(0);
+                            // Drop any run of noise in one shift rather than a
+                            // byte at a time (see radio::resync_offset).
+                            let skip = radio::resync_offset(&accumulator);
+                            if skip > 0 {
+                                accumulator.drain(..skip);
                                 continue;
                             }
                             if accumulator.len() < radio::SINGLE_HDR_LEN {
