@@ -169,9 +169,23 @@ export async function isAndroid(): Promise<boolean> {
 let activePort: InstanceType<typeof SerialPort> | null = null;
 
 /**
- * True while the USB polling read loop is running.
- * Set to false to stop the loop (on disconnect or error).
+ * Generation of the USB read loop that is allowed to run.
+ *
+ * A single boolean was not enough. Two loops can briefly overlap — a reconnect
+ * starts one while the previous is still inside its 100 ms read — and they then
+ * shared one flag, with two ways to go wrong: the old loop's exit set the flag
+ * false and killed the *new* one, or both kept running and each received a
+ * random subset of the bytes. The second is the worse outcome, because both
+ * push into the same accumulator and the byte stream arrives interleaved, which
+ * is indistinguishable from line noise to the framer.
+ *
+ * Bumping the generation retires every existing loop; each loop exits as soon as
+ * it notices it is no longer the current one, and only the current one may
+ * change shared state on the way out.
  */
+let readLoopGeneration = 0;
+
+/** True while a USB read loop is actually running (for diagnostics). */
 let activeReadLoopRunning = false;
 
 /** BLE device address (MAC) when connected over BLE (null when disconnected). */
@@ -541,8 +555,9 @@ export async function disconnect(): Promise<void> {
 async function _disconnectAndroid(notifyRust: boolean): Promise<void> {
   _clearSessionListeners();
 
-  // Tell the polling read loop to stop.  It will exit within at most one
-  // 100 ms read window (the current read_binary call).
+  // Retire every read loop. Each exits within at most one 100 ms read window
+  // (the current read_binary call).
+  readLoopGeneration++;
   activeReadLoopRunning = false;
 
   await _closePort();
@@ -585,8 +600,9 @@ async function _disconnectAndroid(notifyRust: boolean): Promise<void> {
 const READ_LOOP_IDLE_MS = 5;
 
 async function _startReadLoop(devicePath: string): Promise<void> {
+  const myGeneration = ++readLoopGeneration;
   activeReadLoopRunning = true;
-  while (activeReadLoopRunning) {
+  while (readLoopGeneration === myGeneration) {
     try {
       const raw = await invoke('plugin:serialplugin|read_binary', {
         path: devicePath,
@@ -604,7 +620,7 @@ async function _startReadLoop(devicePath: string): Promise<void> {
         await _sleep(READ_LOOP_IDLE_MS);
       }
     } catch (e: unknown) {
-      if (!activeReadLoopRunning) break;  // Normal shutdown — silently exit
+      if (readLoopGeneration !== myGeneration) break;  // Retired — silently exit
       const msg = String(e).toLowerCase();
       // A read timeout (no data in the 100 ms window) is normal and expected.
       if (
@@ -618,12 +634,30 @@ async function _startReadLoop(devicePath: string): Promise<void> {
         await _sleep(READ_LOOP_IDLE_MS);
         continue;
       }
-      // Any other error means the port is closed or device was unplugged.
-      console.warn('[bridge] USB read loop: port error, stopping:', e);
-      break;
+      // Any other error means the port is closed or the device was unplugged.
+      //
+      // This used to `break` and leave everything else untouched: the app went
+      // on showing "connected" with a dead reader, so nothing ever arrived
+      // again — no board replies, no TX_ACK — and a transaction sent afterwards
+      // went into a void that looked exactly like a working connection.
+      console.warn('[bridge] USB read loop: port error, disconnecting:', e);
+      if (readLoopGeneration === myGeneration) {
+        activeReadLoopRunning = false;
+        // Retire this generation so the teardown below cannot be undone by a
+        // loop that is still unwinding.
+        readLoopGeneration++;
+        await _disconnectAndroid(/* notifyRust */ true).catch((err) =>
+          console.warn('[bridge] teardown after read error failed:', err),
+        );
+      }
+      return;
     }
   }
-  activeReadLoopRunning = false;
+  // Only the current generation may clear the shared flag; a retired loop
+  // exiting must not report that the live one has stopped.
+  if (readLoopGeneration === myGeneration) {
+    activeReadLoopRunning = false;
+  }
 }
 
 async function _disconnectBluetoothAndroid(notifyRust: boolean): Promise<void> {

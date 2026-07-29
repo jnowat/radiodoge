@@ -12,6 +12,12 @@ use tauri::{
     Manager, Runtime,
 };
 
+/// Identifier for the tray this module builds.
+///
+/// Shared by [`setup_tray`] and [`update_tray_status`] so the lookup cannot
+/// drift from the registration again.
+const TRAY_ID: &str = "radiodoge-main-tray";
+
 /// Build and register the system tray icon with its context menu.
 pub fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let open_item = MenuItem::with_id(app, "open", "🐕 Open RadioDoge", true, None::<&str>)?;
@@ -28,7 +34,11 @@ pub fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         return Ok(());
     };
 
-    TrayIconBuilder::new()
+    // v0.4.2 — An explicit id. `TrayIconBuilder::new()` generates one, and
+    // `update_tray_status` looked the tray up by the empty string, which can
+    // never match — so the tooltip never changed and the tray permanently read
+    // whatever it was built with, on every connect and disconnect.
+    TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .menu(&menu)
         .tooltip("RadioDoge — Wireless Dogecoin")
@@ -74,8 +84,12 @@ pub fn update_tray_status<R: Runtime>(app: &tauri::AppHandle<R>, connected: bool
         "RadioDoge — 🔴 Disconnected".to_string()
     };
 
-    // Update all tray icons (there should only be one)
-    if let Some(tray) = app.tray_by_id("") {
-        let _ = tray.set_tooltip(Some(&tooltip));
+    match app.tray_by_id(TRAY_ID) {
+        Some(tray) => {
+            let _ = tray.set_tooltip(Some(&tooltip));
+        }
+        // Not fatal — the tray is optional (see setup_tray) — but silence here
+        // is what let the broken lookup go unnoticed.
+        None => log::debug!("[tray] no tray with id {} — status not updated", TRAY_ID),
     }
 }

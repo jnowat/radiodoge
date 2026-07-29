@@ -184,6 +184,44 @@ the serial read loop down with it, and a silent wrap in a release one. All offse
 arithmetic in the decoder is checked now, and a test drives it with hostile
 varints and every truncation of a well-formed transaction.
 
+#### The Android USB reader could double up, or die silently
+
+The polling read loop was gated on one global boolean. Two loops can briefly
+overlap — a reconnect starts one while the previous is still inside its 100 ms
+read — and they then shared that flag: either the old loop's exit killed the new
+one, or both kept running and each received a random subset of the bytes. The
+second is worse, because both push into the same accumulator and the byte stream
+arrives interleaved, which is indistinguishable from line noise to the framer.
+Each loop now carries a generation and only the current one may touch shared
+state.
+
+A real port error — the cable pulled — just `break`ed out of the loop and left
+everything else alone: the app went on showing "connected" with a dead reader, so
+nothing arrived again and a transaction sent afterwards went into a void that
+looked exactly like a working connection. It now tears the session down.
+
+#### Toggles reported settings the board never confirmed
+
+`set_wifi_enabled` fell back to the *requested* value when the board did not
+answer, and `set_ble_enabled` never looked at the reply at all. Both wait for the
+board's own acknowledgement now and report a failure when it does not come.
+
+#### The tray never updated, and there were two of them
+
+`update_tray_status` looked the tray up by the empty string, which cannot match
+the id `TrayIconBuilder::new()` generates — so the tooltip never changed on any
+connect or disconnect. The tray has an explicit id now. `tauri.conf.json` also
+declared a `trayIcon`, which creates a *second*, menu-less tray icon alongside
+the functional one; it is gone.
+
+#### The gateway daemon outlived the app
+
+The child is spawned with `kill_on_drop`, but that only fires when the `Child` is
+dropped, and it lives in managed state the process never drops on exit. Closing
+the window left a `radiodoge-cli daemon` running and holding the serial port, so
+the next launch could not open the board at all. It is killed from the `Exit`
+run-event.
+
 #### Smaller UI ones
 
 - The packet log and the debug console keyed their `{#each}` blocks on the array

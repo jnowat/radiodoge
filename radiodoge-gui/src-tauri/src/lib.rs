@@ -1187,13 +1187,29 @@ async fn set_wifi_enabled(
     let pkt = radio::build_wifi_toggle(&src, enable);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_WIFI_TOGGLE (0x24) → {}", if enable { "ON" } else { "OFF" }));
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    // Re-query to confirm
+    // Wait for the board's own 0x24 reply. Without it this returned the value
+    // that had been *requested* — `unwrap_or(enable)` — so a board that never
+    // answered still flipped the toggle in the UI, and the user was looking at a
+    // setting that had not been applied.
+    let acked = state
+        .serial
+        .send_and_await_reply(pkt, radio::CMD_WIFI_TOGGLE, 2000)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !acked {
+        return Err(
+            "The board did not acknowledge the WiFi change, so it may not have been applied.              Nothing was changed in the app."
+                .to_string(),
+        );
+    }
+
+    // Re-query for the authoritative state.
     let confirm = radio::build_get_settings(&src);
     state.serial.send_raw(confirm).await.ok();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let bs = state.serial.get_board_settings().await;
+    // The board acknowledged, so falling back to the requested value is now a
+    // statement about something that actually happened.
     let confirmed = bs.as_ref().map(|s| s.wifi_enabled).unwrap_or(enable);
     if let Some(ref bs) = bs {
         let _ = app.emit("board-sync", bs);
@@ -1803,8 +1819,20 @@ async fn set_ble_enabled(
     let pkt = radio::build_ble_toggle(&src, enable);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_BLE_TOGGLE (0x28) → {}", if enable { "ON" } else { "OFF" }));
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
-    // BLE toggle ACK is just the 9-byte echo — no follow-up GET_SETTINGS needed.
+    // The board answers 0x28 with a 9-byte echo carrying the state it applied.
+    // This used to return `enable` without looking, so the UI reported a toggle
+    // the board may never have received.
+    let acked = state
+        .serial
+        .send_and_await_reply(pkt, radio::CMD_BLE_TOGGLE, 2000)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !acked {
+        return Err(
+            "The board did not acknowledge the Bluetooth change, so it may not have been              applied. Nothing was changed in the app."
+                .to_string(),
+        );
+    }
     Ok(enable)
 }
 
@@ -2122,6 +2150,26 @@ pub fn run() {
             log::info!("RadioDoge GUI v0.3.16 started — much mesh, very wow 🐕");
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("Error running RadioDoge GUI")
+        .run(|app, event| {
+            // v0.4.2 — Kill the gateway daemon on the way out.
+            //
+            // The child is spawned with `kill_on_drop`, but that only fires when
+            // the `Child` is actually dropped — and it lives in managed state
+            // that the process never drops on exit. So closing the window left a
+            // `radiodoge-cli daemon` running and holding the serial port, and the
+            // next launch could not open the board at all.
+            if let tauri::RunEvent::Exit = event {
+                let state = app.state::<AppState>();
+                let gateway = Arc::clone(&state.gateway_process);
+                tauri::async_runtime::block_on(async move {
+                    if let Some(mut child) = gateway.lock().await.take() {
+                        log::info!("Stopping the gateway daemon before exit");
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                    }
+                });
+            }
+        })
 }
