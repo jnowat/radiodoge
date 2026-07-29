@@ -299,7 +299,14 @@ uint8_t  lora_coding_rate      = LORA_CODINGRATE;
 // Request queuing and confirmation system
 #define MAX_PENDING_REQUESTS 10
 #define CONFIRMATION_TIMEOUT_MS 15000  // 15 seconds timeout for confirmations
-#define REQUEST_TIMEOUT_MS 30000       // 30 seconds timeout for entire request processing
+// v0.4.2 — Raised from 30 s. This is measured from the moment a request is
+// *queued*, not from when it starts, and a request ahead of it in the queue can
+// hold the line for a full CONFIRMATION_TIMEOUT_MS. At 30 s only the first two
+// of the ten queue slots could ever be reached: everything behind them expired
+// untried, and the API had already reported them accepted. The bound must exceed
+// MAX_PENDING_REQUESTS x CONFIRMATION_TIMEOUT_MS (10 x 15 s) for a full queue to
+// drain, with margin for the airtime each request spends transmitting.
+#define REQUEST_TIMEOUT_MS 210000      // 3.5 minutes: a full queue can drain before anything expires
 
 // Request types
 enum RequestType {
@@ -1307,6 +1314,16 @@ void clearAPPassword() {
 }
 
 // Gateway Credential Management Functions
+// v0.4.2 — NVS key names are capped at 15 usable characters
+// (NVS_KEY_NAME_MAX_SIZE is 16 *including* the NUL). The old key name was 16,
+// so every nvs_set_str/nvs_get_str with it returned ESP_ERR_NVS_KEY_TOO_LONG:
+// the endpoint was never stored and never loaded, while /api/gateway/save still
+// reported success. A board configured with a custom endpoint path silently
+// forgot it on every reboot and POSTed transactions to the bare gateway URL.
+// Renamed to "gw_endpoint" (11), matching the abbreviated style already used by
+// "gw_mode" and "gw_pass".
+#define NVS_KEY_GATEWAY_ENDPOINT "gw_endpoint"
+
 void saveGatewayCredentials(String type, String ip, String port, String endpoint, String username, String password) {
   nvs_handle_t nvs_handle;
   esp_err_t err;
@@ -1342,7 +1359,7 @@ void saveGatewayCredentials(String type, String ip, String port, String endpoint
   }
   
   // Save endpoint
-  err = nvs_set_str(nvs_handle, "gateway_endpoint", endpoint.c_str());
+  err = nvs_set_str(nvs_handle, NVS_KEY_GATEWAY_ENDPOINT, endpoint.c_str());
   if (err != ESP_OK) {
     debugPrintln("Error saving gateway endpoint to NVS");
   }
@@ -1430,7 +1447,7 @@ bool loadGatewayCredentials() {
   // Load endpoint (optional)
   size_t endpoint_len = 64;
   char endpoint_buffer[64];
-  err = nvs_get_str(nvs_handle, "gateway_endpoint", endpoint_buffer, &endpoint_len);
+  err = nvs_get_str(nvs_handle, NVS_KEY_GATEWAY_ENDPOINT, endpoint_buffer, &endpoint_len);
   if (err == ESP_OK) {
     gateway_endpoint = String(endpoint_buffer);
   } else {
@@ -2847,6 +2864,21 @@ static uint32_t fnv1a(const String& s) {
 
 // Returns true if an identical broadcast from this source was recently processed.
 // Records the entry on first sight.
+// v0.4.2 — Keyed on the payload alone, not on (source, payload).
+//
+// A relayed broadcast is retransmitted with the *relay's* address as its source
+// (SendMultipartBroadcast writes `local` into the multipart header), so the same
+// original payload arrives from a different "source" at every hop. Keying on the
+// source therefore meant a node never recognised a payload it had already seen
+// and relayed, and flood suppression did nothing: with N nodes in range the same
+// transaction reached the gateway once per path through the mesh, and was
+// submitted to the Dogecoin network once per arrival. The hop limit bounded the
+// storm but did not stop the duplication.
+//
+// Suppressing an identical payload from any source within the TTL is exactly what
+// flood suppression should do — two nodes sending byte-identical data inside two
+// minutes are relaying the same thing. The source is kept in the table for the
+// log line only.
 bool isRecentlySeenBroadcast(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, const String& data) {
   uint32_t hash = fnv1a(data);
   unsigned long now = millis();
@@ -2862,10 +2894,7 @@ bool isRecentlySeenBroadcast(uint8_t srcRegion, uint8_t srcCommunity, uint8_t sr
 
   // Check for duplicate
   for (int i = 0; i < seenBroadcastCount; i++) {
-    if (seenBroadcasts[i].srcRegion    == srcRegion    &&
-        seenBroadcasts[i].srcCommunity == srcCommunity &&
-        seenBroadcasts[i].srcNode      == srcNode      &&
-        seenBroadcasts[i].dataHash     == hash) {
+    if (seenBroadcasts[i].dataHash == hash) {
       return true;
     }
   }
@@ -2914,18 +2943,36 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
   String internetResponse = "";
   bool gateway_forwarded = false;
   
-  // Extract transaction data from broadcast (format: "transaction:normal:HEXDATA")
+  // v0.4.2 — Parse the broadcast envelope generically.
+  //
+  // A broadcast payload is "<type>:<priority>:<data>". The old code only
+  // recognised the literal prefix "transaction:", so anything else — an
+  // announcement, say — fell through with its type and priority left at the
+  // hardcoded defaults. It was then relayed as "transaction:normal:" plus the
+  // *entire* original payload, and forwarded to the Dogecoin network as if the
+  // whole thing were a raw transaction.
+  String bcType = "transaction";
+  String bcPriority = "normal";
   String txData = broadcastData;
-  if (broadcastData.startsWith("transaction:normal:")) {
-    txData = broadcastData.substring(19); // Remove "transaction:normal:" prefix
-  } else if (broadcastData.startsWith("transaction:")) {
-    int colonPos = broadcastData.indexOf(':', 12);
-    if (colonPos > 0) {
-      txData = broadcastData.substring(colonPos + 1);
+  {
+    int c1 = broadcastData.indexOf(':');
+    int c2 = (c1 > 0) ? broadcastData.indexOf(':', c1 + 1) : -1;
+    if (c1 > 0 && c2 > c1) {
+      bcType     = broadcastData.substring(0, c1);
+      bcPriority = broadcastData.substring(c1 + 1, c2);
+      txData     = broadcastData.substring(c2 + 1);
     }
   }
-  
-  if (gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
+
+  // Only a transaction belongs on the Dogecoin network. Posting an announcement
+  // to a node as a raw transaction can only ever be rejected, and on a metered
+  // or rate-limited gateway it is not free.
+  bool isTransaction = (bcType == "transaction");
+  if (!isTransaction) {
+    addLog("[GATEWAY] Broadcast type '" + bcType + "' is not a transaction - not forwarding");
+  }
+
+  if (isTransaction && gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
     String gatewayUrl = "http://" + gateway_ip + ":" + gateway_port;
     if (gateway_type != "core" && gateway_endpoint.length() > 0) {
       gatewayUrl += gateway_endpoint;
@@ -2950,7 +2997,7 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
       addLog("[GATEWAY] " + gateway_type + " response: " + internetResponse);
       gateway_forwarded = true;
     }
-  } else if (gatewayForwardingEnabled() && internet_connected) {
+  } else if (isTransaction && gatewayForwardingEnabled() && internet_connected) {
     // Fallback to default internet gateway
     addLog("[GATEWAY] No configured gateway, using default internet gateway (BlockCypher)");
     addLog("[GATEWAY] Broadcast transaction data length: " + String(txData.length()) + " bytes");
@@ -3002,20 +3049,11 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
       addLog("[LoRa] Mesh hop limit (" + String(MAX_REBROADCAST_HOPS) + ") reached at hop " + String(hops) + " - not rebroadcasting");
     } else if (ENABLE_MESH_REBROADCAST) {
       addLog("[LoRa] Rebroadcasting to other LoRa devices for mesh networking (hop " + String(hops + 1) + ")");
-      // Extract type and priority from original broadcast data
-      String rebroadcastType = "transaction";
-      String rebroadcastPriority = "normal";
-      if (broadcastData.startsWith("transaction:normal:")) {
-        rebroadcastType = "transaction";
-        rebroadcastPriority = "normal";
-      } else if (broadcastData.startsWith("transaction:")) {
-        rebroadcastType = "transaction";
-        int colonPos = broadcastData.indexOf(':', 12);
-        if (colonPos > 0) {
-          rebroadcastPriority = broadcastData.substring(12, colonPos);
-        }
-      }
-
+      // Relay it as what it is. bcType/bcPriority came from the envelope above,
+      // so a non-transaction broadcast keeps its own type instead of being
+      // relabelled as a transaction carrying its own header as payload.
+      String rebroadcastType = bcType;
+      String rebroadcastPriority = bcPriority;
       String rebroadcastData = rebroadcastType + ":" + rebroadcastPriority + ":" + txData;
       // Always rebroadcast via multipart so the incremented hop counter (carried
       // in the multipart `reserved` byte) survives the next relay.
@@ -3118,44 +3156,78 @@ void ProcessTransactionRequest(PendingRequest& req);
 void ProcessMessageRequest(PendingRequest& req);
 void ProcessPingRequest(PendingRequest& req);
 
+// v0.4.2 — Rewritten to dequeue before dispatching, and to iterate rather than
+// recurse.
+//
+// The old shape had two defects that compounded:
+//
+//   1. The request was removed from the queue *after* its handler returned. A
+//      handler for a request with requiresConfirmation == false called straight
+//      back into this function, which then found the same request still sitting
+//      at pendingRequests[0] with the state still IDLE — and dispatched it
+//      again. Every level of that recursion transmitted over LoRa, and it ended
+//      only when the stack ran out and the board reset.
+//   2. Being re-entrant at all was unsafe: a confirmation arriving mid-dispatch
+//      (LoRa RX is serviced from inside SendLoRaAndWait) calls
+//      HandleConfirmationReceived, which also calls this function.
+//
+// Now: take the request off the queue first, dispatch it, and either stop
+// because it is waiting for a confirmation or continue round the loop. A guard
+// makes re-entry a no-op instead of a second concurrent walk of the queue.
 void ProcessNextQueuedRequest() {
-  if (pendingRequestCount == 0) {
-    currentRequestState = REQUEST_IDLE;
-    addLog("[QUEUE] No more requests in queue - returning to idle state");
+  static bool processing = false;
+  if (processing) {
+    addLog("[QUEUE] Re-entrant call ignored - already processing the queue");
     return;
   }
-  
-  if (currentRequestState != REQUEST_IDLE) {
-    addLog("[ERROR] Cannot process next request - system not idle");
-    return;
+  processing = true;
+
+  while (true) {
+    if (pendingRequestCount == 0) {
+      currentRequestState = REQUEST_IDLE;
+      addLog("[QUEUE] No more requests in queue - returning to idle state");
+      break;
+    }
+
+    if (currentRequestState != REQUEST_IDLE) {
+      addLog("[QUEUE] Not idle - leaving the rest of the queue for later");
+      break;
+    }
+
+    // Copy the request out and remove it from the queue *before* dispatching, so
+    // no path can ever see it as still pending.
+    PendingRequest req = pendingRequests[0];
+    for (int i = 0; i < pendingRequestCount - 1; i++) {
+      pendingRequests[i] = pendingRequests[i + 1];
+    }
+    pendingRequestCount--;
+
+    currentRequestId = req.requestId;
+    addLog("[QUEUE] Processing request - ID: " + req.requestId + ", Type: " + String(req.type));
+
+    switch (req.type) {
+      case REQUEST_BROADCAST:
+        ProcessBroadcastRequest(req);
+        break;
+      case REQUEST_TRANSACTION:
+        ProcessTransactionRequest(req);
+        break;
+      case REQUEST_MESSAGE:
+        ProcessMessageRequest(req);
+        break;
+      case REQUEST_PING:
+        ProcessPingRequest(req);
+        break;
+    }
+
+    // A request awaiting confirmation owns the queue until it is confirmed or
+    // times out; anything else falls through to the next one.
+    if (currentRequestState == REQUEST_WAITING_FOR_CONFIRMATION) {
+      break;
+    }
   }
-  
-  PendingRequest& req = pendingRequests[0];
-  currentRequestId = req.requestId;
-  
-  addLog("[QUEUE] Processing request - ID: " + req.requestId + ", Type: " + String(req.type));
-  
-  // Process the request based on type
-  switch (req.type) {
-    case REQUEST_BROADCAST:
-      ProcessBroadcastRequest(req);
-      break;
-    case REQUEST_TRANSACTION:
-      ProcessTransactionRequest(req);
-      break;
-    case REQUEST_MESSAGE:
-      ProcessMessageRequest(req);
-      break;
-    case REQUEST_PING:
-      ProcessPingRequest(req);
-      break;
-  }
-  
-  // Remove the processed request from queue
-  for (int i = 0; i < pendingRequestCount - 1; i++) {
-    pendingRequests[i] = pendingRequests[i + 1];
-  }
-  pendingRequestCount--;
+
+  processing = false;
 }
 
 void ProcessBroadcastRequest(PendingRequest& req) {
@@ -3172,10 +3244,10 @@ void ProcessBroadcastRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for confirmation - ID: " + req.requestId);
-  } else {
-    // No confirmation needed, process next request immediately
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void ProcessTransactionRequest(PendingRequest& req) {
@@ -3191,9 +3263,10 @@ void ProcessTransactionRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for confirmation - ID: " + req.requestId);
-  } else {
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void ProcessMessageRequest(PendingRequest& req) {
@@ -3209,9 +3282,10 @@ void ProcessMessageRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for confirmation - ID: " + req.requestId);
-  } else {
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void ProcessPingRequest(PendingRequest& req) {
@@ -3222,9 +3296,10 @@ void ProcessPingRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for ACK - ID: " + req.requestId);
-  } else {
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void CheckRequestTimeouts() {
@@ -3252,12 +3327,42 @@ void CheckRequestTimeouts() {
   }
 }
 
+// v0.4.2 — Ignore a confirmation identical to one just accepted.
+//
+// Confirmations carry no request id, so any DOGECOIN_RESPONSE completes whatever
+// request happens to be waiting. That collides with the gateway deliberately
+// sending each confirmation twice for reliability (see
+// ProcessReassembledTransaction): the first copy completed the request it was
+// meant for, the queue moved on and started the next one, and the second copy
+// arrived moments later and completed *that* one too — a request whose reply had
+// not come back yet, and never would be waited for.
+//
+// Remembering the last confirmation for the length of a confirmation window is
+// enough to tell a retransmission from a genuine second answer, and keeps the
+// redundant send doing what it was meant to do.
 void HandleConfirmationReceived(String confirmationData) {
-  if (currentRequestState == REQUEST_WAITING_FOR_CONFIRMATION) {
-    addLog("[QUEUE] Confirmation received for request - ID: " + currentRequestId + ", Data: " + confirmationData.substring(0, min(50, (int)confirmationData.length())));
-    currentRequestState = REQUEST_IDLE;
-    ProcessNextQueuedRequest();
+  static uint32_t lastConfirmationHash = 0;
+  static unsigned long lastConfirmationAt = 0;
+  static bool haveLastConfirmation = false;
+
+  if (currentRequestState != REQUEST_WAITING_FOR_CONFIRMATION) {
+    return;
   }
+
+  uint32_t hash = fnv1a(confirmationData);
+  unsigned long now = millis();
+  if (haveLastConfirmation && hash == lastConfirmationHash &&
+      (now - lastConfirmationAt) < CONFIRMATION_TIMEOUT_MS) {
+    addLog("[QUEUE] Duplicate confirmation ignored - it does not belong to " + currentRequestId);
+    return;
+  }
+  lastConfirmationHash = hash;
+  lastConfirmationAt = now;
+  haveLastConfirmation = true;
+
+  addLog("[QUEUE] Confirmation received for request - ID: " + currentRequestId + ", Data: " + confirmationData.substring(0, min(50, (int)confirmationData.length())));
+  currentRequestState = REQUEST_IDLE;
+  ProcessNextQueuedRequest();
 }
 
 // Send a broadcast message
@@ -3711,11 +3816,23 @@ void RelayDesktopMessageOverLoRa() {
 // connect and receive notifications but not control the board. This drains the
 // buffer and runs the same HandleDesktopCommand the USB path uses.
 //
-// Framing: BLE has no equivalent of the serial path's delay(500), and a packet
-// can be split across GATT writes, so a packet is dispatched once either its
-// fixed length has arrived (desktopCommandLength) or, for the variable-length
-// commands, the link has been quiet for BLE_FRAME_QUIET_MS.
-#define BLE_FRAME_QUIET_MS 60
+// Framing: a packet is dispatched once either its length is known and has
+// arrived (desktopCommandLength, or a multipart frame's declared chunk length)
+// or — for the variable-length commands, which carry no length anywhere — the
+// link has been quiet for BLE_FRAME_QUIET_MS.
+//
+// v0.4.2 — raised from 60 ms. A BLE link starts at the mandatory 23-byte ATT
+// MTU and the host cannot negotiate or even query a larger one, so it writes a
+// packet as a run of 20-byte chunks. Each is a separate acknowledged GATT
+// operation subject to the connection interval and the phone's scheduler, and a
+// gap of well over 60 ms between two chunks of the *same* packet is ordinary.
+// At 60 ms the board dispatched the first half of a transaction as if it were a
+// whole one.
+//
+// This only delays the variable-length commands (0x10 / 0x11 as single packets).
+// Anything with a known length — every fixed-size command, and every multipart
+// frame — is dispatched the moment its last byte arrives, no waiting at all.
+#define BLE_FRAME_QUIET_MS 400
 
 #if ENABLE_BLE
 void ProcessBleCommands() {
@@ -4774,8 +4891,18 @@ void handleRoot() {
   html += "<form>";
   html += "<div class='grid'>";
   html += "<div>";
+  // v0.4.2 — The current password used to be rendered here as the field's value.
+  // `type='password'` only masks it on screen: it sat in cleartext in the served
+  // HTML, readable with a plain GET by anyone who can reach the web server —
+  // which in dual-WiFi mode includes every host on the upstream LAN, not just
+  // devices that already joined the AP. It also defeated the point of the
+  // v0.4.1 change that stopped /api/password/status returning it.
+  //
+  // Nothing read this field: no script referenced it and handleApiPasswordChange
+  // never verified a current password. It existed only to display the secret, so
+  // it is gone rather than blanked.
   html += "<label>Current Password</label>";
-  html += "<input type='password' id='currentPassword' placeholder='Current password' value='" + ap_password + "' readonly autocomplete='current-password'>";
+  html += "<input type='password' placeholder='(not shown)' value='' disabled autocomplete='off'>";
   html += "</div>";
   html += "<div>";
   html += "<label>New Password</label>";
@@ -5298,12 +5425,42 @@ void handleMessage() {
   }
 }
 
+// v0.4.2 — Validate an address the operator is asking this board to adopt.
+//
+// `String::toInt()` returns a long and the octets are uint8_t, so 999 silently
+// became 231; and nothing rejected 255.255.255, which is the reserved broadcast
+// address. A board that adopted it would match CheckIfPacketForMe() *and*
+// CheckIfPacketIsGlobalBroadcast() for every packet on the air, handling each one
+// twice, and could never be addressed individually again — recoverable only by
+// clearing NVS.
+//
+// Only applies to the board's own address. A *destination* of 255.255.255 is
+// legitimate: that is how a broadcast is addressed.
+bool parseLocalAddressOctets(long region, long community, long node, nodeAddress &out) {
+  if (region < 0 || region > 255 || community < 0 || community > 255 || node < 0 || node > 255) {
+    return false;
+  }
+  if (region == 255 && community == 255 && node == 255) {
+    return false;  // reserved broadcast address
+  }
+  out.region = (uint8_t)region;
+  out.community = (uint8_t)community;
+  out.node = (uint8_t)node;
+  return true;
+}
+
 void handleAddress() {
   if (server.hasArg("region") && server.hasArg("community") && server.hasArg("node")) {
     // Set new address
-    local.region = server.arg("region").toInt();
-    local.community = server.arg("community").toInt();
-    local.node = server.arg("node").toInt();
+    nodeAddress requested;
+    if (!parseLocalAddressOctets(server.arg("region").toInt(),
+                                 server.arg("community").toInt(),
+                                 server.arg("node").toInt(), requested)) {
+      server.send(400, "text/plain",
+                  "Invalid address: each octet must be 0-255 and 255.255.255 is reserved for broadcast");
+      return;
+    }
+    local = requested;
     InitControlMessages();
     DisplayLocalAddress(local);
     // Save LoRa configuration to NVS
@@ -5728,9 +5885,17 @@ void handleApiAddress() {
   if (server.method() == HTTP_POST) {
     // Set new address
     if (server.hasArg("region") && server.hasArg("community") && server.hasArg("node")) {
-      local.region = server.arg("region").toInt();
-      local.community = server.arg("community").toInt();
-      local.node = server.arg("node").toInt();
+      nodeAddress requested;
+      if (!parseLocalAddressOctets(server.arg("region").toInt(),
+                                   server.arg("community").toInt(),
+                                   server.arg("node").toInt(), requested)) {
+        response += "\"success\":false,";
+        response += "\"error\":\"Invalid address: each octet must be 0-255, and 255.255.255 is reserved for broadcast\"";
+        response += "}";
+        server.send(200, "application/json", response);
+        return;
+      }
+      local = requested;
       InitControlMessages();
       DisplayLocalAddress(local);
       // Save LoRa configuration to NVS
@@ -5762,7 +5927,7 @@ void handleApiWifi() {
   response += "\"ap_ssid\":\"" + String(ap_ssid) + "\",";
   response += "\"ap_ip\":\"" + WiFi.softAPIP().toString() + "\",";
   response += "\"internet_connected\":" + String(internet_connected ? "true" : "false") + ",";
-  response += "\"internet_ssid\":\"" + internet_ssid + "\",";
+  response += "\"internet_ssid\":\"" + escapeJsonString(internet_ssid) + "\",";
   if (internet_connected) {
     response += "\"internet_ip\":\"" + WiFi.localIP().toString() + "\",";
   }
@@ -5868,44 +6033,108 @@ void handleApiBridgeStatus() {
   response += "\"ap_gateway\":\"" + ap_gateway.toString() + "\",";
   response += "\"ap_subnet\":\"" + ap_subnet.toString() + "\",";
   response += "\"internet_ip\":\"" + (internet_connected ? WiFi.localIP().toString() : "none") + "\",";
-  response += "\"internet_ssid\":\"" + internet_ssid + "\"";
+  response += "\"internet_ssid\":\"" + escapeJsonString(internet_ssid) + "\"";
   response += "}";
   response += "}";
   server.send(200, "application/json", response);
 }
 
 // HTTP Proxy for Internet Bridge
+// Largest proxied response this device will hold in RAM.
+//
+// v0.4.2 — There was no limit: the whole remote body went into an Arduino String
+// on the heap. The board has a couple of hundred KB free with WiFi, BLE and the
+// web server running, so a single request for any ordinary web page was enough
+// to exhaust it and reset the device mid-transaction. 32 KB is generous for the
+// status pages this is meant to fetch and small enough to be safe.
+#define PROXY_MAX_RESPONSE_BYTES 32768
+
 void handleHttpProxy() {
+  // v0.4.2 — Gated on the operator having explicitly enabled the bridge, not
+  // merely on the board happening to have internet.
+  //
+  // This route is an open forward proxy: it will fetch any URL and return the
+  // body, so while the STA interface is up, anything that can reach this web
+  // server can reach the upstream network through it — the operator's router
+  // admin page, their NAS, anything else on that LAN. The bridge already has an
+  // explicit on/off switch and an API for it; requiring it here means the
+  // capability exists only while it has been asked for, instead of whenever the
+  // board is online.
+  if (!internet_bridge_enabled) {
+    server.send(403, "text/plain",
+                "The internet bridge is disabled. Enable it (POST /api/bridge/enable) to use the proxy.");
+    return;
+  }
   if (!internet_connected) {
     server.send(503, "text/plain", "Internet not connected");
     return;
   }
-  
+
   if (!server.hasArg("url")) {
     server.send(400, "text/plain", "Missing 'url' parameter. Usage: /proxy?url=http://example.com");
     return;
   }
-  
+
   String url = server.arg("url");
   HTTPClient http;
-  
+
   // Add http:// if not present
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     url = "http://" + url;
   }
-  
+
   http.begin(url);
   http.setTimeout(10000); // 10 second timeout
-  
+
   int httpCode = http.GET();
-  String response = http.getString();
-  
-  if (httpCode > 0) {
-    server.send(httpCode, "text/html", response);
-  } else {
+  if (httpCode <= 0) {
     server.send(500, "text/plain", "Error: " + String(httpCode));
+    http.end();
+    return;
   }
-  
+
+  // Refuse anything that declares itself too large before reading a byte of it.
+  int declaredSize = http.getSize();
+  if (declaredSize > (int)PROXY_MAX_RESPONSE_BYTES) {
+    server.send(502, "text/plain",
+                "Response too large to proxy (" + String(declaredSize) + " bytes, limit " +
+                String(PROXY_MAX_RESPONSE_BYTES) + ")");
+    http.end();
+    return;
+  }
+
+  // A chunked response declares no size, so read with a hard ceiling rather than
+  // trusting the header.
+  WiFiClient *stream = http.getStreamPtr();
+  String response;
+  response.reserve(declaredSize > 0 ? min(declaredSize, (int)PROXY_MAX_RESPONSE_BYTES) : 1024);
+  uint8_t buf[512];
+  size_t total = 0;
+  unsigned long lastData = millis();
+  while (http.connected() && total < PROXY_MAX_RESPONSE_BYTES) {
+    size_t avail = stream->available();
+    if (avail == 0) {
+      if (millis() - lastData > 10000) break;  // stalled
+      delay(1);
+      continue;
+    }
+    size_t want = min(avail, sizeof(buf));
+    if (total + want > PROXY_MAX_RESPONSE_BYTES) {
+      want = PROXY_MAX_RESPONSE_BYTES - total;
+    }
+    int got = stream->readBytes(buf, want);
+    if (got <= 0) break;
+    for (int i = 0; i < got; i++) {
+      response += (char)buf[i];
+    }
+    total += got;
+    lastData = millis();
+  }
+
+  if (total >= PROXY_MAX_RESPONSE_BYTES) {
+    addLog("[PROXY] Response truncated at " + String(PROXY_MAX_RESPONSE_BYTES) + " bytes: " + url);
+  }
+  server.send(httpCode, "text/html", response);
   http.end();
 }
 
@@ -5925,6 +6154,7 @@ void handleApiLoRaClear() {
 }
 
 void handleApiPasswordChange() {
+  bool restartAfterReply = false;
   String response = "{";
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
@@ -5940,12 +6170,9 @@ void handleApiPasswordChange() {
       // Save new password
       ap_password = newPassword;
       saveAPPassword(newPassword);
-      
-      // Restart AP with new password
-      restartAP();
-      
       response += "\"action\":\"password_change\",";
-      response += "\"message\":\"Password changed successfully. Access Point restarted with new password\"";
+      response += "\"message\":\"Password changed. The access point is restarting with the new password — rejoin it to continue.\"";
+      restartAfterReply = true;
     }
   } else {
     response += "\"success\":false,";
@@ -5954,6 +6181,13 @@ void handleApiPasswordChange() {
   
   response += "}";
   server.send(200, "application/json", response);
+
+  // v0.4.2 — restart AFTER replying. restartAP() calls softAPdisconnect(), which
+  // drops every client including the one waiting for this response, so the UI
+  // saw the request hang and could not tell success from failure.
+  if (restartAfterReply) {
+    restartAP();
+  }
 }
 
 void handleApiPasswordReset() {
@@ -5963,14 +6197,14 @@ void handleApiPasswordReset() {
   
   // Clear stored password and reset to default
   clearAPPassword();
-  
-  // Restart AP with default password
-  restartAP();
-  
+
   response += "\"action\":\"password_reset\",";
-  response += "\"message\":\"Password reset to default (radiodoge). Access Point restarted\"";
+  response += "\"message\":\"Password reset to the default. The access point is restarting — rejoin it to continue.\"";
   response += "}";
   server.send(200, "application/json", response);
+
+  // v0.4.2 — restart after replying; see handleApiPasswordChange.
+  restartAP();
 }
 
 void handleApiPasswordStatus() {
@@ -6027,11 +6261,11 @@ void handleApiGatewayStatus() {
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"gateway\":{";
-  response += "\"type\":\"" + gateway_type + "\",";
-  response += "\"ip\":\"" + gateway_ip + "\",";
-  response += "\"port\":\"" + gateway_port + "\",";
-  response += "\"endpoint\":\"" + gateway_endpoint + "\",";
-  response += "\"username\":\"" + gateway_username + "\",";
+  response += "\"type\":\"" + escapeJsonString(gateway_type) + "\",";
+  response += "\"ip\":\"" + escapeJsonString(gateway_ip) + "\",";
+  response += "\"port\":\"" + escapeJsonString(gateway_port) + "\",";
+  response += "\"endpoint\":\"" + escapeJsonString(gateway_endpoint) + "\",";
+  response += "\"username\":\"" + escapeJsonString(gateway_username) + "\",";
   response += "\"password\":\"";
   response += (gateway_password.length() > 0 ? "***" : "");
   response += "\"";
@@ -6171,7 +6405,7 @@ void handleApiGatewayDebug() {
     
     size_t endpoint_len = 64;
     char endpoint_buffer[64];
-    err = nvs_get_str(nvs_handle, "gateway_endpoint", endpoint_buffer, &endpoint_len);
+    err = nvs_get_str(nvs_handle, NVS_KEY_GATEWAY_ENDPOINT, endpoint_buffer, &endpoint_len);
     response += "\"gateway_endpoint_exists\":" + String(err == ESP_OK ? "true" : "false") + ",";
     response += "\"gateway_endpoint_error\":" + String(err) + ",";
     
@@ -6212,11 +6446,11 @@ void handleApiGatewayLoad() {
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"gateway\":{";
-  response += "\"type\":\"" + gateway_type + "\",";
-  response += "\"ip\":\"" + gateway_ip + "\",";
-  response += "\"port\":\"" + gateway_port + "\",";
-  response += "\"endpoint\":\"" + gateway_endpoint + "\",";
-  response += "\"username\":\"" + gateway_username + "\",";
+  response += "\"type\":\"" + escapeJsonString(gateway_type) + "\",";
+  response += "\"ip\":\"" + escapeJsonString(gateway_ip) + "\",";
+  response += "\"port\":\"" + escapeJsonString(gateway_port) + "\",";
+  response += "\"endpoint\":\"" + escapeJsonString(gateway_endpoint) + "\",";
+  response += "\"username\":\"" + escapeJsonString(gateway_username) + "\",";
   // SECURITY: the stored gateway RPC password is deliberately NOT returned.
   // This route is unauthenticated, so returning it disclosed the credential to
   // anyone on the board's AP. The password is write-only: the UI reports
@@ -6495,7 +6729,7 @@ void handleApiTransactionSend() {
       
       response += "\"action\":\"transaction_send\",";
       response += "\"message\":\"Transaction sent to stored gateway\",";
-      response += "\"gateway_type\":\"" + gateway_type + "\",";
+      response += "\"gateway_type\":\"" + escapeJsonString(gateway_type) + "\",";
       response += "\"gateway_url\":\"" + gatewayUrl + "\",";
       response += "\"server_response\":\"" + escapeJsonString(serverResponse) + "\"";
     }
@@ -6515,11 +6749,11 @@ void handleApiGatewayConfig() {
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"action\":\"gateway_config_get\",";
   response += "\"config\":{";
-  response += "\"type\":\"" + gateway_type + "\",";
-  response += "\"ip\":\"" + gateway_ip + "\",";
-  response += "\"port\":\"" + gateway_port + "\",";
-  response += "\"endpoint\":\"" + gateway_endpoint + "\",";
-  response += "\"username\":\"" + gateway_username + "\",";
+  response += "\"type\":\"" + escapeJsonString(gateway_type) + "\",";
+  response += "\"ip\":\"" + escapeJsonString(gateway_ip) + "\",";
+  response += "\"port\":\"" + escapeJsonString(gateway_port) + "\",";
+  response += "\"endpoint\":\"" + escapeJsonString(gateway_endpoint) + "\",";
+  response += "\"username\":\"" + escapeJsonString(gateway_username) + "\",";
   response += "\"password\":\"";
   if (gateway_password.length() > 0) {
     response += "***";
