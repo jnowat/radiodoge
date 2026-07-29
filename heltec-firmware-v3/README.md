@@ -4,8 +4,10 @@ A comprehensive firmware for the Heltec **WiFi LoRa 32 V3** (and V2) modules tha
 transactions over LoRa radio, with dual WiFi connectivity, persistent NVS configuration, Bluetooth LE, and a
 web-based management interface.
 
-> **Version:** this firmware reports `FIRMWARE_VERSION 10` — i.e. **v0.4.1**. On a `GET_FIRMWARE_VERSION` query
-> it answers with a string like `RadioDoge NV3FW10` (board version + zero-padded firmware number). The `v3.1` /
+> **Version:** this firmware reports `FIRMWARE_VERSION 11` — i.e. **v0.4.2**. On a `GET_FIRMWARE_VERSION` query
+> it answers with a string like `RadioDoge NV3FW11` (board version + zero-padded firmware number). The host
+> reads that number back: only from **FW11** onward will it split a transaction into multipart frames, because
+> only from FW11 does the board frame them correctly. The `v3.1` /
 > `v3.2` labels in the feature notes below are historical names for feature waves, not the firmware's version.
 >
 > **Two ways to talk to this board:** the **web/REST interface** documented here (over WiFi), and the
@@ -30,10 +32,28 @@ Please read before deploying:
   receives a broadcast and happens to have a configured gateway (or internet) forwards it; others simply
   rebroadcast. Rebroadcast is bounded by a hop count (`MAX_REBROADCAST_HOPS`, currently 3) carried in the
   multipart `reserved` byte, on top of a 2-minute broadcast-dedup table.
-- **Host→board multipart is fixed here but not yet hardware-validated.** Desktop commands are dispatched
-  before `ReadSerialPayload`, so header byte 1 is no longer read as a length for them, and the relay paths
-  preserve the flags byte. The host still caps host→board payloads at one 192-byte packet until this is
-  confirmed on a board. See [`docs/PROTOCOL.md`](../docs/PROTOCOL.md#host--board-single-packet-only).
+- **Host→board multipart works from v0.4.2** *(not yet hardware-validated)*. Desktop commands are dispatched
+  before `ReadSerialPayload`, so header byte 1 is no longer read as a length for them; each frame is then read
+  to the exact length it declares rather than by draining the serial buffer, and the relay paths preserve the
+  flags byte. The host lifts its 192-byte cap for any board reporting FW11 or newer. See
+  [`docs/PROTOCOL.md`](../docs/PROTOCOL.md#host--board-multipart).
+- **The runtime log no longer goes to the serial port (v0.4.2).** `addLog` used to end in
+  `Serial.println`, so every one of its hundred-odd call sites — several per received packet, fired while the
+  packet was being handled — wrote text down the wire the host reads binary packets from. Because the command
+  set overlaps printable ASCII, the host could mistake a log line for a packet header and consume the real
+  packet behind it. The log is unchanged in the web UI and at `GET /api/logs`; set `HOST_SERIAL_DEBUG` to 1 to
+  put it back on the wire when debugging with a serial monitor and no host software attached. Gateway
+  usernames and password lengths are redacted rather than relocated, since `/api/logs` has no authentication.
+- **Received multipart packets are validated before they index anything (v0.4.2).** `totalParts` was never
+  checked, so a packet claiming 255 parts wrote past the ends of the 20-element `partsReceived` and
+  `partSizes` arrays, and an over-long chunk could push the reassembled total past the 4000-byte assembly
+  buffer. Both are bounded now, and a session whose part count changes mid-sequence restarts instead of mixing
+  two payloads.
+- **Transmissions block until the radio finishes (v0.4.2).** `SendLoRaAndWait` pumps `Radio.IrqProcess()` until
+  `TxDone`. Before this, handlers returned straight after `Radio.Send` and marked the radio idle, so the main
+  loop switched it into receive mid-packet — desktop `DOGE_TX` sends and gateway `TX_ACK` relays were aborted a
+  few milliseconds in. It also gives multipart sends real pacing: the host acknowledgement is written only once
+  the part is on the air, so the host advances at the speed of the link.
 - **LoRa parameters are runtime-adjustable since v0.4.1** *(not yet hardware-validated)*. `SET_LORA_PARAMS`
   (`0x21`) used to be an ACK-only no-op; it now applies frequency, SF, bandwidth, coding rate, and TX power to
   the radio and persists them to NVS. Values are validated first (SF 7–12, BW 0–2, CR 1–4, 150–960 MHz,

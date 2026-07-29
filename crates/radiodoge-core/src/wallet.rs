@@ -195,11 +195,32 @@ pub(crate) const BLOCKBOOK_BASE: &str = "https://doge1.trezor.io/api/v2";
 /// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
 pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
 
+/// Blocks a coinbase output must age before it can be spent.
+///
+/// Dogecoin's maturity is 60 blocks (`COINBASE_MATURITY`); the extra margin
+/// costs nothing and covers a reorg near the boundary. Spending an immature
+/// coinbase produces a transaction every node rejects.
+const COINBASE_MATURITY_BLOCKS: u32 = 100;
+
 #[derive(serde::Deserialize)]
 struct UtxoEntry {
     txid: String,
     vout: u32,
     value: String, // koinus as string (avoids f64 precision loss for large values)
+
+    /// Confirmations, as reported by Blockbook. `0` for a mempool output.
+    ///
+    /// This used to be discarded, so coin selection happily spent unconfirmed
+    /// outputs: `/utxo/<address>` includes them by default. A transaction
+    /// spending an unconfirmed parent is only as good as that parent — if it is
+    /// dropped or replaced, this one becomes unspendable too, and over LoRa the
+    /// sender has no way to find out.
+    #[serde(default)]
+    confirmations: u32,
+
+    /// Set by Blockbook when the output is a coinbase (mining reward).
+    #[serde(default)]
+    coinbase: bool,
 }
 
 fn encode_varint(n: u64) -> Vec<u8> {
@@ -223,6 +244,19 @@ fn encode_varint(n: u64) -> Vec<u8> {
 fn sha256d(data: &[u8]) -> [u8; 32] {
     let first = Sha256::digest(data);
     Sha256::digest(first).into()
+}
+
+/// The txid of a raw serialized transaction, in the big-endian display form
+/// block explorers use.
+///
+/// A gateway needs this to acknowledge a transaction it did not get a txid back
+/// for — when the network answers "already in the mempool", the broadcast has in
+/// fact succeeded and the sender is still waiting to be told which txid it got.
+/// The txid is a property of the bytes, so it can always be computed locally.
+pub fn compute_txid(raw_tx: &[u8]) -> String {
+    let mut h = sha256d(raw_tx);
+    h.reverse(); // wire order is little-endian; explorers display big-endian
+    hex::encode(h)
 }
 
 /// P2PKH scriptPubKey for a Dogecoin address (25 bytes).
@@ -344,10 +378,25 @@ pub async fn build_signed_transaction(
     if raw_utxos.is_empty() {
         anyhow::bail!("No UTXOs found for {}. Balance may be zero.", from_address);
     }
+    let total_utxos = raw_utxos.len();
     let mut utxos: Vec<(String, u32, u64)> = raw_utxos
         .into_iter()
+        // Only spend coins that are actually spendable. An unconfirmed output
+        // may never confirm, and an immature coinbase is rejected outright — in
+        // both cases the transaction this builds is invalid, and a sender who
+        // handed it to a LoRa gateway would never learn why nothing happened.
+        .filter(|u| u.confirmations >= 1)
+        .filter(|u| !u.coinbase || u.confirmations >= COINBASE_MATURITY_BLOCKS)
         .filter_map(|u| u.value.parse::<u64>().ok().map(|v| (u.txid, u.vout, v)))
         .collect();
+    if utxos.is_empty() {
+        anyhow::bail!(
+            "No spendable UTXOs for {}: {} output(s) found, all unconfirmed or immature. \
+             Wait for a confirmation and try again.",
+            from_address,
+            total_utxos
+        );
+    }
     utxos.sort_by_key(|b| std::cmp::Reverse(b.2)); // largest first
 
     let mut selected: Vec<(String, u32)> = Vec::new();
@@ -361,9 +410,12 @@ pub async fn build_signed_transaction(
     }
     if selected_sum < total_needed {
         anyhow::bail!(
-            "Insufficient funds: need {:.8} DOGE, spendable {:.8} DOGE",
+            "Insufficient confirmed funds: need {:.8} DOGE, spendable {:.8} DOGE across {} \
+             confirmed output(s) of {} total. Unconfirmed and immature coins are not spent.",
             total_needed as f64 / 1e8,
-            selected_sum as f64 / 1e8
+            selected_sum as f64 / 1e8,
+            utxos.len(),
+            total_utxos
         );
     }
 
@@ -661,25 +713,38 @@ pub fn is_signed_tx_payload(payload: &[u8]) -> bool {
 
 // ─── Incoming transaction verification ────────────────────────────────────────
 
+/// Take `n` bytes from `buf` at `pos`, advancing `pos`.
+///
+/// Every length in a transaction is attacker-controlled — a varint can declare
+/// up to `u64::MAX` — so the end offset is computed with `checked_add`. Written
+/// as `pos + n` it overflows `usize`, which panics in a debug build and wraps in
+/// a release one. This decoder runs on every `CMD_DOGE_TX` packet the radio
+/// hears, from any node in range, so neither outcome is acceptable: the panic
+/// takes down the read loop, and relying on wrapping for memory safety is not a
+/// property worth depending on.
+fn take<'a>(buf: &'a [u8], pos: &mut usize, n: usize) -> Option<&'a [u8]> {
+    let end = pos.checked_add(n)?;
+    let out = buf.get(*pos..end)?;
+    *pos = end;
+    Some(out)
+}
+
 /// Parse a varint from `buf` at position `pos`, advancing `pos`.
 fn parse_varint_at(buf: &[u8], pos: &mut usize) -> Option<u64> {
     let first = *buf.get(*pos)?;
-    *pos += 1;
+    *pos = pos.checked_add(1)?;
     match first {
         0..=0xfc => Some(first as u64),
         0xfd => {
-            let bytes: [u8; 2] = buf.get(*pos..*pos + 2)?.try_into().ok()?;
-            *pos += 2;
+            let bytes: [u8; 2] = take(buf, pos, 2)?.try_into().ok()?;
             Some(u16::from_le_bytes(bytes) as u64)
         }
         0xfe => {
-            let bytes: [u8; 4] = buf.get(*pos..*pos + 4)?.try_into().ok()?;
-            *pos += 4;
+            let bytes: [u8; 4] = take(buf, pos, 4)?.try_into().ok()?;
             Some(u32::from_le_bytes(bytes) as u64)
         }
         _ => {
-            let bytes: [u8; 8] = buf.get(*pos..*pos + 8)?.try_into().ok()?;
-            *pos += 8;
+            let bytes: [u8; 8] = take(buf, pos, 8)?.try_into().ok()?;
             Some(u64::from_le_bytes(bytes))
         }
     }
@@ -748,18 +813,32 @@ fn p2pkh_address_from_script(script: &[u8]) -> Option<String> {
     }
 }
 
-/// Verify all input signatures in a raw Dogecoin P2PKH transaction (no network access).
-/// Returns `(sender_address, recipients)` where recipients is a list of `(koinus, address)`.
-/// All inputs are assumed to be P2PKH from the same address; the UTXO scriptPubKey is
-/// reconstructed from the pubkey in each input's scriptSig.
+/// Check that a raw P2PKH transaction's signatures are internally consistent.
+///
+/// Returns `(sender_address, recipients)` where recipients is a list of
+/// `(koinus, address)`.
+///
+/// # What this does not prove
+///
+/// **Nothing about whether the money exists.** The UTXO scriptPubKey each
+/// signature is checked against is *reconstructed from the public key inside
+/// that same input's scriptSig* — there is no network access here, so there is
+/// nothing else to check it against. Consequently:
+///
+/// - The inputs need not exist. Anyone can name a txid that was never mined.
+/// - The inputs need not be unspent, or belong to the signer's own coins.
+/// - The transaction need not be broadcast, valid, or accepted by any node.
+///
+/// A stranger can therefore build a transaction paying you any amount, sign it
+/// with a key they generated a second ago, and it will pass. Over LoRa that
+/// costs them one packet. Treat a pass as "this is a well-formed transaction
+/// someone signed", never as "I have been paid" — that requires
+/// [`crate::spv::fetch_tx_inclusion`], which asks the chain.
 pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     let mut pos = 0usize;
 
     // Version (4 bytes)
-    if raw_tx.len() < 4 {
-        anyhow::bail!("transaction too short");
-    }
-    pos += 4;
+    take(raw_tx, &mut pos, 4).ok_or_else(|| anyhow::anyhow!("transaction too short"))?;
 
     // Inputs
     let input_count = parse_varint_at(raw_tx, &mut pos)
@@ -769,24 +848,23 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     }
     let mut inputs: Vec<([u8; 32], u32, Vec<u8>)> = Vec::with_capacity(input_count);
     for _ in 0..input_count {
-        let txid: [u8; 32] = raw_tx
-            .get(pos..pos + 32)
+        let txid: [u8; 32] = take(raw_tx, &mut pos, 32)
             .and_then(|s| s.try_into().ok())
             .ok_or_else(|| anyhow::anyhow!("truncated txid"))?;
-        pos += 32;
         let vout = u32::from_le_bytes(
-            raw_tx.get(pos..pos + 4)
+            take(raw_tx, &mut pos, 4)
                 .and_then(|s| s.try_into().ok())
                 .ok_or_else(|| anyhow::anyhow!("truncated vout"))?,
         );
-        pos += 4;
         let ss_len = parse_varint_at(raw_tx, &mut pos)
-            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptSig length"))? as usize;
-        let ss = raw_tx.get(pos..pos + ss_len)
+            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptSig length"))?;
+        let ss_len = usize::try_from(ss_len)
+            .map_err(|_| anyhow::anyhow!("scriptSig length out of range"))?;
+        let ss = take(raw_tx, &mut pos, ss_len)
             .ok_or_else(|| anyhow::anyhow!("truncated scriptSig"))?
             .to_vec();
-        pos += ss_len;
-        pos += 4; // sequence
+        // sequence
+        take(raw_tx, &mut pos, 4).ok_or_else(|| anyhow::anyhow!("truncated sequence"))?;
         inputs.push((txid, vout, ss));
     }
 
@@ -799,17 +877,17 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     let mut outputs: Vec<(u64, Vec<u8>)> = Vec::with_capacity(output_count);
     for _ in 0..output_count {
         let value = u64::from_le_bytes(
-            raw_tx.get(pos..pos + 8)
+            take(raw_tx, &mut pos, 8)
                 .and_then(|s| s.try_into().ok())
                 .ok_or_else(|| anyhow::anyhow!("truncated output value"))?,
         );
-        pos += 8;
         let spk_len = parse_varint_at(raw_tx, &mut pos)
-            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptPubKey length"))? as usize;
-        let spk = raw_tx.get(pos..pos + spk_len)
+            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptPubKey length"))?;
+        let spk_len = usize::try_from(spk_len)
+            .map_err(|_| anyhow::anyhow!("scriptPubKey length out of range"))?;
+        let spk = take(raw_tx, &mut pos, spk_len)
             .ok_or_else(|| anyhow::anyhow!("truncated scriptPubKey"))?
             .to_vec();
-        pos += spk_len;
         outputs.push((value, spk));
     }
 
@@ -857,17 +935,33 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
 pub fn describe_signed_tx(raw_tx: &[u8]) -> String {
     match verify_signed_tx(raw_tx) {
         Ok((sender, recipients)) => {
+            // Deliberately not a green checkmark.
+            //
+            // What passed is a signature check against a scriptPubKey derived
+            // from the transaction's own public key — see verify_signed_tx. It
+            // says nothing about whether the inputs exist or are unspent, and
+            // anyone within radio range can produce a transaction that passes it
+            // for any amount to any address. Labelling that "✅ verified" turned
+            // one cheap LoRa packet into a convincing payment notification, which
+            // is worth real money to whoever sends it.
             if recipients.is_empty() {
-                format!("✅ DOGE TX (verified) — {} → self/change only", sender)
+                format!(
+                    "📩 DOGE TX (signature valid, NOT confirmed on-chain) — {} → self/change only",
+                    sender
+                )
             } else {
                 let parts: Vec<String> = recipients
                     .iter()
                     .map(|(v, addr)| format!("{:.8} DOGE → {}", *v as f64 / 1e8, addr))
                     .collect();
-                format!("✅ DOGE TX: {} [from {}]", parts.join(", "), sender)
+                format!(
+                    "📩 DOGE TX (signature valid, NOT confirmed on-chain — verify the txid before treating this as payment): {} [claims to be from {}]",
+                    parts.join(", "),
+                    sender
+                )
             }
         }
-        Err(_) => format!("⚠️ DOGE TX (unverified) — {} bytes", raw_tx.len()),
+        Err(_) => format!("⚠️ DOGE TX (unparseable) — {} bytes", raw_tx.len()),
     }
 }
 
@@ -991,6 +1085,95 @@ mod tests {
         assert!(bad.is_err(), "wrong passphrase should fail");
     }
 
+    /// A malformed transaction must be an error, never a panic.
+    ///
+    /// `verify_signed_tx` runs on every `CMD_DOGE_TX` payload the radio hears —
+    /// from any node in range, with no authentication anywhere on the link. The
+    /// lengths inside a transaction are varints that can declare up to
+    /// `u64::MAX`, and adding one to the read offset overflowed `usize`: a panic
+    /// in a debug build (which takes the serial read loop down with it) and a
+    /// wrap in a release one. Neither is a property to rely on.
+    #[test]
+    fn test_verify_signed_tx_rejects_malformed_input_without_panicking() {
+        // A varint declaring a scriptSig of 2^64-1 bytes, immediately after a
+        // well-formed version and input count.
+        let mut huge_varint = vec![0x01, 0x00, 0x00, 0x00]; // version
+        huge_varint.push(0x01); // 1 input
+        huge_varint.extend_from_slice(&[0xAB; 32]); // txid
+        huge_varint.extend_from_slice(&[0x00; 4]); // vout
+        huge_varint.push(0xFF); // varint: next 8 bytes are the length
+        huge_varint.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(verify_signed_tx(&huge_varint).is_err());
+
+        // The same shape in the outputs.
+        let mut huge_output = vec![0x01, 0x00, 0x00, 0x00];
+        huge_output.push(0x00); // 0 inputs — rejected before the outputs, but the
+        assert!(verify_signed_tx(&huge_output).is_err());
+
+        // Truncation at every possible offset of a real transaction, plus a few
+        // hostile shapes. None may panic.
+        let mut real = vec![0x01, 0x00, 0x00, 0x00];
+        real.push(0x01);
+        real.extend_from_slice(&[0xCD; 32]);
+        real.extend_from_slice(&[0x00; 4]);
+        real.push(0x06);
+        real.extend_from_slice(&[0x51; 6]);
+        real.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        real.push(0x01);
+        real.extend_from_slice(&100_000u64.to_le_bytes());
+        real.push(0x19);
+        real.extend_from_slice(&[0x76; 25]);
+        real.extend_from_slice(&0u32.to_le_bytes());
+        for n in 0..real.len() {
+            // Signature verification will fail; the point is that it *returns*.
+            let _ = verify_signed_tx(&real[..n]);
+        }
+
+        for hostile in [
+            vec![],
+            vec![0xFF; 8],
+            vec![0xFF; 64],
+            vec![0x01, 0x00, 0x00, 0x00, 0xFF],
+            vec![0x01, 0x00, 0x00, 0x00, 0xFD, 0xFF, 0xFF],
+        ] {
+            let _ = verify_signed_tx(&hostile);
+        }
+
+        // describe_signed_tx is the display path and must survive the same input.
+        assert!(describe_signed_tx(&huge_varint).contains("unparseable"));
+    }
+
+    /// The gateway acknowledges a transaction with a txid it computes itself,
+    /// so that value has to be the real one — a wrong txid is worse than none,
+    /// because the sender would look up a transaction that does not exist.
+    ///
+    /// Checked against the Bitcoin genesis coinbase, the most widely published
+    /// (raw transaction, txid) pair there is. Dogecoin uses the identical
+    /// double-SHA256-and-reverse construction.
+    #[test]
+    fn test_compute_txid_known_vector() {
+        let raw = hex::decode(concat!(
+            "01000000010000000000000000000000000000000000000000000000000000",
+            "000000000000ffffffff4d04ffff001d0104455468652054696d6573203033",
+            "2f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f",
+            "66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff01",
+            "00f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828",
+            "e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384d",
+            "f7ba0b8d578a4c702b6bf11d5fac00000000",
+        ))
+        .expect("valid hex");
+        assert_eq!(
+            compute_txid(&raw),
+            "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+        );
+
+        // Any change to the bytes changes the txid — no accidental collisions
+        // between a transaction and a retransmission of a different one.
+        let mut altered = raw.clone();
+        *altered.last_mut().unwrap() ^= 0x01;
+        assert_ne!(compute_txid(&altered), compute_txid(&raw));
+    }
+
     #[test]
     fn test_tx_verification_on_manually_built_tx() {
         // Build a self-contained signed transaction and verify it.
@@ -1051,7 +1234,19 @@ mod tests {
 
         // describe_signed_tx should return a verified description
         let desc = describe_signed_tx(&tx);
-        assert!(desc.starts_with("✅"), "should start with verified checkmark");
         assert!(desc.contains("1.00000000"), "should contain the amount");
+        // A signature check is not proof of payment: anyone in radio range can
+        // sign a transaction spending inputs that do not exist. The description
+        // must not imply otherwise.
+        assert!(
+            !desc.contains('✅'),
+            "a signature check must not be presented as a confirmed payment: {}",
+            desc
+        );
+        assert!(
+            desc.contains("NOT confirmed on-chain"),
+            "the description must say what was not checked: {}",
+            desc
+        );
     }
 }

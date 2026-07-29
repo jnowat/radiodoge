@@ -52,9 +52,8 @@ Offset  Field
   8+    Payload             (0 … MAX_SINGLE_PAYLOAD_LEN bytes)
 ```
 
-- `MAX_SINGLE_PAYLOAD_LEN = 192`. Longer payloads split into multipart frames (§3) — but see
-  [Host → board is single-packet only](#host--board-single-packet-only): the host still caps host→board
-  payloads at one packet pending hardware validation of the firmware fix.
+- `MAX_SINGLE_PAYLOAD_LEN = 192`. Longer payloads split into multipart frames (§3), which host→board requires
+  [firmware v0.4.2 or newer](#host--board-multipart); against older boards the host caps payloads at one packet.
 - `SINGLE_HDR_LEN = 8`.
 - **Mesh hop count (v0.4.0):** the flags byte's upper nibble carries a 0–15 hop count. Freshly built packets have
   0 hops (upper nibble clear), so this is fully backward compatible. A relay increments it and drops the packet
@@ -66,8 +65,8 @@ Offset  Field
 
 ## 3. Multipart framing
 
-When a payload exceeds 192 bytes, the app emits a sequence of frames, each with a **12-byte header**
-(the standard 8-byte header with `Flags = 0x01`, plus four multipart bytes):
+When a payload exceeds 192 bytes, the app emits a sequence of frames, each with a **13-byte header**
+(the standard 8-byte header with `Flags = 0x01`, plus five multipart bytes):
 
 ```
 Offset  Field
@@ -76,12 +75,21 @@ Offset  Field
   9     Part index (0-based)
  10     Session ID, high byte   (random u16, identical across all parts)
  11     Session ID, low byte
- 12+    Payload chunk
+ 12     Chunk length            (payload bytes in this part, 0 … 187)
+ 13+    Payload chunk
 ```
 
-- `MULTIPART_HDR_LEN = 12`; chunk size = `192 − (12 − 8) = 188` bytes per part.
-- `MAX_MULTIPART_PARTS = 20` → a hard ceiling of 3,760 bytes. A payload larger than that cannot be encoded;
+- `MULTIPART_HDR_LEN = 13`; chunk size = `192 − (13 − 8) = 187` bytes per part.
+- `MAX_MULTIPART_PARTS = 20` → a hard ceiling of 3,740 bytes. A payload larger than that cannot be encoded;
   `try_build_multipart_packets` returns an error rather than truncating it.
+
+> **The chunk-length byte (v0.4.2).** Serial is a byte stream with no packet boundaries, in both directions.
+> Without a declared length a framer had to assume every chunk was full, so a short final part consumed 187
+> bytes and swallowed whatever packet was queued behind it — at a gateway, a `TX_ACK` eaten by the transaction
+> it acknowledges. With the length in the header every multipart frame is self-delimiting and framing is exact
+> on the host, in the firmware, and over BLE. A frame whose declared length exceeds 187, or exceeds the bytes
+> actually present, is rejected rather than shortened: reassembling a transaction from bytes the sender never
+> wrote is worse than dropping the frame.
 
 > The **firmware's** over-the-air multipart layout differs (it carries its own 12-byte header with `partNumber`,
 > `totalParts`, and a `dataType` field, chunked at 200 bytes, up to 20 parts = 4000 bytes, spaced 500 ms for
@@ -89,44 +97,52 @@ Offset  Field
 > use the layout above.
 
 <a id="host--board-single-packet-only"></a>
+<a id="host--board-multipart"></a>
 
-### ⚠️ Host → board is single-packet only
+### Host → board multipart, and the firmware version gate
 
-**The host still enforces a single-packet limit, by choice.** The underlying defect is fixed in firmware
-v0.4.1, but the host-side guard stays until that path is validated on hardware.
+**Since firmware v0.4.2 (`FIRMWARE_VERSION 11`) a host may hand the board a multipart sequence**, so a signed
+transaction of any realistic size can go over LoRa. Against older firmware the host still refuses anything
+over 192 bytes.
 
-The defect: the firmware read the host header as `[command, payload_size]` (§7) — byte 1 is a *length* to it,
-while the host writes its *flags* byte there. The whole desktop protocol worked only because flags are normally
-`0x00`, which reads as `payload_size = 0`. A multipart frame sets `FLAG_MULTIPART` (`0x01`), so the board
-consumed one payload byte, swallowing the first source-address byte, and misframed everything after it.
+Three things had to be true at once, and none of them were:
 
-Firmware v0.4.1 dispatches desktop commands *before* `ReadSerialPayload`, so byte 1 is never treated as a
-length for them, and the `0x10`/`0x11` relay paths preserve the flags byte rather than hardcoding `0x00`. A
-multipart frame now reaches the air intact; the board forwards each part verbatim and the receiving gateway's
-host reassembles it, so the firmware needs no reassembly buffer of its own.
+1. **The board framed host commands by draining the serial buffer.** It slept 500 ms and then read every
+   buffered byte as one frame's payload. Frames sent back to back — which is what a multipart sequence *is* —
+   arrived glued together, and any command queued behind another was consumed and lost. The board now reads
+   the exact number of bytes each frame declares: five multipart header bytes ending in a chunk length, then
+   that many payload bytes.
+2. **Multipart frames had no in-band length.** Even framed one at a time, a receiver reading a byte stream
+   could not tell where a short final part ended. §3's chunk-length byte fixes this in every direction.
+3. **The board aborted its own transmissions.** `Radio.Send` only *starts* a transmission; the desktop command
+   handlers marked the radio idle immediately afterwards, so the next iteration of the main loop switched it
+   to receive a couple of milliseconds into a packet needing hundreds — the transaction never left the board.
+   Transmissions now go through `SendLoRaAndWait`, which blocks until `TxDone`.
 
-What the code does about it today:
+How a send works today:
 
-- **Host→board payloads must still fit in one 192-byte packet.** `radio::check_host_payload_fits` enforces
-  this, and every send path (GUI, CLI, Android bridge) calls it. Oversized sends fail with an explanatory
-  error. This guard is intentionally kept even though the firmware fix has landed: lifting it before the path
-  is validated on real hardware would re-expose the original failure — silently transmitting a transaction no
-  receiver can reconstruct.
-- **A signed P2PKH transaction is 192 bytes at its smallest** (1 input, 1 output, no change) — exactly the
-  limit. Add a change output (`+34`) or a second input (`+148`) and it no longer fits, so **most real
-  transactions still cannot be relayed over LoRa**. Broadcast them over the internet instead
-  (`radiodoge-cli broadcast`, or the Wallet tab).
-- **To lift the limit:** flash firmware v0.4.1 (`FIRMWARE_VERSION 10`), verify a >192-byte transaction survives
-  host → board → air → gateway → daemon byte-for-byte, then relax `check_host_payload_fits` to
-  `MAX_MULTIPART_PAYLOAD_LEN` and restore the multipart branches in the send paths — gated on the board's
-  reported firmware version, so older boards keep the single-packet limit.
+- The host asks the board for its firmware version and calls `radio::build_tx_frames`, which chooses single or
+  multipart framing and **refuses** a payload the board cannot reassemble. A board reporting a build older
+  than `MIN_MULTIPART_FIRMWARE` (11), or reporting nothing at all, is held to one 192-byte packet.
+- Frames are written **one at a time**, each waiting for the board's `0x10` reply before the next
+  (`SerialManager::send_frames`, up to two retransmissions per frame). Because the board answers only after
+  the transmission completes, that reply is both the delivery check and the flow control — the host paces
+  itself to real airtime instead of a guessed delay. The board's serial buffer holds far less than a whole
+  sequence, so an unpaced burst is dropped with no error anywhere.
+- A frame that is never acknowledged fails the send with an explanatory error. Nothing further is written, so
+  a failure leaves no partial transaction on the air.
+- The Android bridge has no acknowledgement plumbed through to JS and uses a fixed
+  `MULTIPART_FRAME_GAP_MS` (900 ms) between frames instead.
 
-This is the **host → board** direction only. Every other direction reassembles correctly:
-`radio::MultipartReassembler` stitches sequences back together keyed by `(source, session id)`, and both
-framing loops route packets through `radio::ingest_packet`, so a multipart payload arriving **over the air**
-at a gateway is delivered to the daemon as one complete packet.
+Every other direction already reassembled correctly and still does: `radio::MultipartReassembler` stitches
+sequences back together keyed by `(source, session id)`, and both framing loops route packets through
+`radio::ingest_packet`, so a multipart payload arriving over the air at a gateway is delivered to the daemon
+as one complete packet.
 
-Tracked in the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress).
+> **Retransmission is per frame, not end to end.** If a frame is lost *in the air* rather than on the serial
+> link, the gateway's reassembler simply times out after 30 s and the transaction is not broadcast — the
+> sender sees no `TX_ACK`. There is no over-the-air acknowledgement of individual parts. Tracked in the
+> [Roadmap](../ROADMAP.md#-known-limitations--in-progress).
 
 ### Reassembly semantics
 
@@ -199,7 +215,17 @@ which prevents packet-boundary drift when several replies arrive in one read:
 | `GET_MAC` | 14 | 6 bytes — MAC address |
 
 All other commands (`MESSAGE`, `BROADCAST`, `MULTIPART`, `DOGE_TX`, `REQUEST_BALANCE`,
-`GET_FIRMWARE_VERSION`) are variable-length; the firmware-version reply is null-terminated.
+`GET_FIRMWARE_VERSION`) are variable-length; the firmware-version reply is null-terminated. Multipart frames
+are sized by their declared chunk length (§3) regardless of which command they carry.
+
+**Legacy replies that are shorter than a desktop header.** The board also serves its older serial protocol on
+the same port (§7), and two of its replies reach a host that never asked for them. They are framed at their
+real lengths so the stream stays aligned; neither yields a packet.
+
+| Bytes | Meaning |
+|-------|---------|
+| `[0xFE, 1, 0x06\|0x15]` | Legacy ACK / NACK result code — **3 bytes**. A gateway board emits one every time it relays a host `MESSAGE`, which is exactly what a `TX_ACK` is, so this appears in a daemon's stream routinely. Framed as an 8-byte packet it swallowed five bytes of whatever came next. |
+| `[0x3F, 3, 'h', board, firmware]` | Legacy hardware info — **5 bytes**. Only sent in reply to the legacy `0x3F` command, which the app never issues. |
 
 ---
 
@@ -236,9 +262,17 @@ writing your own host tooling:
 1. A **legacy** 2-byte host header `[command, payloadSize]` with its own command enum (e.g. `0x03` = ping
    request, `0x04` = message request in the legacy enum), plus commands like `0x68` (host-formed packet) and
    `0x6D` (multipart part).
-2. The **desktop** 8-byte packet header used by this app. The firmware recognises these because the app sends
-   `Flags = 0x00` in byte 1 — which the legacy parser reads as `payloadSize = 0` — then routes the desktop
-   command bytes (`0x10`, `0x11`, `0x20`–`0x23`) to a dedicated handler.
+2. The **desktop** 8-byte packet header used by this app. The firmware reads the first two bytes, then — for
+   any byte in the desktop command set (`0x10`, `0x11`, `0x20`–`0x24`, `0x26`–`0x28`) — dispatches on the
+   command *before* byte 1 can be mistaken for a length, because to the desktop protocol byte 1 is the flags
+   byte. It then reads the rest of the frame to an exact length wherever the protocol defines one: a fixed-size
+   command by its known total, a multipart frame by its declared chunk length, and only the genuinely
+   unbounded cases (single-packet `0x10` / `0x11`, a relayed `0x03`) by waiting for a 30 ms gap in the byte
+   stream.
+
+> Until v0.4.2 the second path slept 500 ms and swallowed every buffered byte, which is why two commands sent
+> close together lost the second and a multipart sequence could not be sent at all. Host tooling no longer
+> needs to space its commands out to be heard.
 
 Because of this overlap, the numeric meaning of a byte can differ between the *app command set* (this document)
 and the *firmware's legacy enum*. When writing host software, follow the app command set above — it's what the

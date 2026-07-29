@@ -13,7 +13,7 @@
 //!   ever accessed from async contexts.
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -67,6 +67,32 @@ const READ_TIMEOUT_MS: u64 = 50;
 /// Maximum bytes per read call
 const READ_BUFFER_SIZE: usize = 1024;
 
+/// Milliseconds since the Unix epoch.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// How long a firmware-version reply is believed after the host asks for one.
+const FIRMWARE_REPLY_WINDOW_MS: u64 = 3_000;
+
+/// How long to wait for the board to acknowledge one host→board frame.
+///
+/// Firmware v0.4.2 answers only once the LoRa transmission has finished, and a
+/// full 200-byte packet at SF12 is several seconds of airtime, so this is sized
+/// for the slowest spreading factor the board can be retuned to rather than for
+/// the SF7 default.
+pub const FRAME_ACK_TIMEOUT_MS: u64 = 8_000;
+
+/// How many times one unacknowledged frame is retransmitted before giving up.
+///
+/// Retransmitting a multipart part is safe: the receiving reassembler is keyed
+/// by `(source, session id)` and ignores a part it already holds, so a duplicate
+/// costs airtime and nothing else.
+pub const FRAME_SEND_RETRIES: u32 = 2;
+
 /// Shared application-level state for one serial connection.
 ///
 /// Clone the `Arc<SerialManager>` to share across tasks; the inner data is
@@ -99,6 +125,24 @@ pub struct SerialManager {
     /// Firmware version string, populated after CMD_GET_FIRMWARE_VERSION response.
     firmware_version: Arc<TokioMutex<Option<String>>>,
 
+    /// Unix-epoch milliseconds until which a `CMD_GET_FIRMWARE_VERSION` reply
+    /// will be believed; `0` means none is expected.
+    ///
+    /// The board forwards any over-the-air packet addressed to the broadcast
+    /// address straight to its serial host, so a node in radio range can put a
+    /// `0x20` packet on the air carrying whatever version string it likes. The
+    /// host reads that as its *own* board's firmware version — and that version
+    /// decides whether a payload larger than one packet may be sent
+    /// ([`crate::radio::check_host_payload_fits`]). A spoofed `FW11` against an
+    /// older board means transmitting a transaction the board mis-frames and no
+    /// gateway can reassemble.
+    ///
+    /// So a version is only accepted inside the window opened by actually asking
+    /// for one. It is not authentication — nothing on this link is authenticated
+    /// — but it means an attacker has to win a race against a query the host
+    /// chose to send, rather than simply broadcasting whenever they like.
+    firmware_query_until_ms: Arc<AtomicU64>,
+
     /// v0.3.6 — Board settings, populated after CMD_GET_SETTINGS (0x22) response.
     /// Board is source of truth — app queries on connect and syncs UI.
     board_settings: Arc<TokioMutex<Option<BoardSettings>>>,
@@ -127,6 +171,7 @@ impl SerialManager {
             stats: Arc::new(TokioMutex::new(RadioStats::default())),
             node_address: Arc::new(TokioMutex::new(NodeAddress::default_local())),
             firmware_version: Arc::new(TokioMutex::new(None)),
+            firmware_query_until_ms: Arc::new(AtomicU64::new(0)),
             board_settings: Arc::new(TokioMutex::new(None)),
             neighbors: Arc::new(TokioMutex::new(Vec::new())),
             addr_conflict: Arc::new(AtomicBool::new(false)),
@@ -273,6 +318,7 @@ impl SerialManager {
         let stats_clone = Arc::clone(&self.stats);
         let node_address_clone = Arc::clone(&self.node_address);
         let firmware_version_clone = Arc::clone(&self.firmware_version);
+        let firmware_query_until_clone = Arc::clone(&self.firmware_query_until_ms);
         let board_settings_clone = Arc::clone(&self.board_settings);
         let neighbors_clone = Arc::clone(&self.neighbors);
         let addr_conflict_clone = Arc::clone(&self.addr_conflict);
@@ -406,8 +452,11 @@ impl SerialManager {
                                     *node_address_clone.lock().await = packet.source.clone();
                                 }
 
-                                // Parse firmware version from CMD_GET_FIRMWARE_VERSION responses
-                                if packet.command == radio::CMD_GET_FIRMWARE_VERSION {
+                                // Parse firmware version from CMD_GET_FIRMWARE_VERSION responses.
+                                // Only while one was asked for — see firmware_query_until_ms.
+                                if packet.command == radio::CMD_GET_FIRMWARE_VERSION
+                                    && now_millis() < firmware_query_until_clone.load(Ordering::Relaxed)
+                                {
                                     if let Ok(bytes) = hex::decode(&packet.payload_hex) {
                                         if let Ok(ver) = String::from_utf8(bytes) {
                                             let ver = ver.trim_matches('\0').trim().to_string();
@@ -581,6 +630,166 @@ impl SerialManager {
         Ok(())
     }
 
+    /// Write one host→board frame and wait for the board to acknowledge it.
+    ///
+    /// The board answers `CMD_DOGE_TX` / `CMD_REQUEST_BALANCE` with an 8-byte
+    /// reply carrying the same command byte, and (since firmware v0.4.2) only
+    /// after the LoRa transmission has actually completed. Waiting for it is
+    /// therefore both the delivery check and the flow control: the board's UART
+    /// receive buffer is a few hundred bytes, so a host that writes the next
+    /// frame while the radio is still busy overruns it and loses bytes with no
+    /// error anywhere.
+    ///
+    /// Returns `Ok(true)` when the acknowledgement arrived, `Ok(false)` on
+    /// timeout. Only a write failure is an `Err`.
+    async fn send_frame_awaiting_ack(&self, frame: Vec<u8>, timeout_ms: u64) -> Result<bool> {
+        let expect = frame[0];
+        // Subscribe before writing: the board can answer faster than this task
+        // is rescheduled, and a receiver only sees packets sent after it exists.
+        let mut rx = self.packet_tx.subscribe();
+        self.send_raw(frame).await?;
+
+        let deadline = Duration::from_millis(timeout_ms);
+        Ok(tokio::time::timeout(deadline, async move {
+            loop {
+                match rx.recv().await {
+                    // The acknowledgement is a bare header with no payload. A
+                    // 0x10 *with* a payload is somebody else's transaction that
+                    // the board happened to forward while we were waiting, and
+                    // counting it would advance the sequence early.
+                    Ok(pkt) if pkt.command == expect && pkt.payload_hex.is_empty() => return true,
+                    Ok(_) => continue,
+                    // `Lagged` means this receiver missed packets, not that the
+                    // board is silent — keep waiting rather than declaring failure.
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false))
+    }
+
+    /// Send `packet` and wait for the board to answer with `expect_cmd`.
+    ///
+    /// Returns `Ok(false)` if no such reply arrives within `timeout_ms`. Use this
+    /// where the board's reply is the only signal that a command was *accepted*
+    /// rather than merely received — `SET_LORA_PARAMS`, for instance, answers
+    /// with a `0x21` packet when it applies the values and a legacy NACK when it
+    /// rejects them as out of range. Without waiting, a rejected retune is
+    /// indistinguishable from a successful one.
+    pub async fn send_and_await_reply(
+        &self,
+        packet: Vec<u8>,
+        expect_cmd: u8,
+        timeout_ms: u64,
+    ) -> Result<bool> {
+        let mut rx = self.packet_tx.subscribe();
+        self.send_raw(packet).await?;
+        Ok(tokio::time::timeout(Duration::from_millis(timeout_ms), async move {
+            loop {
+                match rx.recv().await {
+                    Ok(pkt) if pkt.command == expect_cmd => return true,
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false))
+    }
+
+    /// Write a complete host→board send — one frame, or a multipart sequence.
+    ///
+    /// Frames go out strictly one at a time, each waiting for the board's
+    /// acknowledgement before the next is written, with a bounded number of
+    /// retransmissions. This is what makes a multipart transaction survive the
+    /// link: the frames are independent LoRa transmissions, and writing them
+    /// back to back overruns the board's serial buffer long before the radio has
+    /// sent the first one.
+    ///
+    /// A single frame is sent the way it always has been — the acknowledgement
+    /// is still awaited, but a board that does not answer only produces a log
+    /// line, because that path is known to work on firmware that predates the
+    /// acknowledgement contract. For a multipart sequence a missing
+    /// acknowledgement is fatal: continuing would transmit parts the receiver
+    /// cannot reassemble, and reporting success for a transaction that never
+    /// left is the one outcome worth failing loudly for.
+    pub async fn send_frames(&self, frames: Vec<Vec<u8>>) -> Result<()> {
+        self.send_frames_with_progress(frames, |_, _| {}).await
+    }
+
+    /// [`send_frames`](Self::send_frames), reporting progress as it goes.
+    ///
+    /// `on_progress(sent, total)` is called after each frame is acknowledged.
+    /// A multipart send is genuinely slow — every frame is a separate LoRa
+    /// transmission, so a large transaction at a high spreading factor can take
+    /// a minute — and a caller that returns nothing for that long is
+    /// indistinguishable from one that has hung. The callback runs on this task,
+    /// so it must not block.
+    pub async fn send_frames_with_progress<F>(
+        &self,
+        frames: Vec<Vec<u8>>,
+        on_progress: F,
+    ) -> Result<()>
+    where
+        F: Fn(usize, usize) + Send,
+    {
+        if frames.is_empty() {
+            anyhow::bail!("nothing to send: no frames were built");
+        }
+        let total = frames.len();
+        let require_ack = total > 1;
+
+        // Retransmission only earns its keep for a multipart sequence, where the
+        // acknowledgement is flow control and a missing one means the rest of
+        // the transaction must not be written. For a lone frame the wait is a
+        // courtesy confirmation, and retrying it against a board that simply
+        // does not answer would stall the send for half a minute.
+        let attempts = if require_ack { FRAME_SEND_RETRIES + 1 } else { 1 };
+
+        for (idx, frame) in frames.into_iter().enumerate() {
+            let mut acked = false;
+            for attempt in 0..attempts {
+                if attempt > 0 {
+                    log::warn!(
+                        "Frame {}/{} not acknowledged — retransmitting (attempt {})",
+                        idx + 1,
+                        total,
+                        attempt + 1
+                    );
+                }
+                if self
+                    .send_frame_awaiting_ack(frame.clone(), FRAME_ACK_TIMEOUT_MS)
+                    .await?
+                {
+                    acked = true;
+                    break;
+                }
+            }
+
+            if !acked {
+                if require_ack {
+                    anyhow::bail!(
+                        "The board stopped acknowledging at part {} of {}. Nothing further was \
+                         sent, so no partial transaction is on the air. Check the USB cable and \
+                         that the board is running firmware v0.4.2 or newer, then try again.",
+                        idx + 1,
+                        total
+                    );
+                }
+                log::warn!(
+                    "Board did not acknowledge the packet within {} ms — it may be running \
+                     firmware that predates host acknowledgements",
+                    FRAME_ACK_TIMEOUT_MS
+                );
+            }
+            on_progress(idx + 1, total);
+        }
+        Ok(())
+    }
+
     /// Send a PING and return `true` if the device responds within 1500 ms.
     ///
     /// v0.3.7 — timeout raised from 500 ms to 1500 ms.  The firmware ACKs the
@@ -636,6 +845,51 @@ impl SerialManager {
     /// The firmware version string reported by the connected device, if available.
     pub async fn get_firmware_version(&self) -> Option<String> {
         self.firmware_version.lock().await.clone()
+    }
+
+    /// Return the board's firmware version, querying for it if it is not cached.
+    ///
+    /// The version decides how much payload the board can be handed
+    /// ([`crate::radio::check_host_payload_fits`]), so any send path has to know
+    /// it before it can choose a framing. `connect` does not ask for it — only
+    /// the node address — so a headless caller that connects and immediately
+    /// sends would otherwise see `None` and be held to the single-packet limit
+    /// even against firmware that can do better.
+    ///
+    /// Returns `None` if the board never answers, which callers must treat as
+    /// "assume the oldest firmware".
+    pub async fn ensure_firmware_version(&self) -> Option<String> {
+        if let Some(v) = self.get_firmware_version().await {
+            return Some(v);
+        }
+        if !self.is_connected() {
+            return None;
+        }
+        for _ in 0..3 {
+            if self.request_firmware_version().await.is_err() {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            if let Some(v) = self.get_firmware_version().await {
+                return Some(v);
+            }
+        }
+        log::warn!("Board did not report a firmware version — assuming single-packet only");
+        None
+    }
+
+    /// Ask the board for its firmware version, opening the window in which a
+    /// reply will be believed.
+    ///
+    /// Every caller that wants the version must go through this rather than
+    /// writing the query itself: a reply arriving outside the window is ignored,
+    /// because the board forwards over-the-air packets to its host and one of
+    /// them can claim to be a version reply. See `firmware_query_until_ms`.
+    pub async fn request_firmware_version(&self) -> Result<()> {
+        let local = self.node_address.lock().await.clone();
+        self.firmware_query_until_ms
+            .store(now_millis() + FIRMWARE_REPLY_WINDOW_MS, Ordering::Relaxed);
+        self.send_raw(radio::build_get_firmware_version(&local)).await
     }
 
     /// v0.3.6 — Board settings (node address + gateway_mode) as last reported by the device.

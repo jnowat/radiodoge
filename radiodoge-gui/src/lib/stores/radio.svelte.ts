@@ -12,7 +12,20 @@ import type { IncomingPacket, LoraSettings } from '$lib/types';
 export interface PacketEntry extends IncomingPacket {
   /** 'TX' for outgoing packets sent by this node, 'RX' for incoming. */
   direction: 'TX' | 'RX';
+  /**
+   * Stable, unique identity for keyed `{#each}` blocks.
+   *
+   * Packets are prepended, so every existing packet's array index changes on
+   * every new one. A key built from the index therefore changes for every row on
+   * every packet, and Svelte destroys and rebuilds the entire list — up to 100
+   * rich rows — for each arriving packet, several times a second during a
+   * multipart send. Timestamps are not unique either: packets routinely share a
+   * second. A counter is.
+   */
+  seq: number;
 }
+
+let packetSeq = 0;
 
 /** Maximum packets kept in the receive buffer (capped at 100) */
 const MAX_PACKETS = 100;
@@ -43,7 +56,7 @@ export const radio = $state({
 
 /** Add an incoming (RX) packet to the buffer. */
 export function addPacket(packet: IncomingPacket) {
-  const entry: PacketEntry = { ...packet, direction: 'RX' };
+  const entry: PacketEntry = { ...packet, direction: 'RX', seq: packetSeq++ };
   radio.packets = [entry, ...radio.packets].slice(0, MAX_PACKETS);
   radio.totalReceived += 1;
 }
@@ -53,7 +66,7 @@ export function addPacket(packet: IncomingPacket) {
  * Called when the frontend receives a `radio-packet-tx` event from Rust.
  */
 export function addSentPacket(packet: IncomingPacket) {
-  const entry: PacketEntry = { ...packet, direction: 'TX' };
+  const entry: PacketEntry = { ...packet, direction: 'TX', seq: packetSeq++ };
   radio.packets = [entry, ...radio.packets].slice(0, MAX_PACKETS);
   radio.totalSent += 1;
 }

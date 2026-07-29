@@ -219,6 +219,16 @@ shows *"😢 Sad! Send failed."* with the error.
 > packet is broadcast but not forwarded — add a second Heltec running as a gateway, or a host running
 > `radiodoge-cli daemon`.
 
+> **Both boards need firmware v0.4.2 (`FW11`) or newer for anything but the smallest transaction.** A signed
+> transaction is 192 bytes only in its absolute minimum form (one input, one output, no change); anything real
+> is larger and has to travel as several LoRa frames. Older firmware cannot receive those, so the app refuses
+> the send and tells you to flash rather than transmitting something the gateway cannot reassemble. The
+> firmware version is shown in the connection panel and on the Settings tab.
+>
+> A multipart send takes a few seconds — each frame is its own LoRa transmission and the app waits for the
+> board to confirm one is on the air before sending the next. If a frame is lost *in the air*, no `TX_ACK`
+> comes back; send again.
+
 ---
 
 ## 7. Monitoring: Dashboard, Receive & Mesh
@@ -438,13 +448,15 @@ quit | exit | q              Leave
 - **Gateway** — a node with a path to the internet that forwards transactions to the Dogecoin network. RadioDoge
   has two kinds: the **`radiodoge-cli daemon`** (a host process) and a **firmware WiFi gateway** (a Heltec
   configured with gateway credentials).
-- **Gateway mode** — an NVS flag on the board, shown as the 🌐 GATEWAY pill. It's a *reporting* flag; actual
-  forwarding depends on the board's configured gateway type/IP/internet.
+- **Gateway mode** — an NVS flag on the board, shown as the 🌐 GATEWAY pill. It gates whether the board relays
+  a host `MESSAGE` over LoRa, which is how a `TX_ACK` gets back to the sender, and whether it forwards
+  transactions it hears to its serial host. `radiodoge-cli daemon` turns it on for you at startup.
 - **Daemon** — the `radiodoge-cli daemon` child process the app can spawn; shown as the ▶ Daemon pill.
 - **WIF** — Wallet Import Format, the encoded private key. Dogecoin compressed mainnet WIFs start with `Q`.
 - **BIP39 / BIP44** — the standards for the 12-word recovery phrase and HD key derivation (`m/44'/3'/0'/0/0`).
 - **RSSI / SNR** — received signal strength (dBm) and signal-to-noise ratio (dB); higher is better.
-- **Multipart** — how payloads over 192 bytes are split into several LoRa frames and reassembled.
+- **Multipart** — how payloads over 192 bytes are split into several LoRa frames and reassembled. Each frame
+  declares its own chunk length, which is what lets a receiver find the frame boundaries on a serial link.
 - **Blockbook** — the Trezor block explorer API RadioDoge uses to fetch UTXOs/balances and broadcast transactions.
 
 ---

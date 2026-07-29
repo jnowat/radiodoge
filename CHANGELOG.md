@@ -7,6 +7,480 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — 🕵️ Third Pass: The Web Layer, the Queue & the Wallet File
+
+> **A fan-out audit of everything the first two passes had not read**, with every
+> finding independently checked before it was acted on. Two of them could destroy
+> money outright: overwriting a saved wallet, and a radio packet that could talk
+> the host into a framing the board cannot handle.
+
+### Fixed
+
+#### Saving a wallet could destroy a different one, permanently
+
+There is one `wallet.json`. Dismiss the unlock prompt on launch, generate a new
+wallet, save it — and the encrypted key for the previously saved wallet is gone,
+with no prompt and no undo. If its recovery phrase was not written down, so are
+its coins.
+
+`save_wallet` now refuses to overwrite a *different* address unless the caller
+explicitly opts in, and the refusal names the wallet at risk so the UI can say
+whose key is about to be destroyed. Removing a saved wallet takes two clicks and
+reports a failed delete instead of claiming success. `walletSaved` and the
+displayed balance are reset whenever the in-memory wallet is replaced — the panel
+used to report a freshly generated key as "saved (encrypted)" and show the
+previous wallet's balance under the new address.
+
+#### A radio packet could lift the host's payload ceiling
+
+The board forwards any over-the-air packet addressed to the broadcast address to
+its serial host verbatim. So a node in radio range can transmit a
+`CMD_GET_FIRMWARE_VERSION` packet carrying any version string, and the host reads
+it as its *own* board's version — the value that decides whether a payload too
+large for one packet may be sent. A spoofed `FW11` against an older board means
+transmitting a transaction that board mis-frames and no gateway can reassemble.
+
+A version reply is now believed only inside the window the host opens by asking
+for one, on both the desktop and Android paths. It is not authentication —
+nothing on this link is authenticated — but an attacker has to win a race against
+a query the host chose to send rather than broadcasting at will.
+
+#### The web UI served the WiFi password in cleartext
+
+`GET /` embedded the live AP password as an input's `value`. `type='password'`
+masks it on screen and not at all in the HTML, so a plain GET returned it — and
+in dual-WiFi mode the web server is reachable from the upstream LAN, not only
+from devices that already joined the AP. It also undid the v0.4.1 change that
+stopped `/api/password/status` returning it. Nothing read the field: no script
+referenced it and the change handler never verified a current password. It
+existed only to display the secret.
+
+The password routes also restarted the access point *before* sending their
+response, dropping the client that was waiting for it, so the UI could not tell
+success from failure. They reply first now.
+
+#### The queue re-dispatched the same request until the board crashed
+
+`ProcessNextQueuedRequest` removed a request from the queue *after* its handler
+returned, and a handler for a request needing no confirmation called straight
+back into it — finding the same request still at the head of the queue with the
+state still idle. Every level of that recursion transmitted over LoRa; it ended
+when the stack ran out. It was also re-entrant from the receive path, since a
+confirmation arriving mid-dispatch calls into the same function.
+
+Rewritten to dequeue first and iterate, with a re-entrancy guard. Two related
+defects went with it: `REQUEST_TIMEOUT_MS` was 30 s while a single request can
+hold the queue for 15 s, so only the first two of ten slots were ever reachable
+and the rest expired untried after the API had reported them accepted; and
+confirmations carry no request id, so the gateway's deliberate double-send
+completed the *next* request as well as the one it was for.
+
+#### Mesh relay mislabelled and re-submitted broadcasts
+
+- Broadcast dedup keyed on `(source, payload)`, but a relayed broadcast carries
+  the *relay's* address as its source — so a node never recognised a payload it
+  had already forwarded, and the same transaction reached the gateway once per
+  path through the mesh, being submitted to the network each time. Keyed on the
+  payload now, which is what flood suppression means.
+- A broadcast whose type was not literally `transaction:` kept the hardcoded
+  defaults and was relayed as `transaction:normal:<the entire original payload>`,
+  then POSTed to a Dogecoin node as a raw transaction. The envelope is parsed
+  generically, and only a transaction is forwarded to the network.
+
+#### `gateway_endpoint` was never actually saved
+
+ESP-IDF caps NVS key names at 15 usable characters. `"gateway_endpoint"` is 16,
+so every read and write of it failed with `ESP_ERR_NVS_KEY_TOO_LONG` while
+`/api/gateway/save` reported success — a board configured with a custom endpoint
+forgot it on every reboot and POSTed to the bare gateway URL. Renamed to
+`gw_endpoint`.
+
+#### Bluetooth could not carry anything larger than 20 bytes
+
+`plugin-blec` hands a whole buffer to one GATT write and exposes no MTU
+negotiation, so a 200-byte frame was rejected or truncated on any link still at
+the mandatory 23-byte ATT MTU — which is every link, since nothing raises it.
+Writes are chunked at the guaranteed 20-byte payload and use `withResponse`, so a
+chunk cannot be dropped for want of flow control. The board's BLE quiet-gap
+framing went from 60 ms to 400 ms to match: a gap of more than 60 ms between two
+chunks of the same packet is ordinary on Android, and at 60 ms the board
+dispatched half a transaction as if it were a whole one.
+
+#### Smaller ones
+
+- `/proxy?url=` buffered the entire remote response into heap with no limit — one
+  request for an ordinary web page was enough to exhaust RAM and reset the board.
+  Capped at 32 KB, and gated on the internet bridge being explicitly enabled
+  rather than merely on the board being online, since it will fetch any URL.
+- `/api/address` and `/address` accepted any octet — `toInt()` returns a long and
+  the fields are `uint8_t`, so 999 became 231 — and allowed the board's own
+  address to be set to the reserved broadcast address, after which it matches
+  every packet twice and can never be addressed individually again.
+- Operator-supplied strings (gateway type/IP/port/endpoint/username, WiFi SSID)
+  were concatenated into JSON responses unescaped; one quote in a stored value
+  broke the web UI until NVS was cleared.
+- `build_tx_frames` rejects an empty payload rather than reporting a successful
+  send of nothing.
+- `write_file_atomically` uses a per-call temp name; with a shared one, two
+  concurrent saves could rename a half-written file into place.
+
+#### A stranger could display a fake incoming payment
+
+`describe_signed_tx` labelled a transaction "✅ DOGE TX (verified)". What it
+actually checks is that the signatures are consistent with the public keys inside
+the transaction — and the UTXO scriptPubKey those signatures are checked against
+is *reconstructed from those same public keys*, because there is no network
+access in that function. It proves nothing about whether the inputs exist, are
+unspent, or belong to the sender.
+
+So anyone within radio range could build a transaction paying you any amount,
+sign it with a key generated a second earlier, transmit one packet, and watch
+your app announce a verified payment. The description now says what was and was
+not checked, and the checkmark is gone. `verify_signed_tx` documents its limits
+where someone reading it will see them.
+
+#### Transactions were built from coins that cannot be spent
+
+Blockbook's `/utxo` endpoint returns unconfirmed outputs by default, and the
+`confirmations` and `coinbase` fields were being discarded. Coin selection
+therefore spent unconfirmed parents — leaving a transaction that dies if the
+parent does — and immature coinbase outputs, which every node rejects outright.
+Over LoRa the sender has no way to find out why nothing happened. Only confirmed,
+mature coins are selected now, and "insufficient funds" says how many outputs
+were skipped for being unspendable.
+
+#### The proof-of-work check accepted forged difficulty
+
+`bits_to_target` read the compact format's sign bit as part of the mantissa and
+let the exponent wrap. `nBits = 0x1d80ffff` produced a target ~128x the real one,
+and `0x20800000` a target of 2^255 — a value nearly every hash is below, so
+`hash_meets_target` accepted anything and `verify_header_chain(check_pow: true)`
+would pass a chain of garbage headers. Invalid encodings now expand to a zero
+target and are rejected outright, which fails closed.
+
+`merkle_root_from_branch` accepted forged proofs two ways: index bits beyond the
+branch depth were shifted away, so one branch could "prove" many positions; and a
+sibling equal to the node it pairs with — the duplicated-node shape of
+CVE-2012-2459 — was hashed happily. Both are rejected, and the function returns
+`Option` so an invalid proof cannot be mistaken for a root.
+
+#### A dropped USB cable made the desktop app take the Android path
+
+`send_transaction` decided it was running on mobile by inferring it: "a port is
+set but the Rust side is not connected". That is exactly the state a desktop
+machine enters when the cable is pulled — `is_connected()` goes false while
+`current_port` stays set until the user presses Disconnect. The app then emitted
+the transaction frames as an event nothing listens to on desktop, and returned
+success. A signed transaction, with real UTXOs selected, dropped on the floor
+under a confetti animation. The platform is now a compile-time fact.
+
+#### A malformed transaction packet could take down the read loop
+
+`verify_signed_tx` runs on every `CMD_DOGE_TX` payload the radio hears, from any
+node in range, with nothing authenticated anywhere on the link. The lengths
+inside a transaction are varints that can declare up to `u64::MAX`, and adding
+one to the read offset overflowed `usize` — a panic in a debug build, which takes
+the serial read loop down with it, and a silent wrap in a release one. All offset
+arithmetic in the decoder is checked now, and a test drives it with hostile
+varints and every truncation of a well-formed transaction.
+
+#### The Android USB reader could double up, or die silently
+
+The polling read loop was gated on one global boolean. Two loops can briefly
+overlap — a reconnect starts one while the previous is still inside its 100 ms
+read — and they then shared that flag: either the old loop's exit killed the new
+one, or both kept running and each received a random subset of the bytes. The
+second is worse, because both push into the same accumulator and the byte stream
+arrives interleaved, which is indistinguishable from line noise to the framer.
+Each loop now carries a generation and only the current one may touch shared
+state.
+
+A real port error — the cable pulled — just `break`ed out of the loop and left
+everything else alone: the app went on showing "connected" with a dead reader, so
+nothing arrived again and a transaction sent afterwards went into a void that
+looked exactly like a working connection. It now tears the session down.
+
+#### Toggles reported settings the board never confirmed
+
+`set_wifi_enabled` fell back to the *requested* value when the board did not
+answer, and `set_ble_enabled` never looked at the reply at all. Both wait for the
+board's own acknowledgement now and report a failure when it does not come.
+
+#### The tray never updated, and there were two of them
+
+`update_tray_status` looked the tray up by the empty string, which cannot match
+the id `TrayIconBuilder::new()` generates — so the tooltip never changed on any
+connect or disconnect. The tray has an explicit id now. `tauri.conf.json` also
+declared a `trayIcon`, which creates a *second*, menu-less tray icon alongside
+the functional one; it is gone.
+
+#### The gateway daemon outlived the app
+
+The child is spawned with `kill_on_drop`, but that only fires when the `Child` is
+dropped, and it lives in managed state the process never drops on exit. Closing
+the window left a `radiodoge-cli daemon` running and holding the serial port, so
+the next launch could not open the board at all. It is killed from the `Exit`
+run-event.
+
+#### Smaller UI ones
+
+- The packet log and the debug console keyed their `{#each}` blocks on the array
+  index. Packets are prepended and debug entries are sliced from the front, so
+  every surviving row's index changes on every event — Svelte destroyed and
+  rebuilt the whole list (up to 100 and 500 rows) per packet, several times a
+  second during a multipart send. Both carry a stable id now.
+- While auto-reconnecting, the only control rendered was a *disabled* button.
+  A board that had been unplugged, or whose port a gateway daemon had taken, left
+  the app retrying forever with no way out but restarting it. There is a Stop
+  button.
+- The board reports an address conflict for *every* packet it hears from a node
+  using its address, and the handler switched tabs each time — dragging the user
+  out of whatever they were typing, repeatedly. It switches on the first one now.
+- The address book swallowed every write error, reporting a failed save as
+  success and silently reverting on next launch.
+
+### Added
+
+- **Per-frame send progress.** A multipart transaction is several seconds of real
+  airtime, and the button used to just sit there. `send_frames_with_progress`
+  reports each acknowledged frame and the Send tab shows "Beaming part 3 of 8".
+
+---
+
+## [Unreleased] — 🔬 Second Pass: Memory Safety, Serial Hygiene & a Test Gate
+
+> **A follow-up audit of everything the transaction work did not touch.** The
+> headline: the firmware could be made to write past the end of three arrays by
+> anyone within radio range, it was narrating its own log down the wire the host
+> reads packets from, and nothing in CI had ever run the test suite.
+
+### Fixed
+
+#### Remote memory corruption in the firmware's multipart reassembly
+
+`ProcessMultipartPacket` created a session and only then checked the part
+number, and never checked `totalParts` at all. Every one of those fields arrives
+over the air from an unauthenticated sender:
+
+- A packet claiming 255 parts wrote `partsReceived[254]` into a 20-element array
+  and `partSizes[254]` into a 20-element array.
+- A chunk longer than `MULTIPART_CHUNK_SIZE` overflowed into the next part's slot
+  and had its oversized length recorded, so the reassembled total could run past
+  the 4000-byte stack buffer in `ReassembleMultipartPacket`.
+- That function also computed a size it never used by calling `strlen()` on
+  binary chunk data, reading past any chunk that contained no NUL.
+
+The header is now validated before it indexes anything, the assembly copy is
+bounded regardless of what the recorded sizes claim, the dead `strlen` loop is
+gone, and a session whose part count changes mid-sequence restarts rather than
+mixing two payloads. `OnRxDone` clamps `messageSize` before the `memcpy` and the
+NUL that follows it.
+
+#### The firmware narrated its log down the protocol wire
+
+`addLog` ended in `Serial.println`. With over a hundred call sites — several
+fired per received packet, *while that packet was being handled* — the board was
+writing a stream of text into the link the host reads binary packets from. The
+desktop command set overlaps printable ASCII (`0x20` is both
+`CMD_GET_FIRMWARE_VERSION` and the space character), so the host's framer can
+mistake a log line for a packet header and then consume the real packet behind
+it. This is most of the reason resynchronisation is needed at all.
+
+The log now lives only where it was already available — the web UI and
+`GET /api/logs` — with `HOST_SERIAL_DEBUG` to put it back on the wire when
+debugging with no host attached. The legacy `TRANSACTION:` / `MESSAGE:` /
+`BROADCAST:` text lines are behind the same switch. The boot banner stays on
+Serial: it happens once, before a host is talking.
+
+Rerouting rather than removing would have made one thing worse — the gateway RPC
+username and password length were among the lines being logged, and
+`GET /api/logs` has no authentication. Those are redacted, not relocated. The
+banner also no longer prints the AP password, and reports the real firmware
+version instead of a hardcoded `v0.3.7`.
+
+#### The gateway daemon and the app fought over the same serial port
+
+"Spawn Daemon" passed the port the app itself had open. A serial port has one
+owner: on Windows the daemon's open fails, and on Linux both processes read the
+same device and each gets a random subset of the bytes — on the path that
+carries transactions. The app now releases the port (stopping the auto-reconnect
+watchdog first, or it would take it straight back), and reclaims it when the
+gateway is stopped. Three related fixes came with it:
+
+- The daemon was spawned without `kill_on_drop`, so closing the app orphaned a
+  process still holding the serial port.
+- `start_gateway` reported success as soon as the binary launched. A daemon that
+  exited immediately — no board, no permission, port busy — left the UI showing
+  "Gateway Online" forever. It is now checked for liveness before being reported.
+- `setDisconnected()` cleared `gatewayOnline`, so the "Stop" button vanished the
+  moment the daemon took the port, leaving a running daemon with no way to stop
+  it from the UI. Only the `gateway-status` event may change that flag now.
+
+#### A crash while saving could destroy the wallet
+
+`wallet.json`, `address_book.json` and `tx_history.json` were written with
+`fs::write`, which truncates first and writes second. An interruption between
+the two leaves an empty file — and `wallet.json` is often the only copy of an
+encrypted private key. All three are now written to a temp file and renamed into
+place, so the previous contents survive until the new file is complete.
+
+`save_wallet` additionally decrypts the ciphertext back and compares it to the
+wallet in hand before writing anything. A wallet that saved "successfully" but
+cannot be reopened is indistinguishable from losing the coins; the cost of being
+sure is one extra argon2 pass.
+
+#### Rejected radio settings were reported as verified
+
+The firmware validates `SET_LORA_PARAMS` and answers a legacy NACK — leaving the
+radio untouched — when a value is out of range. The app never looked, so it
+showed "Verified ✓" for settings the board had discarded. It now waits for the
+`0x21` reply and reports what actually happened, with the valid ranges.
+
+#### A send popped a "transaction received" notification on the sender
+
+The board answers every `0x10` with an 8-byte reply carrying the same command
+byte. The desktop notification handler treated that as an arrival, so every send
+notified the sender that they had received a transaction — once per frame, so a
+multipart send produced a burst.
+
+#### Android reported success for transactions it had not sent
+
+`send_transaction` hands the frames to the JS bridge and returns immediately, so
+the UI showed "sent" while the bytes were still being written — and a write
+failure inside the event listener was an unhandled promise rejection, invisible.
+Failures now replace the success message with what went wrong. Both mobile send
+paths share one frame writer instead of two copies of the pacing loop.
+
+### Added
+
+- **`Test & Lint` workflow.** Nothing in CI had ever run `cargo test`: the build
+  workflows compile the app and `cargo-audit` checks dependencies, so a change
+  that broke packet framing produced a green tick and a working installer. The
+  new job runs the workspace tests, the doc tests, `clippy -D warnings`, and
+  `svelte-check`. Every test is offline, so it is fast and deterministic.
+
+### Changed
+
+- `MAX_MULTIPART_SESSIONS` split out of `MAX_MULTIPART_PARTS` in the firmware.
+  They shared a value while meaning entirely different things — how many senders
+  may be mid-sequence versus how many parts one sequence has — which is what
+  made the missing bounds check easy to miss. The value is unchanged; the table
+  still costs about 82 KB of static RAM, which is now stated where it is
+  allocated.
+
+---
+
+## [Unreleased] — 🐕 Dogecoin Over LoRa, End to End — Much Send. Very Multipart. Wow.
+
+> **A real signed Dogecoin transaction can now travel from an offline device, over LoRa, to a board attached to
+> an internet gateway, and onto the network.** Three independent defects each broke that path on their own; all
+> three are fixed, and the whole route is covered by tests that model both boards byte for byte.
+
+### Fixed
+
+#### The board aborted its own LoRa transmissions — including every transaction
+
+`Radio.Send()` only *starts* a transmission on the SX1262; completion arrives asynchronously as `TxDone`. The
+desktop command handlers set `isLoRaIdle = true` immediately after calling it, and `isLoRaIdle` is what the
+main loop reads to decide "nothing is happening, put the radio into receive". So the next loop iteration called
+`Radio.Rx(0)` a couple of milliseconds into a packet that needs several hundred, aborting it. This hit `0x10`
+`CMD_DOGE_TX`, `0x11` `CMD_REQUEST_BALANCE`, and the gateway's `TX_ACK` relay — the entire money path.
+
+- New `SendLoRaAndWait()` sets a dedicated `loRaTxPending` flag, transmits, and pumps `Radio.IrqProcess()`
+  until `TxDone` or a 10-second ceiling. Every transmission in the firmware now goes through it.
+- The firmware's own multipart senders paced their parts with `delay(100)` / `delay(500)`, both shorter than
+  the airtime of the packet being paced, so each part overwrote the one before it. Those delays are gone.
+- The host acknowledgement for `0x10` is written only after the transmission completes, which makes it real
+  flow control rather than a formality.
+
+#### Host → board framing merged whatever arrived together
+
+`HostSerialRead()` read a desktop command's first two bytes, slept 500 ms, and then drained every buffered
+byte as that frame's payload. Two consequences, both silent:
+
+- A multipart sequence — frames written back to back by definition — arrived as one oversized blob. This is
+  why host→board multipart never worked, and why the host capped payloads at a single 192-byte packet.
+- Any command queued behind another was swallowed as its payload and lost. The GUI's connect handshake worked
+  around this by asking for the firmware version up to three times.
+
+Frames are now read to an exact length wherever the protocol defines one: a fixed-size command by its known
+total, a multipart frame by its declared chunk length, and only genuinely unbounded payloads (single-packet
+`0x10`/`0x11`, a relayed `0x03`) by waiting for a 30 ms gap in the byte stream. The BLE framer got the same
+treatment. `Serial.setRxBufferSize(1024)` gives the FIFO room for more than one frame while the radio is busy.
+
+#### Multipart frames had no in-band length, so a short final part ate the next packet
+
+Serial is a byte stream in both directions and the final part of a sequence is almost always short. A framer
+with no declared length had to assume every chunk was full and consumed 187 payload bytes regardless — taking
+whatever packet was queued behind it. At a gateway that means a `TX_ACK` swallowed by the transaction it
+acknowledges.
+
+The multipart header grew from 12 to 13 bytes; byte 12 is the chunk length. Every multipart frame is now
+self-delimiting on the host, in the firmware, and over BLE. A frame declaring more than 187 bytes, or more
+than are present, is rejected rather than shortened — reassembling a transaction from bytes the sender never
+wrote is worse than dropping the frame.
+
+#### Two board replies corrupted the packet behind them
+
+- The firmware's legacy 3-byte result code `[0xFE, 1, ACK|NAK]` was framed by the host as an 8-byte desktop
+  packet, so it waited and then took five bytes from whatever came next. A gateway emits one **every time it
+  relays a `TX_ACK`**, so this was squarely on the money path. `exact_packet_len` now knows its real length
+  (and the legacy 5-byte hardware-info reply's), and `frame_packet_len` resolves lengths shorter than a header
+  before the header-length guard.
+- The duplicate-address warning (`0x25`) went out in the legacy `[cmd, size, payload…]` shape, five bytes,
+  while the host frames `0x25` as a standard 8-byte packet. It is now a proper 8-byte packet.
+
+#### A non-gateway board pinged a random address when asked to relay a message
+
+A desktop `CMD_MESSAGE` (`0x03`) reaching a board with gateway mode off fell through to the legacy
+`PING_REQUEST` case — enum value 3 collides with `CMD_MESSAGE` — and transmitted a ping to whatever address was
+left in the serial buffer. It now consumes the frame and NACKs.
+
+#### A duplicate broadcast cost the sender its acknowledgement
+
+A transaction addressed to the broadcast address is handed to its host by *every* board that hears it, so a
+gateway routinely sees the same signed bytes more than once. The second POST is rejected as a duplicate, which
+looked like a broadcast failure: three retries, then "broadcast failed", and no `TX_ACK` — for a transaction
+that was on the network the whole time. The daemon now remembers what it has broadcast by txid and
+re-acknowledges instead of re-POSTing, and recognises the "already in mempool / already known" family of
+errors as success. `wallet::compute_txid` derives the txid from the raw bytes, so the acknowledgement is
+correct even when the network returns no id.
+
+### Added
+
+- **Host→board multipart, gated on firmware version.** `radio::build_tx_frames` is the single decision point
+  for how a payload goes on the wire — used by the GUI, the CLI and the Android bridge — and refuses anything
+  the connected board cannot reassemble. A board reporting a build older than `FW11`, or reporting nothing, is
+  held to one 192-byte packet with an error that says what to flash.
+- **`SerialManager::send_frames`** — writes frames one at a time, waiting for the board's acknowledgement
+  before each next one, with up to two retransmissions per frame. Because the board answers only once the
+  transmission is on the air, the host paces itself to real airtime. A multipart sequence that loses an
+  acknowledgement fails loudly rather than putting an unreassemblable fragment on the air.
+- **`SerialManager::ensure_firmware_version`** — queries the board if the version is not already cached, so a
+  headless caller that connects and immediately sends is not silently held to the old limit.
+- **`radiodoge-cli daemon` enables gateway mode on its board at startup**, and warns when the board is too old
+  to relay a full-size transaction. Gateway mode is what lets the board radio a `TX_ACK` back to the sender;
+  forgetting it produced a gateway that broadcast perfectly and never acknowledged anything.
+- **End-to-end tests** (`crates/radiodoge-core/tests/end_to_end_lora_tx.rs`) that model both boards' framing
+  byte for byte and drive transactions of 100 … 3,740 bytes through host → board → air → gateway → daemon,
+  with every serial stream concatenated with no gaps — the worst case for a byte-stream framer and exactly
+  what used to fail. Also covers two senders at once, every single-frame-dropped permutation, and the
+  old-firmware refusal.
+
+### Changed
+
+- **Firmware version 11 (v0.4.2).** The version is now a capability gate, not just a display string.
+- `MULTIPART_HDR_LEN` 12 → 13, `MULTIPART_CHUNK_LEN` 188 → 187, `MAX_MULTIPART_PAYLOAD_LEN` 3,760 → 3,740.
+- `radio::check_host_payload_fits` takes the board's firmware version.
+- The Android bridge paces multipart frames at 900 ms (`MULTIPART_FRAME_GAP_MS`) — it has no acknowledgement
+  plumbed through to JS — and its connect handshake at 150 ms now that the board frames commands exactly.
+- README, `docs/PROTOCOL.md`, `docs/USER_MANUAL.md`, `ROADMAP.md` and the firmware README updated. The
+  headline "most real transactions can't be relayed over LoRa yet" warning is replaced by what is now true,
+  including the two limitations that remain: no over-the-air retransmission of a lost frame, and no hardware
+  validation of this firmware by the authors.
+
+---
+
 ## [Unreleased] — 🔍 Full Review: Build, Framing & Honest Docs — Much Audit. Very Fixed. Wow.
 
 > **A full-repository review pass. The headline: a clean clone could not build at all, both packet-framing

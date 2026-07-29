@@ -235,9 +235,48 @@ uint8_t  lora_coding_rate      = LORA_CODINGRATE;
 
 // Multipart packet constants
 #define MAX_MULTIPART_PARTS 20
+// How many senders may have a sequence in flight at once. Distinct from
+// MAX_MULTIPART_PARTS, which is how many parts one sequence has; they happen to
+// share a value. Each session reserves its own 4000-byte reassembly buffer.
+#define MAX_MULTIPART_SESSIONS 20
 #define MULTIPART_CHUNK_SIZE 200  // Leave room for headers
 #define MULTIPART_TIMEOUT_MS 30000  // 30 seconds timeout for reassembly
 #define MULTIPART_HEADER_SIZE 12  // Packet type + dest + src + part info
+
+// ─── v0.4.2 — Desktop-protocol multipart (host <-> board, and on the air) ─────
+//
+// Distinct from the firmware's own MULTIPART_PACKET ('m') format above. A
+// desktop multipart frame is an ordinary 8-byte desktop header whose flags byte
+// has 0x1 in its low nibble, followed by five bytes the board never interprets
+// and forwards verbatim:
+//
+//   [0..8]  cmd, flags, src(3), dst(3)
+//   [8]     total parts
+//   [9]     part index (0-based)
+//   [10-11] session id (big-endian u16, same for every part)
+//   [12]    chunk length — how many payload bytes follow
+//   [13..]  chunk
+//
+// The chunk-length byte is what makes the frame self-delimiting on a byte
+// stream. Serial has no packet boundaries, so without it neither this firmware
+// nor the receiving host could tell where a short final part ended, and the
+// frame carrying a signed transaction was framed by guesswork.
+#define DESKTOP_FLAG_MULTIPART 0x01
+#define DESKTOP_MULTIPART_EXTRA 5    // [total, index, sess_hi, sess_lo, chunk_len]
+#define DESKTOP_MULTIPART_CHUNK_MAX 187  // 192 - DESKTOP_MULTIPART_EXTRA
+
+// How long to wait for the remainder of a host frame whose length is known.
+#define HOST_FRAME_TIMEOUT_MS 1000
+// A variable-length host frame carries no length, so a gap in the byte stream
+// marks its end. At 115200 baud consecutive bytes are ~0.09 ms apart, so 30 ms
+// of silence is several hundred byte-times of margin.
+#define HOST_FRAME_QUIET_MS 30
+// How long to wait for a variable-length payload to start arriving at all.
+#define HOST_PAYLOAD_START_TIMEOUT_MS 250
+// Upper bound on how long a single LoRa transmission may take before the board
+// gives up waiting for it. Sized for the slowest configuration the radio can be
+// retuned to (SF12, 125 kHz, a full 200-byte packet is ~6 s of airtime).
+#define LORA_TX_TIMEOUT_MS 10000
 
 // Mesh networking configuration
 #define ENABLE_MESH_REBROADCAST true
@@ -249,10 +288,25 @@ uint8_t  lora_coding_rate      = LORA_CODINGRATE;
 #define MAX_REBROADCAST_HOPS 3
 #define HOST_ACK_NACK_SIZE 3
 
+// v0.4.2 — Echo the log ring buffer to the serial port as well as the web UI.
+//
+// Off by default: the host speaks a binary protocol on that wire, and text
+// interleaved with packets can be mistaken for a packet header, costing the real
+// packet behind it. Set to 1 when debugging with a serial monitor and no host
+// software attached — never in a build that will talk to the app or the daemon.
+#define HOST_SERIAL_DEBUG 0
+
 // Request queuing and confirmation system
 #define MAX_PENDING_REQUESTS 10
 #define CONFIRMATION_TIMEOUT_MS 15000  // 15 seconds timeout for confirmations
-#define REQUEST_TIMEOUT_MS 30000       // 30 seconds timeout for entire request processing
+// v0.4.2 — Raised from 30 s. This is measured from the moment a request is
+// *queued*, not from when it starts, and a request ahead of it in the queue can
+// hold the line for a full CONFIRMATION_TIMEOUT_MS. At 30 s only the first two
+// of the ten queue slots could ever be reached: everything behind them expired
+// untried, and the API had already reported them accepted. The bound must exceed
+// MAX_PENDING_REQUESTS x CONFIRMATION_TIMEOUT_MS (10 x 15 s) for a full queue to
+// drain, with margin for the airtime each request spends transmitting.
+#define REQUEST_TIMEOUT_MS 210000      // 3.5 minutes: a full queue can drain before anything expires
 
 // Request types
 enum RequestType {
@@ -282,7 +336,12 @@ struct PendingRequest {
   bool requiresConfirmation;
   String requestId;      // Unique identifier for tracking
 };
-#define FIRMWARE_VERSION 10  // v0.4.1
+// Bumped whenever the host↔board contract changes. The host reads this back
+// from GET_FIRMWARE_VERSION and uses it to decide what it may send:
+// radio::MIN_MULTIPART_FIRMWARE (11) is the build that frames a host→board
+// multipart sequence correctly, so only from 11 onward will a host split a
+// transaction that does not fit in one packet.
+#define FIRMWARE_VERSION 11  // v0.4.2
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -327,7 +386,7 @@ struct MultipartReassembly {
 };
 
 // Global multipart reassembly buffer
-MultipartReassembly multipartBuffer[MAX_MULTIPART_PARTS];
+MultipartReassembly multipartBuffer[MAX_MULTIPART_SESSIONS];
 int activeMultipartSessions = 0;
 uint8_t serialHeader[SERIAL_HEADER_SIZE];
 uint8_t hostCommandReply[BUFFER_SIZE];
@@ -352,6 +411,18 @@ int16_t rxSize;
 int8_t lastSnr = 0;      // v0.3.6 — for OLED status cycle
 bool isLoRaIdle = true;
 bool needToSendACK = false;
+
+// v0.4.2 — True from the moment Radio.Send() is called until TxDone or
+// TxTimeout fires.
+//
+// `isLoRaIdle` cannot serve this purpose: it also means "nothing is happening,
+// put the radio back into receive", and the main loop acts on it. Any path that
+// set it true straight after Radio.Send() therefore had the next loop iteration
+// call Radio.Rx(0) a couple of milliseconds into a transmission that needs
+// hundreds — which aborts the transmission on the SX1262. Every desktop
+// command, including the one that carries a signed transaction, did exactly
+// that. Transmissions now go through SendLoRaAndWait(), which watches this flag.
+volatile bool loRaTxPending = false;
 
 // v0.3.6 — OLED status cycle state
 unsigned long lastStatusCycle = 0;
@@ -381,8 +452,17 @@ nodeAddress dest;
 nodeAddress senderAddress;
 
 void setup() {
+  // v0.4.2 — Enlarge the UART receive FIFO before opening the port.
+  //
+  // A multipart transaction is a burst of ~200-byte frames, and the board does
+  // not read serial while the radio is transmitting. The default 256-byte FIFO
+  // is barely one frame, so anything queued behind the one being sent was
+  // dropped with no error on either side. 1 KiB holds several frames, which
+  // turns a host that sends slightly too fast into a delay rather than a
+  // corrupted transaction. Must precede Serial.begin() to take effect.
+  Serial.setRxBufferSize(1024);
   Serial.begin(115200);
-  
+
   // CRITICAL: Set Vext pin LOW FIRST for V3 display power
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, LOW);
@@ -476,9 +556,10 @@ void setup() {
   DrawBootSplash();
   delay(3500);
 
-  Serial.println("RadioDoge v0.3.7 initialized!");
+  Serial.printf("RadioDoge NV%dFW%02d initialized!\n", HELTEC_BOARD_VERSION, FIRMWARE_VERSION);
   Serial.println("Connect to WiFi: RadioDoge");
-  Serial.println("Password: radiodoge");
+  // The AP password is deliberately not printed — it is configurable, and the
+  // line was stale anyway once a user changed it.
   Serial.println("Open browser: http://192.168.4.1");
   Serial.println("Use WiFi web interface for mobile access");
 }
@@ -746,30 +827,30 @@ void saveWiFiCredentials(String ssid, String password) {
   
   err = nvs_open("wifi_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for WiFi credentials");
+    debugPrintln("Error opening NVS handle for WiFi credentials");
     return;
   }
   
   // Save SSID
   err = nvs_set_str(nvs_handle, "ssid", ssid.c_str());
   if (err != ESP_OK) {
-    Serial.println("Error saving SSID to NVS");
+    debugPrintln("Error saving SSID to NVS");
   }
   
   // Save password
   err = nvs_set_str(nvs_handle, "password", password.c_str());
   if (err != ESP_OK) {
-    Serial.println("Error saving password to NVS");
+    debugPrintln("Error saving password to NVS");
   }
   
   // Commit changes
   err = nvs_commit(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error committing WiFi credentials to NVS");
+    debugPrintln("Error committing WiFi credentials to NVS");
   }
   
   nvs_close(nvs_handle);
-  Serial.println("WiFi credentials saved to NVS");
+  debugPrintln("WiFi credentials saved to NVS");
 }
 
 bool loadWiFiCredentials() {
@@ -779,7 +860,7 @@ bool loadWiFiCredentials() {
   
   err = nvs_open("wifi_config", NVS_READONLY, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("No WiFi credentials found in NVS");
+    debugPrintln("No WiFi credentials found in NVS");
     return false;
   }
   
@@ -816,7 +897,7 @@ bool loadWiFiCredentials() {
   internet_password = String(password_buffer);
   
   nvs_close(nvs_handle);
-  Serial.println("WiFi credentials loaded from NVS: " + internet_ssid);
+  debugPrintln("WiFi credentials loaded from NVS: " + internet_ssid);
   return true;
 }
 
@@ -826,16 +907,16 @@ void clearWiFiCredentials() {
   
   err = nvs_open("wifi_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for clearing WiFi credentials");
+    debugPrintln("Error opening NVS handle for clearing WiFi credentials");
     return;
   }
   
   // Erase all keys in the namespace
   err = nvs_erase_all(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error erasing WiFi credentials from NVS");
+    debugPrintln("Error erasing WiFi credentials from NVS");
   } else {
-    Serial.println("WiFi credentials cleared from NVS");
+    debugPrintln("WiFi credentials cleared from NVS");
   }
   
   nvs_close(nvs_handle);
@@ -854,36 +935,36 @@ void saveLoRaConfiguration(uint8_t region, uint8_t community, uint8_t node) {
   
   err = nvs_open("lora_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for LoRa configuration");
+    debugPrintln("Error opening NVS handle for LoRa configuration");
     return;
   }
   
   // Save region
   err = nvs_set_u8(nvs_handle, "region", region);
   if (err != ESP_OK) {
-    Serial.println("Error saving region to NVS");
+    debugPrintln("Error saving region to NVS");
   }
   
   // Save community
   err = nvs_set_u8(nvs_handle, "community", community);
   if (err != ESP_OK) {
-    Serial.println("Error saving community to NVS");
+    debugPrintln("Error saving community to NVS");
   }
   
   // Save node
   err = nvs_set_u8(nvs_handle, "node", node);
   if (err != ESP_OK) {
-    Serial.println("Error saving node to NVS");
+    debugPrintln("Error saving node to NVS");
   }
   
   // Commit changes
   err = nvs_commit(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error committing LoRa configuration to NVS");
+    debugPrintln("Error committing LoRa configuration to NVS");
   }
   
   nvs_close(nvs_handle);
-  Serial.println("LoRa configuration saved to NVS: " + String(region) + "." + String(community) + "." + String(node));
+  debugPrintln("LoRa configuration saved to NVS: " + String(region) + "." + String(community) + "." + String(node));
 }
 
 // OPTIMIZED FOR DESKTOP v0.3.3 – SAFE
@@ -1087,7 +1168,7 @@ bool loadLoRaConfiguration() {
   
   err = nvs_open("lora_config", NVS_READONLY, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("No LoRa configuration found in NVS");
+    debugPrintln("No LoRa configuration found in NVS");
     return false;
   }
   
@@ -1119,7 +1200,7 @@ bool loadLoRaConfiguration() {
   local.community = community;
   local.node = node;
   
-  Serial.println("LoRa configuration loaded from NVS: " + String(region) + "." + String(community) + "." + String(node));
+  debugPrintln("LoRa configuration loaded from NVS: " + String(region) + "." + String(community) + "." + String(node));
   return true;
 }
 
@@ -1129,16 +1210,16 @@ void clearLoRaConfiguration() {
   
   err = nvs_open("lora_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for clearing LoRa configuration");
+    debugPrintln("Error opening NVS handle for clearing LoRa configuration");
     return;
   }
   
   // Erase all keys in the namespace
   err = nvs_erase_all(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error erasing LoRa configuration from NVS");
+    debugPrintln("Error erasing LoRa configuration from NVS");
   } else {
-    Serial.println("LoRa configuration cleared from NVS");
+    debugPrintln("LoRa configuration cleared from NVS");
   }
   
   nvs_close(nvs_handle);
@@ -1156,24 +1237,24 @@ void saveAPPassword(String password) {
   
   err = nvs_open("ap_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for AP password");
+    debugPrintln("Error opening NVS handle for AP password");
     return;
   }
   
   // Save password
   err = nvs_set_str(nvs_handle, "password", password.c_str());
   if (err != ESP_OK) {
-    Serial.println("Error saving AP password to NVS");
+    debugPrintln("Error saving AP password to NVS");
   }
   
   // Commit changes
   err = nvs_commit(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error committing AP password to NVS");
+    debugPrintln("Error committing AP password to NVS");
   }
   
   nvs_close(nvs_handle);
-  Serial.println("AP password saved to NVS");
+  debugPrintln("AP password saved to NVS");
 }
 
 bool loadAPPassword() {
@@ -1183,7 +1264,7 @@ bool loadAPPassword() {
   
   err = nvs_open("ap_config", NVS_READONLY, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("No AP password found in NVS, using default");
+    debugPrintln("No AP password found in NVS, using default");
     return false;
   }
   
@@ -1204,7 +1285,7 @@ bool loadAPPassword() {
   
   ap_password = String(password_buffer);
   nvs_close(nvs_handle);
-  Serial.println("AP password loaded from NVS");
+  debugPrintln("AP password loaded from NVS");
   return true;
 }
 
@@ -1214,16 +1295,16 @@ void clearAPPassword() {
   
   err = nvs_open("ap_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for clearing AP password");
+    debugPrintln("Error opening NVS handle for clearing AP password");
     return;
   }
   
   // Erase all keys in the namespace
   err = nvs_erase_all(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error erasing AP password from NVS");
+    debugPrintln("Error erasing AP password from NVS");
   } else {
-    Serial.println("AP password cleared from NVS");
+    debugPrintln("AP password cleared from NVS");
   }
   
   nvs_close(nvs_handle);
@@ -1233,13 +1314,23 @@ void clearAPPassword() {
 }
 
 // Gateway Credential Management Functions
+// v0.4.2 — NVS key names are capped at 15 usable characters
+// (NVS_KEY_NAME_MAX_SIZE is 16 *including* the NUL). The old key name was 16,
+// so every nvs_set_str/nvs_get_str with it returned ESP_ERR_NVS_KEY_TOO_LONG:
+// the endpoint was never stored and never loaded, while /api/gateway/save still
+// reported success. A board configured with a custom endpoint path silently
+// forgot it on every reboot and POSTed transactions to the bare gateway URL.
+// Renamed to "gw_endpoint" (11), matching the abbreviated style already used by
+// "gw_mode" and "gw_pass".
+#define NVS_KEY_GATEWAY_ENDPOINT "gw_endpoint"
+
 void saveGatewayCredentials(String type, String ip, String port, String endpoint, String username, String password) {
   nvs_handle_t nvs_handle;
   esp_err_t err;
   
   err = nvs_open("gateway_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for gateway credentials: " + String(err));
+    debugPrintln("Error opening NVS handle for gateway credentials: " + String(err));
     addLog("ERROR: Failed to open NVS handle for gateway save - Error code: " + String(err));
     return;
   }
@@ -1252,61 +1343,61 @@ void saveGatewayCredentials(String type, String ip, String port, String endpoint
   // Save gateway type
   err = nvs_set_str(nvs_handle, "gateway_type", type.c_str());
   if (err != ESP_OK) {
-    Serial.println("Error saving gateway type to NVS");
+    debugPrintln("Error saving gateway type to NVS");
   }
   
   // Save IP
   err = nvs_set_str(nvs_handle, "gateway_ip", ip.c_str());
   if (err != ESP_OK) {
-    Serial.println("Error saving gateway IP to NVS");
+    debugPrintln("Error saving gateway IP to NVS");
   }
   
   // Save port
   err = nvs_set_str(nvs_handle, "gateway_port", port.c_str());
   if (err != ESP_OK) {
-    Serial.println("Error saving gateway port to NVS");
+    debugPrintln("Error saving gateway port to NVS");
   }
   
   // Save endpoint
-  err = nvs_set_str(nvs_handle, "gateway_endpoint", endpoint.c_str());
+  err = nvs_set_str(nvs_handle, NVS_KEY_GATEWAY_ENDPOINT, endpoint.c_str());
   if (err != ESP_OK) {
-    Serial.println("Error saving gateway endpoint to NVS");
+    debugPrintln("Error saving gateway endpoint to NVS");
   }
   
   // Save username (if provided)
   if (username.length() > 0) {
     err = nvs_set_str(nvs_handle, "gateway_user", username.c_str());
     if (err != ESP_OK) {
-      Serial.println("Error saving gateway username to NVS");
+      debugPrintln("Error saving gateway username to NVS");
     } else {
-      Serial.println("Gateway username saved: " + username);
+      debugPrintln("Gateway username saved: [REDACTED]");
     }
   }
   
   // Save password (if provided)
   if (password.length() > 0) {
-    Serial.println("Saving password with length: " + String(password.length()));
+    debugPrintln("Saving gateway password: [REDACTED]");
     
     // Use shorter key name (ESP32 NVS max key length is 15 characters)
     err = nvs_set_str(nvs_handle, "gw_pass", password.c_str());
     if (err != ESP_OK) {
-      Serial.println("Error saving gateway password to NVS: " + String(err));
+      debugPrintln("Error saving gateway password to NVS: " + String(err));
       addLog("ERROR: Failed to save gateway password to NVS - Error code: " + String(err));
     } else {
-      Serial.println("Gateway password saved: [HIDDEN]");
+      debugPrintln("Gateway password saved: [HIDDEN]");
     }
   } else {
-    Serial.println("No password provided for saving");
+    debugPrintln("No password provided for saving");
     addLog("WARNING: No password provided for gateway save");
   }
   
   // Commit changes
   err = nvs_commit(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error committing gateway credentials to NVS: " + String(err));
+    debugPrintln("Error committing gateway credentials to NVS: " + String(err));
     addLog("ERROR: Failed to save gateway credentials to NVS");
   } else {
-    Serial.println("Gateway credentials saved to NVS");
+    debugPrintln("Gateway credentials saved to NVS");
     addLog("Gateway credentials saved: " + type + " at " + ip + ":" + port);
   }
   
@@ -1319,7 +1410,7 @@ bool loadGatewayCredentials() {
   
   err = nvs_open("gateway_config", NVS_READONLY, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("No gateway credentials found in NVS");
+    debugPrintln("No gateway credentials found in NVS");
     return false;
   }
   
@@ -1356,12 +1447,12 @@ bool loadGatewayCredentials() {
   // Load endpoint (optional)
   size_t endpoint_len = 64;
   char endpoint_buffer[64];
-  err = nvs_get_str(nvs_handle, "gateway_endpoint", endpoint_buffer, &endpoint_len);
+  err = nvs_get_str(nvs_handle, NVS_KEY_GATEWAY_ENDPOINT, endpoint_buffer, &endpoint_len);
   if (err == ESP_OK) {
     gateway_endpoint = String(endpoint_buffer);
   } else {
     gateway_endpoint = "";
-    Serial.println("No gateway endpoint found");
+    debugPrintln("No gateway endpoint found");
   }
   
   // Load username (optional)
@@ -1370,9 +1461,9 @@ bool loadGatewayCredentials() {
   err = nvs_get_str(nvs_handle, "gateway_user", username_buffer, &username_len);
   if (err == ESP_OK) {
     gateway_username = String(username_buffer);
-    Serial.println("Loaded gateway username: " + gateway_username);
+    debugPrintln("Gateway username loaded: [REDACTED]");
   } else {
-    Serial.println("No gateway username found");
+    debugPrintln("No gateway username found");
   }
   
   // Load password (optional) - try multiple key names
@@ -1394,16 +1485,16 @@ bool loadGatewayCredentials() {
   
   if (err == ESP_OK) {
     gateway_password = String(password_buffer);
-    Serial.println("Loaded gateway password: [HIDDEN]");
-    Serial.println("Password length loaded: " + String(password_len) + " characters");
+    debugPrintln("Loaded gateway password: [HIDDEN]");
+    debugPrintln("Gateway password loaded: [REDACTED]");
   } else {
-    Serial.println("No gateway password found: " + String(err));
+    debugPrintln("No gateway password found: " + String(err));
     addLog("WARNING: No gateway password found in NVS");
     gateway_password = "";
   }
   
   nvs_close(nvs_handle);
-  Serial.println("Gateway credentials loaded from NVS");
+  debugPrintln("Gateway credentials loaded from NVS");
   addLog("Gateway credentials loaded: " + gateway_type + " at " + gateway_ip + ":" + gateway_port);
   return true;
 }
@@ -1414,17 +1505,17 @@ void clearGatewayCredentials() {
   
   err = nvs_open("gateway_config", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error opening NVS handle for clearing gateway credentials");
+    debugPrintln("Error opening NVS handle for clearing gateway credentials");
     return;
   }
   
   // Erase all keys in the namespace
   err = nvs_erase_all(nvs_handle);
   if (err != ESP_OK) {
-    Serial.println("Error erasing gateway credentials from NVS");
+    debugPrintln("Error erasing gateway credentials from NVS");
     addLog("ERROR: Failed to clear gateway credentials from NVS");
   } else {
-    Serial.println("Gateway credentials cleared from NVS");
+    debugPrintln("Gateway credentials cleared from NVS");
     addLog("Gateway credentials cleared from NVS");
   }
   
@@ -1450,6 +1541,22 @@ String escapeJsonString(String input) {
 }
 
 // Logging functions
+// v0.4.2 — Runtime diagnostics go to the log ring buffer, never to Serial.
+//
+// The host speaks a binary protocol on that same wire. Free-form text written
+// while a host is connected is not merely untidy: the command set overlaps
+// printable ASCII, so a log line can be mistaken for a packet header, and the
+// framer will then consume the real packet queued behind it. That is why the
+// host needs a resynchronisation heuristic at all.
+//
+// Anything a developer wants to watch is already in the web UI's log view and in
+// `GET /api/logs`. The banner printed by setup() is deliberately left on Serial:
+// it happens once, before a host is talking, and it is how you tell a freshly
+// flashed board is alive.
+void debugPrintln(String message) {
+  addLog(message);
+}
+
 void addLog(String message) {
   String timestamp = String(millis());
   String logEntry = "[" + timestamp + "] " + message;
@@ -1464,9 +1571,25 @@ void addLog(String message) {
   if (logCount < MAX_LOG_ENTRIES) {
     logCount++;
   }
-  
-  // Also print to Serial
+
+  // v0.4.2 — This used to end with `Serial.println(logEntry)`, which is where
+  // essentially all of the protocol noise came from: every one of the hundred-odd
+  // addLog() calls — several of them fired per received packet, in the middle of
+  // handling it — wrote a line of text down the wire the host reads packets from.
+  //
+  // That matters more than untidiness. The desktop command set overlaps printable
+  // ASCII (0x20 is both CMD_GET_FIRMWARE_VERSION and the space character), so the
+  // host's framer can mistake a log line for a packet header and then consume the
+  // real packet queued behind it. Resynchronisation exists to recover from that,
+  // but the best outcome is for it never to happen while a transaction is in
+  // flight.
+  //
+  // The log is still fully available: MAX_LOG_ENTRIES of it in the web UI and at
+  // GET /api/logs. Set HOST_SERIAL_DEBUG to 1 to put it back on the wire when
+  // debugging with a plain serial monitor and no host software attached.
+#if HOST_SERIAL_DEBUG
   Serial.println(logEntry);
+#endif
 }
 
 void addDisplayLog(String message) {
@@ -1496,7 +1619,7 @@ bool validatePassword(String password) {
 }
 
 void restartAP() {
-  Serial.println("Restarting Access Point with new password...");
+  debugPrintln("Restarting Access Point with new password...");
   
   // Stop current AP
   WiFi.softAPdisconnect(true);
@@ -1504,27 +1627,23 @@ void restartAP() {
   
   // Start AP with new password
   WiFi.softAP(ap_ssid, ap_password.c_str());
-  Serial.println("Access Point restarted");
-  Serial.print("SSID: ");
-  Serial.println(ap_ssid);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.softAPIP());
+  debugPrintln("Access Point restarted");
+  debugPrintln("SSID: " + String(ap_ssid));
+  debugPrintln("IP address: " + WiFi.softAPIP().toString());
 }
 
 // WiFi Management Functions
 void setupDualWiFi() {
   // Load stored WiFi credentials
   if (loadWiFiCredentials()) {
-    Serial.println("Found stored WiFi credentials, attempting connection...");
+    debugPrintln("Found stored WiFi credentials, attempting connection...");
   }
   
   // Start Access Point
   WiFi.softAP(ap_ssid, ap_password.c_str());
-  Serial.println("WiFi AP started");
-  Serial.print("AP SSID: ");
-  Serial.println(ap_ssid);
-  Serial.print("AP IP address: ");
-  Serial.println(WiFi.softAPIP());
+  debugPrintln("WiFi AP started");
+  debugPrintln("AP SSID: " + String(ap_ssid));
+  debugPrintln("AP IP address: " + WiFi.softAPIP().toString());
   addLog("[WiFi] Access Point started - SSID: " + String(ap_ssid) + ", IP: " + WiFi.softAPIP().toString());
   
   // Try to connect to internet WiFi if credentials are available
@@ -1544,7 +1663,7 @@ void setupDualWiFi() {
 void connectToInternetWiFi() {
   if (internet_ssid.length() == 0) return;
   
-  Serial.println("Attempting to connect to internet WiFi...");
+  debugPrintln("Attempting to connect to internet WiFi...");
   DisplayCustomStringMessage("Connecting to WiFi...", 0);
   addLog("Attempting to connect to internet WiFi: " + internet_ssid);
   
@@ -1553,17 +1672,16 @@ void connectToInternetWiFi() {
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
-    Serial.print(".");
+    // Progress was a dot per attempt on the wire the host protocol uses.
     attempts++;
   }
   
   if (WiFi.status() == WL_CONNECTED) {
     internet_connected = true;
     dual_wifi_mode = true;
-    Serial.println("");
-    Serial.println("Internet WiFi connected!");
-    Serial.print("Internet IP address: ");
-    Serial.println(WiFi.localIP());
+    // (progress separator; diagnostics go to the log)
+    debugPrintln("Internet WiFi connected!");
+    debugPrintln("Internet IP address: " + WiFi.localIP().toString());
     DisplayCustomStringMessage("Internet Connected!", 0);
     addLog("Internet WiFi connected! IP: " + WiFi.localIP().toString());
     
@@ -1572,8 +1690,8 @@ void connectToInternetWiFi() {
   } else {
     internet_connected = false;
     dual_wifi_mode = false;
-    Serial.println("");
-    Serial.println("Failed to connect to internet WiFi");
+    // (progress separator; diagnostics go to the log)
+    debugPrintln("Failed to connect to internet WiFi");
     DisplayCustomStringMessage("No Internet", 0);
     addLog("Failed to connect to internet WiFi: " + internet_ssid);
   }
@@ -1584,7 +1702,7 @@ void disconnectInternetWiFi() {
     WiFi.disconnect();
     internet_connected = false;
     dual_wifi_mode = false;
-    Serial.println("Disconnected from internet WiFi");
+    debugPrintln("Disconnected from internet WiFi");
     DisplayCustomStringMessage("Internet Disconnected", 0);
   }
 }
@@ -1615,11 +1733,11 @@ void DisplayWiFiStatus() {
 // Internet Bridging Functions
 void setupInternetBridge() {
   if (!internet_connected) {
-    Serial.println("Cannot setup internet bridge - no internet connection");
+    debugPrintln("Cannot setup internet bridge - no internet connection");
     return;
   }
   
-  Serial.println("Setting up internet bridge...");
+  debugPrintln("Setting up internet bridge...");
   addLog("[WiFi] Setting up internet bridge between AP and internet WiFi");
   
   // Configure AP with proper gateway and subnet
@@ -1638,11 +1756,11 @@ void setupInternetBridge() {
   // Enable internet bridging
   internet_bridge_enabled = true;
   
-  Serial.println("Internet bridge enabled");
-  Serial.println("AP Gateway: " + ap_gateway.toString());
-  Serial.println("AP Subnet: " + ap_subnet.toString());
-  Serial.println("Internet IP: " + WiFi.localIP().toString());
-  Serial.println("DNS Server: Running on port 53");
+  debugPrintln("Internet bridge enabled");
+  debugPrintln("AP Gateway: " + ap_gateway.toString());
+  debugPrintln("AP Subnet: " + ap_subnet.toString());
+  debugPrintln("Internet IP: " + WiFi.localIP().toString());
+  debugPrintln("DNS Server: Running on port 53");
   addLog("[WiFi] Internet bridge enabled - AP clients can now access internet");
   addLog("[WiFi] DNS Server running on 192.168.4.1:53");
 }
@@ -1711,7 +1829,7 @@ void disableInternetBridge() {
 // Internet Gateway Functions
 String sendTransactionToInternet(String transactionData) {
   if (!internet_connected) {
-    Serial.println("No internet connection available");
+    debugPrintln("No internet connection available");
     return "{\"error\":\"No internet connection available\"}";
   }
   
@@ -1726,12 +1844,12 @@ String sendTransactionToInternet(String transactionData) {
   
   if (httpResponseCode > 0) {
     response = http.getString();
-    Serial.println("Transaction sent to internet gateway");
-    Serial.println("Response: " + response);
+    debugPrintln("Transaction sent to internet gateway");
+    debugPrintln("Response: " + response);
     addLog("Transaction sent to internet gateway - Response: " + response);
   } else {
     response = "{\"error\":\"HTTP Error " + String(httpResponseCode) + "\"}";
-    Serial.println("Error sending transaction to internet: " + String(httpResponseCode));
+    debugPrintln("Error sending transaction to internet: " + String(httpResponseCode));
   }
   
   http.end();
@@ -1740,7 +1858,7 @@ String sendTransactionToInternet(String transactionData) {
 
 String sendTransactionToCustomGateway(String transactionData, String gatewayUrl) {
   if (!internet_connected) {
-    Serial.println("No internet connection available");
+    debugPrintln("No internet connection available");
     return "{\"error\":\"No internet connection available\"}";
   }
   
@@ -1755,11 +1873,11 @@ String sendTransactionToCustomGateway(String transactionData, String gatewayUrl)
   
   if (httpResponseCode > 0) {
     response = http.getString();
-    Serial.println("Transaction sent to custom gateway");
-    Serial.println("Response: " + response);
+    debugPrintln("Transaction sent to custom gateway");
+    debugPrintln("Response: " + response);
   } else {
     response = "{\"error\":\"HTTP Error " + String(httpResponseCode) + "\"}";
-    Serial.println("Error sending transaction to custom gateway: " + String(httpResponseCode));
+    debugPrintln("Error sending transaction to custom gateway: " + String(httpResponseCode));
   }
   
   http.end();
@@ -1817,6 +1935,7 @@ void CommandAndControlLoop() {
 void OnTxDone(void) {
   // v0.3.6 — pktTxCount tracked for OLED status display
   pktTxCount++;
+  loRaTxPending = false;
   addLog("[LoRa] TX completed successfully");
   isLoRaIdle = true;
 }
@@ -1825,8 +1944,54 @@ void OnTxTimeout(void) {
   Radio.Sleep();
   // Indicate that TX failed (debug)
   //Serial.println("OOPS TX BAD");
+  loRaTxPending = false;
   addLog("[LoRa] TX timeout - transmission failed");
   isLoRaIdle = true;
+}
+
+// v0.4.2 — Transmit a packet and block until the radio has actually finished.
+//
+// Radio.Send() only *starts* a transmission; completion arrives asynchronously
+// as TxDone via Radio.IrqProcess(). Callers that returned immediately after
+// Send() left the main loop free to flip the radio back into receive mid-packet
+// (see loRaTxPending), and callers that sent several packets in a row — a
+// multipart sequence — overwrote each transmission with the next one.
+//
+// Pumping IrqProcess() here is what makes a multipart send work: each part is
+// fully on the air before the next byte of the next part is read from serial,
+// and the host acknowledgement written afterwards doubles as flow control, so
+// the host paces itself to real airtime instead of a guessed delay.
+//
+// Returns true if TxDone was seen, false on TxTimeout or if the radio never
+// reported completion within LORA_TX_TIMEOUT_MS.
+bool SendLoRaAndWait(uint8_t *buffer, uint8_t length) {
+  // Never start a transmission on top of one still in progress.
+  uint32_t waitStart = millis();
+  while (loRaTxPending && (millis() - waitStart) < LORA_TX_TIMEOUT_MS) {
+    Radio.IrqProcess();
+    delay(1);
+  }
+
+  loRaTxPending = true;
+  isLoRaIdle = false;
+  Radio.Send(buffer, length);
+
+  uint32_t start = millis();
+  while (loRaTxPending && (millis() - start) < LORA_TX_TIMEOUT_MS) {
+    Radio.IrqProcess();
+    delay(1);
+  }
+
+  if (loRaTxPending) {
+    // The radio never reported completion. Clear the flag so one stuck
+    // transmission cannot wedge every later send, and let the main loop put the
+    // radio back into receive.
+    loRaTxPending = false;
+    isLoRaIdle = true;
+    addLog("[LoRa] TX did not complete within " + String(LORA_TX_TIMEOUT_MS) + " ms");
+    return false;
+  }
+  return true;
 }
 
 void OnRxTimeout(void) {
@@ -1843,7 +2008,16 @@ void OnRxDone(uint8_t *payload, uint16_t messageSize, int16_t rssiMeasured, int8
   rssi = rssiMeasured;
   lastSnr = snr;   // v0.3.6 — track for OLED status cycle
   pktRxCount++;    // v0.3.6 — track for OLED status cycle
-  rxSize = messageSize;
+  // v0.4.2 — Clamp before copying. `messageSize` comes from the radio driver and
+  // everything downstream indexes rxPacket with it; the NUL terminator alone
+  // needs one byte more than the payload. This is the single entry point for
+  // every byte an unauthenticated sender can put into this device, so it is
+  // worth being certain here rather than in each of its readers.
+  if (messageSize > BUFFER_SIZE - 1) {
+    addLog("[LoRa] Oversized RX packet (" + String(messageSize) + " bytes) - truncating");
+    messageSize = BUFFER_SIZE - 1;
+  }
+  rxSize = (int16_t)messageSize;
   memcpy(rxPacket, payload, messageSize);
   rxPacket[messageSize] = '\0';
   Radio.Sleep();
@@ -1858,9 +2032,17 @@ void OnRxDone(uint8_t *payload, uint16_t messageSize, int16_t rssiMeasured, int8
     addrConflict = true;
     addLog("[WARN] Duplicate node address detected! Another node is using " +
            String(local.region) + "." + String(local.community) + "." + String(local.node));
-    // Notify host over serial: CMD_ADDR_CONFLICT (0x25) + 3-byte conflicting address
-    uint8_t conflictMsg[5] = {0x25, 3, local.region, local.community, local.node};
-    Serial.write(conflictMsg, 5);
+    // Notify the host over serial: CMD_ADDR_CONFLICT (0x25).
+    //
+    // v0.4.2 — this used to go out in the legacy [cmd, payloadSize, payload…]
+    // shape, five bytes long, but the host frames 0x25 as a standard 8-byte
+    // desktop packet. It therefore waited for three more bytes and took them
+    // from whatever arrived next, so a duplicate address on the mesh corrupted
+    // the packet behind the warning. The conflicting address is this board's
+    // own, which the header already carries as the source.
+    uint8_t conflictMsg[8] = {0x25, 0x00, local.region, local.community, local.node,
+                              0xFF, 0xFF, 0xFF};
+    Serial.write(conflictMsg, 8);
   }
 
   ParseReceivedMessage();
@@ -1974,7 +2156,7 @@ void SendPing(nodeAddress destination) {
   addLog("[LoRa] Sending PING to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
   // v0.3.7 — ACK host BEFORE Radio.Send (LoRa TX at SF7 takes ~200-500ms; serial ACK must arrive first)
   Serial.write(hostACK, HOST_ACK_NACK_SIZE);
-  Radio.Send(controlPacket, CONTROL_SIZE);
+  SendLoRaAndWait(controlPacket, CONTROL_SIZE);
 }
 
 // Send an ACK to the specified destination address
@@ -1987,7 +2169,7 @@ void SendACK(nodeAddress destination) {
   DisplayTXMessage("ACK", destination);
   isLoRaIdle = false;
   addLog("[LoRa] Sending ACK to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
-  Radio.Send(controlPacket, CONTROL_SIZE);
+  SendLoRaAndWait(controlPacket, CONTROL_SIZE);
   //Serial.printf("Sending ACK to %d.%d.%d\n", destination.region, destination.community, destination.node);
   Serial.write(hostACK, HOST_ACK_NACK_SIZE);
 }
@@ -2026,7 +2208,7 @@ void SendMessage(nodeAddress destination, String message, String type) {
   
   addLog("[LoRa] Sending MESSAGE to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node) + " - Type: " + type + ", Length: " + String(totalPacketLength));
   addLog("[LoRa] Message content: " + messageData.substring(0, min(50, (int)messageData.length())) + "...");
-  Radio.Send(serialBuf, (uint8_t)totalPacketLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)totalPacketLength);
   addLog("[LoRa] MESSAGE transmission completed");
 }
 
@@ -2092,10 +2274,11 @@ void SendMultipartMessage(nodeAddress destination, String message, String type) 
     
     // Send the packet
     addLog("[LoRa] Sending MULTIPART MESSAGE part " + String(part + 1) + "/" + String(totalParts) + " to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
-    Radio.Send(packet, packetSize);
-    
-    // Small delay between parts
-    delay(100);
+    // v0.4.2 — wait for each part to reach the air. The fixed delay that used
+    // to stand in for this was shorter than the airtime of the packet it was
+    // pacing, so the next Radio.Send() overwrote a transmission still in
+    // progress and the receiver saw a sequence with holes in it.
+    SendLoRaAndWait(packet, packetSize);
   }
   
   addLog("[LoRa] MULTIPART MESSAGE completed - " + String(totalParts) + " parts sent");
@@ -2123,7 +2306,7 @@ void SendTransaction(nodeAddress destination, String transaction, String type) {
   // Update packet header and send the transaction over the air
   serialBuf[0] = (uint8_t)TRANSACTION;
   addLog("[LoRa] Sending TRANSACTION to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node) + " - Type: " + type + ", Length: " + String(txLength));
-  Radio.Send(serialBuf, (uint8_t)txLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)txLength);
 }
 
 // Send a large transaction using multipart packets
@@ -2195,10 +2378,9 @@ void SendMultipartTransaction(nodeAddress destination, String transaction, Strin
     
     // Send the packet
     addLog("[LoRa] Sending MULTIPART part " + String(part + 1) + "/" + String(totalParts) + " to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
-    Radio.Send(packet, packetSize);
-    
-    // Small delay between parts to avoid overwhelming the receiver
-    delay(500);
+    // v0.4.2 — wait for each part to reach the air rather than guessing at a
+    // delay; see SendLoRaAndWait.
+    SendLoRaAndWait(packet, packetSize);
   }
   
   addLog("[LoRa] MULTIPART TRANSACTION completed - " + String(totalParts) + " parts sent");
@@ -2275,10 +2457,9 @@ void SendMultipartBroadcast(String message, String type, String priority, uint8_
     
     // Send the packet
     addLog("[LoRa] Sending MULTIPART BROADCAST part " + String(part + 1) + "/" + String(totalParts));
-    Radio.Send(packet, packetSize);
-    
-    // Small delay between parts
-    delay(500);
+    // v0.4.2 — wait for each part to reach the air rather than guessing at a
+    // delay; see SendLoRaAndWait.
+    SendLoRaAndWait(packet, packetSize);
   }
   
   addLog("[LoRa] MULTIPART BROADCAST completed - " + String(totalParts) + " parts sent");
@@ -2300,7 +2481,12 @@ int FindMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNod
 }
 
 int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, uint8_t totalParts, uint8_t dataType, uint8_t hops) {
-  if (activeMultipartSessions >= MAX_MULTIPART_PARTS) {
+  // Note: `MAX_MULTIPART_SESSIONS` is how many senders may be mid-sequence at
+  // once, which is a different quantity from how many parts one sequence has —
+  // they merely share a value. Each session reserves a full reassembly buffer
+  // (MAX_MULTIPART_PARTS × MULTIPART_CHUNK_SIZE = 4000 bytes), so the table
+  // costs about 82 KB of static RAM.
+  if (activeMultipartSessions >= MAX_MULTIPART_SESSIONS) {
     addLog("[ERROR] No space for new multipart session");
     return -1;
   }
@@ -2325,6 +2511,19 @@ int CreateMultipartSession(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcN
 }
 
 bool ProcessMultipartPacket() {
+  // v0.4.2 — Validate the header before it is used to index anything.
+  //
+  // Every field below arrives over the air from an unauthenticated sender. The
+  // previous version created the session first and only then checked the part
+  // number, and never checked `totalParts` at all — so a packet claiming 255
+  // parts wrote `partsReceived[254]` into a 20-element array and
+  // `partSizes[254]` into a 20-element array, corrupting whatever followed them
+  // in memory. Anyone within radio range could send that.
+  if (rxSize < MULTIPART_HEADER_SIZE) {
+    addLog("[ERROR] Multipart packet too short: " + String(rxSize) + " bytes");
+    return false;
+  }
+
   // Extract packet information
   uint8_t srcRegion = rxPacket[4];
   uint8_t srcCommunity = rxPacket[5];
@@ -2334,8 +2533,37 @@ bool ProcessMultipartPacket() {
   uint8_t dataType = rxPacket[9];
   uint8_t hops = rxPacket[10];  // v0.4.0 — mesh hop count carried in the `reserved` byte
 
+  if (totalParts < 1 || totalParts > MAX_MULTIPART_PARTS) {
+    addLog("[ERROR] Invalid multipart total: " + String(totalParts) +
+           " (max " + String(MAX_MULTIPART_PARTS) + ") - dropping");
+    return false;
+  }
+  if (partNumber < 1 || partNumber > totalParts) {
+    addLog("[ERROR] Invalid part number: " + String(partNumber) + " (max: " + String(totalParts) + ")");
+    return false;
+  }
+
+  int dataSize = rxSize - MULTIPART_HEADER_SIZE;
+  if (dataSize > MULTIPART_CHUNK_SIZE) {
+    // A part longer than a chunk would overwrite the start of the next part's
+    // slot, and its recorded size would then push the reassembled total past the
+    // assembly buffer.
+    addLog("[ERROR] Multipart chunk of " + String(dataSize) + " bytes exceeds " +
+           String(MULTIPART_CHUNK_SIZE) + " - dropping");
+    return false;
+  }
+
   // Find or create session
   int sessionIndex = FindMultipartSession(srcRegion, srcCommunity, srcNode, dataType);
+  if (sessionIndex != -1 && multipartBuffer[sessionIndex].totalParts != totalParts) {
+    // A sender reusing the same (source, type) key with a different part count
+    // means the previous sequence was abandoned. Start over rather than mixing
+    // two payloads into one buffer.
+    addLog("[LoRa] Multipart part count changed for " + String(srcRegion) + "." +
+           String(srcCommunity) + "." + String(srcNode) + " - restarting session");
+    RemoveMultipartSession(sessionIndex);
+    sessionIndex = -1;
+  }
   if (sessionIndex == -1) {
     sessionIndex = CreateMultipartSession(srcRegion, srcCommunity, srcNode, totalParts, dataType, hops);
     if (sessionIndex == -1) {
@@ -2348,13 +2576,7 @@ bool ProcessMultipartPacket() {
     addLog("[LoRa] Using existing multipart session for " + String(srcRegion) + "." + String(srcCommunity) + "." + String(srcNode) + " - " + String(multipartBuffer[sessionIndex].receivedParts) + "/" + String(multipartBuffer[sessionIndex].totalParts) + " parts, Type: " + String(dataType));
     addLog("[DEBUG] Session exists, receiving part " + String(partNumber) + " of " + String(totalParts));
   }
-  
-  // Check if part number is valid
-  if (partNumber < 1 || partNumber > totalParts) {
-    addLog("[ERROR] Invalid part number: " + String(partNumber) + " (max: " + String(totalParts) + ")");
-    return false;
-  }
-  
+
   // Check if we already have this part
   if (multipartBuffer[sessionIndex].partsReceived[partNumber - 1]) {
     addLog("[LoRa] Duplicate part " + String(partNumber) + " received, ignoring");
@@ -2370,10 +2592,11 @@ bool ProcessMultipartPacket() {
   }
   addLog("[DEBUG] Already received parts: " + receivedParts + " now receiving part " + String(partNumber));
   
-  // Extract data from packet (starts at offset 12)
-  int dataSize = rxSize - MULTIPART_HEADER_SIZE;
+  // Extract data from packet (starts at offset 12). `dataSize` was validated
+  // against MULTIPART_CHUNK_SIZE above, and `partNumber` against `totalParts`,
+  // so this write stays inside the part's own slot.
   int startPos = (partNumber - 1) * MULTIPART_CHUNK_SIZE;
-  
+
   // Copy data to reassembly buffer
   for (int i = 0; i < dataSize && (startPos + i) < (MAX_MULTIPART_PARTS * MULTIPART_CHUNK_SIZE); i++) {
     multipartBuffer[sessionIndex].assembledData[startPos + i] = rxPacket[12 + i];
@@ -2399,30 +2622,39 @@ bool ProcessMultipartPacket() {
 
 bool ReassembleMultipartPacket(int sessionIndex) {
   MultipartReassembly* session = &multipartBuffer[sessionIndex];
-  
-  // Calculate total data size
-  int totalDataSize = 0;
-  for (int part = 0; part < session->totalParts; part++) {
-    if (session->partsReceived[part]) {
-      int partSize = MULTIPART_CHUNK_SIZE;
-      if (part == session->totalParts - 1) {
-        // Last part might be smaller
-        partSize = strlen(session->assembledData + (part * MULTIPART_CHUNK_SIZE));
-      }
-      totalDataSize += partSize;
-    }
+
+  // v0.4.2 — `totalParts` is validated on arrival, but assert it here too: this
+  // function indexes three fixed-size arrays with it, and it is the last place
+  // that could stop a malformed session from reading past them.
+  if (session->totalParts < 1 || session->totalParts > MAX_MULTIPART_PARTS) {
+    addLog("[ERROR] Refusing to reassemble session with " + String(session->totalParts) + " parts");
+    RemoveMultipartSession(sessionIndex);
+    return false;
   }
-  
-  // Create final assembled data using a proper buffer
-  char assembledBuffer[MAX_MULTIPART_PARTS * MULTIPART_CHUNK_SIZE + 1];
+
+  // Create final assembled data using a proper buffer.
+  //
+  // The size calculation that used to precede this loop called strlen() on
+  // binary chunk data — reading past the end of a chunk that contained no NUL —
+  // and then threw the answer away, because the copy below tracks the real
+  // length itself. It is gone.
+  static const int ASSEMBLED_CAPACITY = MAX_MULTIPART_PARTS * MULTIPART_CHUNK_SIZE;
+  char assembledBuffer[ASSEMBLED_CAPACITY + 1];
   int assembledLength = 0;
-  
+
   for (int part = 0; part < session->totalParts; part++) {
     if (session->partsReceived[part]) {
       int startPos = part * MULTIPART_CHUNK_SIZE;
       int partSize = session->partSizes[part]; // Use stored actual part size
       addLog("[DEBUG] Part " + String(part + 1) + " size: " + String(partSize) + " bytes");
-      
+
+      // Never write past the assembly buffer, whatever the recorded sizes say.
+      if (partSize < 0) partSize = 0;
+      if (assembledLength + partSize > ASSEMBLED_CAPACITY) {
+        partSize = ASSEMBLED_CAPACITY - assembledLength;
+        addLog("[ERROR] Reassembly buffer full at part " + String(part + 1) + " - truncating");
+      }
+
       // Copy binary data properly to buffer
       for (int i = 0; i < partSize; i++) {
         assembledBuffer[assembledLength + i] = session->assembledData[startPos + i];
@@ -2482,10 +2714,16 @@ void ProcessReassembledTransaction(String transactionData, uint8_t srcRegion, ui
     txData = transactionData.substring(colonPos + 1);
   }
   
-  // Forward to host via serial
+  // v0.4.2 — This legacy line of free-form text ("TRANSACTION:<data>") goes down the
+  // same wire the host reads binary packets from, and the data is arbitrary: a
+  // byte pair inside it can look like a packet header, after which the framer
+  // consumes the real packet behind it. The web UI and GET /api/logs carry the
+  // same information, so it is off unless HOST_SERIAL_DEBUG is set.
+#if HOST_SERIAL_DEBUG
   String fullMessage = "TRANSACTION:" + transactionData;
   Serial.write(fullMessage.c_str(), fullMessage.length());
   Serial.write('\n');
+#endif
   
   // Auto-forward to configured gateway if available
   String internetResponse = "";
@@ -2600,10 +2838,16 @@ void ProcessReassembledMessage(String messageData, uint8_t srcRegion, uint8_t sr
   // Display on screen
   DisplayRXMessage(messageData, senderAddress);
   
-  // Forward to host via serial
+  // v0.4.2 — This legacy line of free-form text ("MESSAGE:<data>") goes down the
+  // same wire the host reads binary packets from, and the data is arbitrary: a
+  // byte pair inside it can look like a packet header, after which the framer
+  // consumes the real packet behind it. The web UI and GET /api/logs carry the
+  // same information, so it is off unless HOST_SERIAL_DEBUG is set.
+#if HOST_SERIAL_DEBUG
   String fullMessage = "MESSAGE:" + messageData;
   Serial.write(fullMessage.c_str(), fullMessage.length());
   Serial.write('\n');
+#endif
   
   addLog("[LoRa] Reassembled message forwarded to host");
 }
@@ -2620,6 +2864,21 @@ static uint32_t fnv1a(const String& s) {
 
 // Returns true if an identical broadcast from this source was recently processed.
 // Records the entry on first sight.
+// v0.4.2 — Keyed on the payload alone, not on (source, payload).
+//
+// A relayed broadcast is retransmitted with the *relay's* address as its source
+// (SendMultipartBroadcast writes `local` into the multipart header), so the same
+// original payload arrives from a different "source" at every hop. Keying on the
+// source therefore meant a node never recognised a payload it had already seen
+// and relayed, and flood suppression did nothing: with N nodes in range the same
+// transaction reached the gateway once per path through the mesh, and was
+// submitted to the Dogecoin network once per arrival. The hop limit bounded the
+// storm but did not stop the duplication.
+//
+// Suppressing an identical payload from any source within the TTL is exactly what
+// flood suppression should do — two nodes sending byte-identical data inside two
+// minutes are relaying the same thing. The source is kept in the table for the
+// log line only.
 bool isRecentlySeenBroadcast(uint8_t srcRegion, uint8_t srcCommunity, uint8_t srcNode, const String& data) {
   uint32_t hash = fnv1a(data);
   unsigned long now = millis();
@@ -2635,10 +2894,7 @@ bool isRecentlySeenBroadcast(uint8_t srcRegion, uint8_t srcCommunity, uint8_t sr
 
   // Check for duplicate
   for (int i = 0; i < seenBroadcastCount; i++) {
-    if (seenBroadcasts[i].srcRegion    == srcRegion    &&
-        seenBroadcasts[i].srcCommunity == srcCommunity &&
-        seenBroadcasts[i].srcNode      == srcNode      &&
-        seenBroadcasts[i].dataHash     == hash) {
+    if (seenBroadcasts[i].dataHash == hash) {
       return true;
     }
   }
@@ -2672,27 +2928,51 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
   // Display on screen
   DisplayBroadcastMessage(broadcastData, senderAddress);
   
-  // Forward to host via serial
+  // v0.4.2 — This legacy line of free-form text ("BROADCAST:<data>") goes down the
+  // same wire the host reads binary packets from, and the data is arbitrary: a
+  // byte pair inside it can look like a packet header, after which the framer
+  // consumes the real packet behind it. The web UI and GET /api/logs carry the
+  // same information, so it is off unless HOST_SERIAL_DEBUG is set.
+#if HOST_SERIAL_DEBUG
   String fullMessage = "BROADCAST:" + broadcastData;
   Serial.write(fullMessage.c_str(), fullMessage.length());
   Serial.write('\n');
+#endif
   
   // Auto-forward to configured gateway if available
   String internetResponse = "";
   bool gateway_forwarded = false;
   
-  // Extract transaction data from broadcast (format: "transaction:normal:HEXDATA")
+  // v0.4.2 — Parse the broadcast envelope generically.
+  //
+  // A broadcast payload is "<type>:<priority>:<data>". The old code only
+  // recognised the literal prefix "transaction:", so anything else — an
+  // announcement, say — fell through with its type and priority left at the
+  // hardcoded defaults. It was then relayed as "transaction:normal:" plus the
+  // *entire* original payload, and forwarded to the Dogecoin network as if the
+  // whole thing were a raw transaction.
+  String bcType = "transaction";
+  String bcPriority = "normal";
   String txData = broadcastData;
-  if (broadcastData.startsWith("transaction:normal:")) {
-    txData = broadcastData.substring(19); // Remove "transaction:normal:" prefix
-  } else if (broadcastData.startsWith("transaction:")) {
-    int colonPos = broadcastData.indexOf(':', 12);
-    if (colonPos > 0) {
-      txData = broadcastData.substring(colonPos + 1);
+  {
+    int c1 = broadcastData.indexOf(':');
+    int c2 = (c1 > 0) ? broadcastData.indexOf(':', c1 + 1) : -1;
+    if (c1 > 0 && c2 > c1) {
+      bcType     = broadcastData.substring(0, c1);
+      bcPriority = broadcastData.substring(c1 + 1, c2);
+      txData     = broadcastData.substring(c2 + 1);
     }
   }
-  
-  if (gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
+
+  // Only a transaction belongs on the Dogecoin network. Posting an announcement
+  // to a node as a raw transaction can only ever be rejected, and on a metered
+  // or rate-limited gateway it is not free.
+  bool isTransaction = (bcType == "transaction");
+  if (!isTransaction) {
+    addLog("[GATEWAY] Broadcast type '" + bcType + "' is not a transaction - not forwarding");
+  }
+
+  if (isTransaction && gatewayForwardingEnabled() && gateway_type != "none" && gateway_ip.length() > 0) {
     String gatewayUrl = "http://" + gateway_ip + ":" + gateway_port;
     if (gateway_type != "core" && gateway_endpoint.length() > 0) {
       gatewayUrl += gateway_endpoint;
@@ -2717,7 +2997,7 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
       addLog("[GATEWAY] " + gateway_type + " response: " + internetResponse);
       gateway_forwarded = true;
     }
-  } else if (gatewayForwardingEnabled() && internet_connected) {
+  } else if (isTransaction && gatewayForwardingEnabled() && internet_connected) {
     // Fallback to default internet gateway
     addLog("[GATEWAY] No configured gateway, using default internet gateway (BlockCypher)");
     addLog("[GATEWAY] Broadcast transaction data length: " + String(txData.length()) + " bytes");
@@ -2769,20 +3049,11 @@ void ProcessReassembledBroadcast(String broadcastData, uint8_t srcRegion, uint8_
       addLog("[LoRa] Mesh hop limit (" + String(MAX_REBROADCAST_HOPS) + ") reached at hop " + String(hops) + " - not rebroadcasting");
     } else if (ENABLE_MESH_REBROADCAST) {
       addLog("[LoRa] Rebroadcasting to other LoRa devices for mesh networking (hop " + String(hops + 1) + ")");
-      // Extract type and priority from original broadcast data
-      String rebroadcastType = "transaction";
-      String rebroadcastPriority = "normal";
-      if (broadcastData.startsWith("transaction:normal:")) {
-        rebroadcastType = "transaction";
-        rebroadcastPriority = "normal";
-      } else if (broadcastData.startsWith("transaction:")) {
-        rebroadcastType = "transaction";
-        int colonPos = broadcastData.indexOf(':', 12);
-        if (colonPos > 0) {
-          rebroadcastPriority = broadcastData.substring(12, colonPos);
-        }
-      }
-
+      // Relay it as what it is. bcType/bcPriority came from the envelope above,
+      // so a non-transaction broadcast keeps its own type instead of being
+      // relabelled as a transaction carrying its own header as payload.
+      String rebroadcastType = bcType;
+      String rebroadcastPriority = bcPriority;
       String rebroadcastData = rebroadcastType + ":" + rebroadcastPriority + ":" + txData;
       // Always rebroadcast via multipart so the incremented hop counter (carried
       // in the multipart `reserved` byte) survives the next relay.
@@ -2813,7 +3084,7 @@ void handleApiMultipartStatus() {
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"active_sessions\":" + String(activeMultipartSessions) + ",";
-  response += "\"max_sessions\":" + String(MAX_MULTIPART_PARTS) + ",";
+  response += "\"max_sessions\":" + String(MAX_MULTIPART_SESSIONS) + ",";
   response += "\"chunk_size\":" + String(MULTIPART_CHUNK_SIZE) + ",";
   response += "\"max_parts\":" + String(MAX_MULTIPART_PARTS) + ",";
   response += "\"timeout_ms\":" + String(MULTIPART_TIMEOUT_MS) + ",";
@@ -2885,44 +3156,78 @@ void ProcessTransactionRequest(PendingRequest& req);
 void ProcessMessageRequest(PendingRequest& req);
 void ProcessPingRequest(PendingRequest& req);
 
+// v0.4.2 — Rewritten to dequeue before dispatching, and to iterate rather than
+// recurse.
+//
+// The old shape had two defects that compounded:
+//
+//   1. The request was removed from the queue *after* its handler returned. A
+//      handler for a request with requiresConfirmation == false called straight
+//      back into this function, which then found the same request still sitting
+//      at pendingRequests[0] with the state still IDLE — and dispatched it
+//      again. Every level of that recursion transmitted over LoRa, and it ended
+//      only when the stack ran out and the board reset.
+//   2. Being re-entrant at all was unsafe: a confirmation arriving mid-dispatch
+//      (LoRa RX is serviced from inside SendLoRaAndWait) calls
+//      HandleConfirmationReceived, which also calls this function.
+//
+// Now: take the request off the queue first, dispatch it, and either stop
+// because it is waiting for a confirmation or continue round the loop. A guard
+// makes re-entry a no-op instead of a second concurrent walk of the queue.
 void ProcessNextQueuedRequest() {
-  if (pendingRequestCount == 0) {
-    currentRequestState = REQUEST_IDLE;
-    addLog("[QUEUE] No more requests in queue - returning to idle state");
+  static bool processing = false;
+  if (processing) {
+    addLog("[QUEUE] Re-entrant call ignored - already processing the queue");
     return;
   }
-  
-  if (currentRequestState != REQUEST_IDLE) {
-    addLog("[ERROR] Cannot process next request - system not idle");
-    return;
+  processing = true;
+
+  while (true) {
+    if (pendingRequestCount == 0) {
+      currentRequestState = REQUEST_IDLE;
+      addLog("[QUEUE] No more requests in queue - returning to idle state");
+      break;
+    }
+
+    if (currentRequestState != REQUEST_IDLE) {
+      addLog("[QUEUE] Not idle - leaving the rest of the queue for later");
+      break;
+    }
+
+    // Copy the request out and remove it from the queue *before* dispatching, so
+    // no path can ever see it as still pending.
+    PendingRequest req = pendingRequests[0];
+    for (int i = 0; i < pendingRequestCount - 1; i++) {
+      pendingRequests[i] = pendingRequests[i + 1];
+    }
+    pendingRequestCount--;
+
+    currentRequestId = req.requestId;
+    addLog("[QUEUE] Processing request - ID: " + req.requestId + ", Type: " + String(req.type));
+
+    switch (req.type) {
+      case REQUEST_BROADCAST:
+        ProcessBroadcastRequest(req);
+        break;
+      case REQUEST_TRANSACTION:
+        ProcessTransactionRequest(req);
+        break;
+      case REQUEST_MESSAGE:
+        ProcessMessageRequest(req);
+        break;
+      case REQUEST_PING:
+        ProcessPingRequest(req);
+        break;
+    }
+
+    // A request awaiting confirmation owns the queue until it is confirmed or
+    // times out; anything else falls through to the next one.
+    if (currentRequestState == REQUEST_WAITING_FOR_CONFIRMATION) {
+      break;
+    }
   }
-  
-  PendingRequest& req = pendingRequests[0];
-  currentRequestId = req.requestId;
-  
-  addLog("[QUEUE] Processing request - ID: " + req.requestId + ", Type: " + String(req.type));
-  
-  // Process the request based on type
-  switch (req.type) {
-    case REQUEST_BROADCAST:
-      ProcessBroadcastRequest(req);
-      break;
-    case REQUEST_TRANSACTION:
-      ProcessTransactionRequest(req);
-      break;
-    case REQUEST_MESSAGE:
-      ProcessMessageRequest(req);
-      break;
-    case REQUEST_PING:
-      ProcessPingRequest(req);
-      break;
-  }
-  
-  // Remove the processed request from queue
-  for (int i = 0; i < pendingRequestCount - 1; i++) {
-    pendingRequests[i] = pendingRequests[i + 1];
-  }
-  pendingRequestCount--;
+
+  processing = false;
 }
 
 void ProcessBroadcastRequest(PendingRequest& req) {
@@ -2939,10 +3244,10 @@ void ProcessBroadcastRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for confirmation - ID: " + req.requestId);
-  } else {
-    // No confirmation needed, process next request immediately
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void ProcessTransactionRequest(PendingRequest& req) {
@@ -2958,9 +3263,10 @@ void ProcessTransactionRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for confirmation - ID: " + req.requestId);
-  } else {
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void ProcessMessageRequest(PendingRequest& req) {
@@ -2976,9 +3282,10 @@ void ProcessMessageRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for confirmation - ID: " + req.requestId);
-  } else {
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void ProcessPingRequest(PendingRequest& req) {
@@ -2989,9 +3296,10 @@ void ProcessPingRequest(PendingRequest& req) {
     currentRequestState = REQUEST_WAITING_FOR_CONFIRMATION;
     confirmationStartTime = millis();
     addLog("[QUEUE] Waiting for ACK - ID: " + req.requestId);
-  } else {
-    ProcessNextQueuedRequest();
   }
+  // Nothing else to do: ProcessNextQueuedRequest drives the queue and moves
+  // on by itself when this request needs no confirmation. Calling back into
+  // it from here re-dispatched this very request, forever.
 }
 
 void CheckRequestTimeouts() {
@@ -3019,12 +3327,42 @@ void CheckRequestTimeouts() {
   }
 }
 
+// v0.4.2 — Ignore a confirmation identical to one just accepted.
+//
+// Confirmations carry no request id, so any DOGECOIN_RESPONSE completes whatever
+// request happens to be waiting. That collides with the gateway deliberately
+// sending each confirmation twice for reliability (see
+// ProcessReassembledTransaction): the first copy completed the request it was
+// meant for, the queue moved on and started the next one, and the second copy
+// arrived moments later and completed *that* one too — a request whose reply had
+// not come back yet, and never would be waited for.
+//
+// Remembering the last confirmation for the length of a confirmation window is
+// enough to tell a retransmission from a genuine second answer, and keeps the
+// redundant send doing what it was meant to do.
 void HandleConfirmationReceived(String confirmationData) {
-  if (currentRequestState == REQUEST_WAITING_FOR_CONFIRMATION) {
-    addLog("[QUEUE] Confirmation received for request - ID: " + currentRequestId + ", Data: " + confirmationData.substring(0, min(50, (int)confirmationData.length())));
-    currentRequestState = REQUEST_IDLE;
-    ProcessNextQueuedRequest();
+  static uint32_t lastConfirmationHash = 0;
+  static unsigned long lastConfirmationAt = 0;
+  static bool haveLastConfirmation = false;
+
+  if (currentRequestState != REQUEST_WAITING_FOR_CONFIRMATION) {
+    return;
   }
+
+  uint32_t hash = fnv1a(confirmationData);
+  unsigned long now = millis();
+  if (haveLastConfirmation && hash == lastConfirmationHash &&
+      (now - lastConfirmationAt) < CONFIRMATION_TIMEOUT_MS) {
+    addLog("[QUEUE] Duplicate confirmation ignored - it does not belong to " + currentRequestId);
+    return;
+  }
+  lastConfirmationHash = hash;
+  lastConfirmationAt = now;
+  haveLastConfirmation = true;
+
+  addLog("[QUEUE] Confirmation received for request - ID: " + currentRequestId + ", Data: " + confirmationData.substring(0, min(50, (int)confirmationData.length())));
+  currentRequestState = REQUEST_IDLE;
+  ProcessNextQueuedRequest();
 }
 
 // Send a broadcast message
@@ -3046,7 +3384,7 @@ void SendBroadcast(String message, String type, String priority) {
   // Update packet header and send the broadcast over the air
   serialBuf[0] = (uint8_t)BROADCAST;
   addLog("[LoRa] Sending BROADCAST - Type: " + type + ", Priority: " + priority + ", Length: " + String(broadcastLength));
-  Radio.Send(serialBuf, (uint8_t)broadcastLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)broadcastLength);
 }
 
 // Basically we will just send out the the serial buffer
@@ -3064,7 +3402,7 @@ void SendMessageFromBuffer(int messageLength) {
 
   // Update packet header and send the message over the air
   serialBuf[0] = (uint8_t)MESSAGE;
-  Radio.Send(serialBuf, (uint8_t)messageLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)messageLength);
 }
 
 // Read the serial header and extract the command type and payload size from it.
@@ -3079,6 +3417,70 @@ bool ReadSerialHeader(serialCommand &commandType, uint8_t &payloadSize) {
   commandType = (serialCommand)serialHeader[0];
   payloadSize = serialHeader[1];
   return true;
+}
+
+// v0.4.2 — Read exactly `n` bytes from the host, waiting up to `timeoutMs` in
+// total for them to arrive.
+//
+// Serial.readBytes() has its own stream timeout, but it is a global setting the
+// rest of this sketch also depends on; taking the wait explicitly keeps the
+// framing rules for a host frame in one readable place and makes a truncated
+// frame a definite failure rather than a partial read nobody checks.
+bool ReadHostBytes(uint8_t *dst, size_t n, uint32_t timeoutMs) {
+  if (n == 0) {
+    return true;
+  }
+  size_t got = 0;
+  uint32_t start = millis();
+  while (got < n && (millis() - start) < timeoutMs) {
+    int avail = Serial.available();
+    if (avail <= 0) {
+      delay(1);
+      continue;
+    }
+    size_t want = n - got;
+    if ((size_t)avail < want) {
+      want = (size_t)avail;
+    }
+    got += Serial.readBytes(dst + got, want);
+  }
+  return got == n;
+}
+
+// v0.4.2 — Read a host payload that carries no length of its own.
+//
+// The desktop protocol has no size field for CMD_DOGE_TX / CMD_REQUEST_BALANCE
+// single packets or for a relayed CMD_MESSAGE, so the only boundary available is
+// a gap in the byte stream. This waits briefly for the payload to start, then
+// consumes bytes until the host has been quiet for HOST_FRAME_QUIET_MS.
+//
+// What it deliberately does *not* do is drain everything currently buffered,
+// which is what the previous implementation did after a fixed delay(500). That
+// glued any command queued behind this one onto its payload and then discarded
+// it — so two commands sent close together lost the second, and a multipart
+// sequence arrived as one oversized, unparseable frame.
+//
+// Returns the number of bytes read (0 if the payload never started).
+uint8_t ReadHostPayloadUntilQuiet(uint8_t *dst, uint8_t maxLen) {
+  uint8_t len = 0;
+  uint32_t start = millis();
+  // Wait for the first byte.
+  while (Serial.available() <= 0 && (millis() - start) < HOST_PAYLOAD_START_TIMEOUT_MS) {
+    delay(1);
+  }
+  uint32_t lastByte = millis();
+  while (len < maxLen) {
+    if (Serial.available() > 0) {
+      dst[len++] = (uint8_t)Serial.read();
+      lastByte = millis();
+      continue;
+    }
+    if ((millis() - lastByte) >= HOST_FRAME_QUIET_MS) {
+      break;
+    }
+    delay(1);
+  }
+  return len;
 }
 
 // Read the host payload into the serial buffer.
@@ -3139,13 +3541,26 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
         memcpy(ota + 8, extraPayload, payLen);
         int otaLen = 8 + payLen;
-        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
-        pktTxCount++;
+        if ((flags & 0x0F) == DESKTOP_FLAG_MULTIPART &&
+            extraLen >= DESKTOP_MULTIPART_EXTRA) {
+          nodeAddress mpDest = { hdrRest[3], hdrRest[4], hdrRest[5] };
+          char partLabel[32];
+          snprintf(partLabel, sizeof(partLabel), "TX part %u/%u",
+                   (unsigned)(extraPayload[1] + 1), (unsigned)extraPayload[0]);
+          DisplayTXMessage(String(partLabel), mpDest);
+        }
+        // v0.4.2 — block until the packet is actually on the air. This used to
+        // set isLoRaIdle = true immediately, which made the next loop iteration
+        // switch the radio to receive a few milliseconds into a transmission
+        // that needs hundreds — so the transaction never left the board.
+        SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
         // v0.3.6 — trigger "TX OK!" OLED page after successful send
         showTxOk = true;
         txOkTimestamp = millis();
-        isLoRaIdle = true;
       }
+      // The host treats this reply as its acknowledgement, and — because it is
+      // written only after the transmission completed — as permission to send
+      // the next frame of a multipart sequence.
       uint8_t reply[8] = {0x10, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
       bleSend(reply, 8);
@@ -3163,8 +3578,8 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
         memcpy(ota + 8, extraPayload, payLen);
         int otaLen = 8 + payLen;
-        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
-        isLoRaIdle = true;
+        // v0.4.2 — wait for the transmission to finish; see the 0x10 case.
+        SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
       }
       uint8_t reply[8] = {0x11, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
@@ -3366,31 +3781,32 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
 // firmware's messageType MESSAGE == 0x03), so the destination node forwards it to
 // its own host app, which parses the TX_ACK:/BAL: prefix.
 void RelayDesktopMessageOverLoRa() {
-  // ReadSerialHeader already consumed [0x03, 0x00]; the delay(500) in HostSerialRead
-  // has let the rest arrive: [src_r, src_c, src_n, dst_r, dst_c, dst_n, ...text...].
+  // ReadSerialHeader already consumed [0x03, 0x00]. The rest of the frame is
+  // [src_r, src_c, src_n, dst_r, dst_c, dst_n, ...text...]; the six address
+  // bytes have a known length, the text does not, so it ends at a gap in the
+  // byte stream (v0.4.2 — this used to drain everything buffered, which glued a
+  // second acknowledgement queued behind the first onto its text).
   uint8_t rest[BUFFER_SIZE];
-  int restLen = 0;
-  while (Serial.available() > 0 && restLen < BUFFER_SIZE) {
-    rest[restLen++] = (uint8_t)Serial.read();
-  }
-  if (restLen < 6) {
+  if (!ReadHostBytes(rest, 6, HOST_FRAME_TIMEOUT_MS)) {
     Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
     return;
   }
+  uint8_t textLen = ReadHostPayloadUntilQuiet(rest + 6, (uint8_t)(BUFFER_SIZE - 8 - 6));
+
   uint8_t ota[BUFFER_SIZE];
   ota[0] = 0x03;  // CMD_MESSAGE == messageType MESSAGE
   ota[1] = 0x00;
   for (int i = 0; i < 6; i++) ota[2 + i] = rest[i];  // src(3) + dst(3)
-  int textLen = restLen - 6;
-  if (8 + textLen > BUFFER_SIZE) textLen = BUFFER_SIZE - 8;
   for (int i = 0; i < textLen; i++) ota[8 + i] = rest[6 + i];
   int otaLen = 8 + textLen;
   nodeAddress relayDest = { ota[5], ota[6], ota[7] };
   DisplayTXMessage("Relay", relayDest);
-  Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
+  // v0.4.2 — wait for the transmission rather than declaring the radio idle and
+  // letting the main loop abort it. This is the path that carries TX_ACK back to
+  // the sender, so aborting it left a broadcast transaction unacknowledged.
+  SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
   addLog("[GATEWAY] Relayed host MESSAGE over LoRa to " + String(ota[5]) + "." + String(ota[6]) + "." + String(ota[7]) + " (" + String(otaLen) + " bytes)");
   Serial.write(hostACK, HOST_ACK_NACK_SIZE);
-  isLoRaIdle = true;
 }
 
 // ─── v0.4.1 — BLE command execution ──────────────────────────────────────────
@@ -3400,11 +3816,23 @@ void RelayDesktopMessageOverLoRa() {
 // connect and receive notifications but not control the board. This drains the
 // buffer and runs the same HandleDesktopCommand the USB path uses.
 //
-// Framing: BLE has no equivalent of the serial path's delay(500), and a packet
-// can be split across GATT writes, so a packet is dispatched once either its
-// fixed length has arrived (desktopCommandLength) or, for the variable-length
-// commands, the link has been quiet for BLE_FRAME_QUIET_MS.
-#define BLE_FRAME_QUIET_MS 60
+// Framing: a packet is dispatched once either its length is known and has
+// arrived (desktopCommandLength, or a multipart frame's declared chunk length)
+// or — for the variable-length commands, which carry no length anywhere — the
+// link has been quiet for BLE_FRAME_QUIET_MS.
+//
+// v0.4.2 — raised from 60 ms. A BLE link starts at the mandatory 23-byte ATT
+// MTU and the host cannot negotiate or even query a larger one, so it writes a
+// packet as a run of 20-byte chunks. Each is a separate acknowledged GATT
+// operation subject to the connection interval and the phone's scheduler, and a
+// gap of well over 60 ms between two chunks of the *same* packet is ordinary.
+// At 60 ms the board dispatched the first half of a transaction as if it were a
+// whole one.
+//
+// This only delays the variable-length commands (0x10 / 0x11 as single packets).
+// Anything with a known length — every fixed-size command, and every multipart
+// frame — is dispatched the moment its last byte arrives, no waiting at all.
+#define BLE_FRAME_QUIET_MS 400
 
 #if ENABLE_BLE
 void ProcessBleCommands() {
@@ -3422,13 +3850,31 @@ void ProcessBleCommands() {
     return;
   }
 
-  uint16_t need = desktopCommandLength(cmdByte);
-  if (need > 0) {
-    if (bleRxLen < (int)need) return;  // fixed-length packet still arriving
+  uint16_t need;
+  if ((bleRxBuffer[1] & 0x0F) == DESKTOP_FLAG_MULTIPART) {
+    // v0.4.2 — a multipart frame declares its own chunk length, so it is framed
+    // exactly rather than by a quiet gap. Without this a sequence written as
+    // fast as GATT allows arrives as one run of bytes with no boundaries in it.
+    const int mpHdr = SINGLE_PACKET_HEADER_SIZE + DESKTOP_MULTIPART_EXTRA;
+    if (bleRxLen < mpHdr) return;  // header still arriving
+    uint8_t chunkLen = bleRxBuffer[mpHdr - 1];
+    if (chunkLen > DESKTOP_MULTIPART_CHUNK_MAX) {
+      addLog("[BLE] Multipart chunk length " + String(chunkLen) + " out of range — dropping");
+      bleRxLen = 0;
+      blePendingData = false;
+      return;
+    }
+    need = (uint16_t)(mpHdr + chunkLen);
+    if (bleRxLen < (int)need) return;  // chunk still arriving
   } else {
-    // Variable length: no in-band size, so a quiet gap marks the boundary.
-    if (millis() - lastBleRxMillis < BLE_FRAME_QUIET_MS) return;
-    need = (uint16_t)bleRxLen;
+    need = desktopCommandLength(cmdByte);
+    if (need > 0) {
+      if (bleRxLen < (int)need) return;  // fixed-length packet still arriving
+    } else {
+      // Variable length: no in-band size, so a quiet gap marks the boundary.
+      if (millis() - lastBleRxMillis < BLE_FRAME_QUIET_MS) return;
+      need = (uint16_t)bleRxLen;
+    }
   }
 
   // Capture the header fields before the buffer is shifted below.
@@ -3487,23 +3933,94 @@ void HostSerialRead() {
   // length for these commands, so any flags value frames correctly.
   if (isDesktopCommandByte(cmdByte)) {
     uint8_t flags = payloadSize;  // byte 1 is FLAGS for desktop commands
-    delay(500);                   // let the rest of the packet arrive
 
     // The 6 remaining header bytes: [src_r, src_c, src_n, dst_r, dst_c, dst_n].
     uint8_t hdrRest[6] = {0};
-    Serial.readBytes(hdrRest, 6);
+    if (!ReadHostBytes(hdrRest, 6, HOST_FRAME_TIMEOUT_MS)) {
+      addLog("[HOST] Truncated desktop header for cmd 0x" + String(cmdByte, HEX));
+      Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+      bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+      return;
+    }
 
-    // Everything after the 8-byte header. For a multipart frame this begins
-    // with [total_parts, part_index, session_hi, session_lo] followed by the
-    // chunk, which HandleDesktopCommand forwards over the air verbatim.
+    // Everything after the 8-byte header, read to an exact length wherever the
+    // protocol defines one. The old code slept 500 ms and then swallowed every
+    // buffered byte, which merged whatever the host sent next into this frame.
     uint8_t extraPayload[BUFFER_SIZE];
     memset(extraPayload, 0, sizeof(extraPayload));
     uint8_t extraLen = 0;
-    while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
-      extraPayload[extraLen++] = (uint8_t)Serial.read();
+
+    if ((flags & 0x0F) == DESKTOP_FLAG_MULTIPART) {
+      // Multipart: five header bytes ending in an explicit chunk length, then
+      // exactly that many payload bytes. This is what makes a transaction
+      // spanning several frames arrive intact instead of glued together.
+      if (!ReadHostBytes(extraPayload, DESKTOP_MULTIPART_EXTRA, HOST_FRAME_TIMEOUT_MS)) {
+        addLog("[HOST] Truncated multipart header for cmd 0x" + String(cmdByte, HEX));
+        Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+        bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+        return;
+      }
+      uint8_t chunkLen = extraPayload[DESKTOP_MULTIPART_EXTRA - 1];
+      if (chunkLen > DESKTOP_MULTIPART_CHUNK_MAX) {
+        addLog("[HOST] Multipart chunk length " + String(chunkLen) + " out of range");
+        Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+        bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+        return;
+      }
+      if (!ReadHostBytes(extraPayload + DESKTOP_MULTIPART_EXTRA, chunkLen, HOST_FRAME_TIMEOUT_MS)) {
+        addLog("[HOST] Truncated multipart chunk (" + String(chunkLen) + " bytes expected)");
+        Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+        bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+        return;
+      }
+      extraLen = (uint8_t)(DESKTOP_MULTIPART_EXTRA + chunkLen);
+    } else {
+      uint8_t fixedTotal = desktopCommandLength(cmdByte);
+      if (fixedTotal > 0) {
+        // A command with a known total size: read precisely its payload and
+        // leave anything behind it for the next pass of the loop. Two commands
+        // sent back to back are now both executed; previously the second was
+        // consumed as payload of the first and lost.
+        uint8_t want = (uint8_t)(fixedTotal - SINGLE_PACKET_HEADER_SIZE);
+        if (want > 0 && !ReadHostBytes(extraPayload, want, HOST_FRAME_TIMEOUT_MS)) {
+          addLog("[HOST] Truncated payload for cmd 0x" + String(cmdByte, HEX));
+          Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+          bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+          return;
+        }
+        extraLen = want;
+      } else {
+        // No length anywhere in the protocol (single-packet 0x10 / 0x11), so
+        // the frame ends at a gap in the byte stream.
+        extraLen = ReadHostPayloadUntilQuiet(
+            extraPayload, (uint8_t)(BUFFER_SIZE - SINGLE_PACKET_HEADER_SIZE));
+      }
     }
 
     HandleDesktopCommand(cmdByte, flags, hdrRest, extraPayload, extraLen);
+    return;
+  }
+
+  // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
+  // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
+  // PING_REQUEST(3) enum value, which carries a non-zero payload size.
+  //
+  // v0.4.2 — decided before ReadSerialPayload and without the blanket delay:
+  // RelayDesktopMessageOverLoRa now frames the rest of the packet itself, and a
+  // desktop MESSAGE has no legacy payload for ReadSerialPayload to consume.
+  if (cmdByte == 0x03 && payloadSize == 0) {
+    if (gateway_mode) {
+      RelayDesktopMessageOverLoRa();
+      return;
+    }
+    // v0.4.2 — Not a gateway, so there is nothing to relay. Consume the frame
+    // and say so. Falling through would reach the legacy PING_REQUEST case
+    // (enum value 3 collides with CMD_MESSAGE) and transmit a ping to whatever
+    // address happened to be left in the serial buffer.
+    uint8_t discard[BUFFER_SIZE];
+    ReadHostPayloadUntilQuiet(discard, (uint8_t)(BUFFER_SIZE - 1));
+    addLog("[HOST] Ignoring MESSAGE relay request — gateway mode is off");
+    Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
     return;
   }
 
@@ -3514,14 +4031,6 @@ void HostSerialRead() {
     return;
   }
   delay(500);
-
-  // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
-  // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
-  // PING_REQUEST(3) enum value, which carries a non-zero payload size.
-  if (gateway_mode && cmdByte == 0x03 && payloadSize == 0) {
-    RelayDesktopMessageOverLoRa();
-    return;
-  }
 
   switch (commandVal) {
     case NONE: // 0x00 = desktop CMD_GET_NODE_ADDR
@@ -3597,7 +4106,7 @@ void HostSerialRead() {
       SetDestinationFromSerialBuffer(5);
       DisplayTXMessage("Custom Packet!", dest);
       // Send out the host formed packet
-      Radio.Send(serialBuf, payloadSize);
+      SendLoRaAndWait(serialBuf, payloadSize);
       // Acknowledge the host that we sent the packet
       Serial.write(hostACK, HOST_ACK_NACK_SIZE);
       break;
@@ -3606,7 +4115,7 @@ void HostSerialRead() {
       char tempBuf[64];
       sprintf(tempBuf, "Part %i of %i", serialBuf[10], serialBuf[11]);
       DisplayTXMessage(String(tempBuf), dest);
-      Radio.Send(serialBuf, payloadSize);
+      SendLoRaAndWait(serialBuf, payloadSize);
       // Send ACK to let them know we sent out that part
       Serial.write(hostACK, HOST_ACK_NACK_SIZE);
       break;
@@ -3692,7 +4201,7 @@ void ParseHostFormedPacket(uint8_t payloadSize) {
   extractedMessage[payloadSize] = '\0';
   String messageString(extractedMessage);
   free(extractedMessage);
-  Serial.println(messageString);
+  debugPrintln(messageString);
 }
 
 // Parse a LoRa message received over the air from another module
@@ -3719,8 +4228,44 @@ void ForwardReceivedPacketToHost() {
   }
 }
 
+// v0.4.2 — Is this a desktop-protocol multipart frame (as opposed to the
+// firmware's own 'm' multipart format)? Identified by the flags byte, since the
+// command byte is the one the sequence carries, e.g. 0x10 CMD_DOGE_TX.
+bool IsDesktopMultipartFrame() {
+  if (rxSize < SINGLE_PACKET_HEADER_SIZE + DESKTOP_MULTIPART_EXTRA) {
+    return false;
+  }
+  if ((rxPacket[1] & 0x0F) != DESKTOP_FLAG_MULTIPART) {
+    return false;
+  }
+  uint8_t cmd = rxPacket[0];
+  return cmd == 0x10 || cmd == 0x11 || cmd == 0x03;
+}
+
 void ParseReceivedMessage() {
   addLog("[DEBUG] Received packet - Size: " + String(rxSize) + " bytes, First byte: " + String(rxPacket[0]));
+
+  // v0.4.2 — A desktop multipart frame is a fragment: only the host can put the
+  // sequence back together, so hand it over untouched and stop. Running it
+  // through the switch below would read the multipart header as message text
+  // and print it to the OLED, and would never forward it at all.
+  if (IsDesktopMultipartFrame()) {
+    if (CheckIfPacketForMe() || CheckIfPacketIsGlobalBroadcast()) {
+      uint8_t cmd   = (uint8_t)rxPacket[0];
+      uint8_t total = (uint8_t)rxPacket[SINGLE_PACKET_HEADER_SIZE];
+      uint8_t part  = (uint8_t)rxPacket[SINGLE_PACKET_HEADER_SIZE + 1] + 1;  // 0-based on the wire
+      Serial.write(rxPacket, rxSize);
+      SetSenderAddress();
+      char partLabel[32];
+      snprintf(partLabel, sizeof(partLabel), "Part %u/%u",
+               (unsigned)part, (unsigned)total);
+      DisplayRXMessage(String(partLabel), senderAddress);
+      addLog("[HOST] Forwarded multipart cmd 0x" + String(cmd, HEX) +
+             " part " + String(part) + "/" + String(total) +
+             " to serial host (" + String(rxSize) + " bytes)");
+    }
+    return;
+  }
 
   if (CheckIfPacketForMe()) {
     addLog("[DEBUG] Packet is for me - processing...");
@@ -3973,8 +4518,7 @@ void setupWebServer() {
   server.on("/api/queue/status", HTTP_GET, handleApiQueueStatus);
   
   server.begin();
-  Serial.println("Web server started");
-  addLog("Web server started");
+  addLog("[WiFi] Web server started");
 }
 
 void handleRoot() {
@@ -4347,8 +4891,18 @@ void handleRoot() {
   html += "<form>";
   html += "<div class='grid'>";
   html += "<div>";
+  // v0.4.2 — The current password used to be rendered here as the field's value.
+  // `type='password'` only masks it on screen: it sat in cleartext in the served
+  // HTML, readable with a plain GET by anyone who can reach the web server —
+  // which in dual-WiFi mode includes every host on the upstream LAN, not just
+  // devices that already joined the AP. It also defeated the point of the
+  // v0.4.1 change that stopped /api/password/status returning it.
+  //
+  // Nothing read this field: no script referenced it and handleApiPasswordChange
+  // never verified a current password. It existed only to display the secret, so
+  // it is gone rather than blanked.
   html += "<label>Current Password</label>";
-  html += "<input type='password' id='currentPassword' placeholder='Current password' value='" + ap_password + "' readonly autocomplete='current-password'>";
+  html += "<input type='password' placeholder='(not shown)' value='' disabled autocomplete='off'>";
   html += "</div>";
   html += "<div>";
   html += "<label>New Password</label>";
@@ -4862,7 +5416,7 @@ void handleMessage() {
     }
     
     // Send the message
-    Radio.Send(messagePacket, 8 + messageLength);
+    SendLoRaAndWait(messagePacket, 8 + messageLength);
     DisplayTXMessage(message, dest);
     
     server.send(200, "text/plain", "Message sent to " + address + ": " + message);
@@ -4871,12 +5425,42 @@ void handleMessage() {
   }
 }
 
+// v0.4.2 — Validate an address the operator is asking this board to adopt.
+//
+// `String::toInt()` returns a long and the octets are uint8_t, so 999 silently
+// became 231; and nothing rejected 255.255.255, which is the reserved broadcast
+// address. A board that adopted it would match CheckIfPacketForMe() *and*
+// CheckIfPacketIsGlobalBroadcast() for every packet on the air, handling each one
+// twice, and could never be addressed individually again — recoverable only by
+// clearing NVS.
+//
+// Only applies to the board's own address. A *destination* of 255.255.255 is
+// legitimate: that is how a broadcast is addressed.
+bool parseLocalAddressOctets(long region, long community, long node, nodeAddress &out) {
+  if (region < 0 || region > 255 || community < 0 || community > 255 || node < 0 || node > 255) {
+    return false;
+  }
+  if (region == 255 && community == 255 && node == 255) {
+    return false;  // reserved broadcast address
+  }
+  out.region = (uint8_t)region;
+  out.community = (uint8_t)community;
+  out.node = (uint8_t)node;
+  return true;
+}
+
 void handleAddress() {
   if (server.hasArg("region") && server.hasArg("community") && server.hasArg("node")) {
     // Set new address
-    local.region = server.arg("region").toInt();
-    local.community = server.arg("community").toInt();
-    local.node = server.arg("node").toInt();
+    nodeAddress requested;
+    if (!parseLocalAddressOctets(server.arg("region").toInt(),
+                                 server.arg("community").toInt(),
+                                 server.arg("node").toInt(), requested)) {
+      server.send(400, "text/plain",
+                  "Invalid address: each octet must be 0-255 and 255.255.255 is reserved for broadcast");
+      return;
+    }
+    local = requested;
     InitControlMessages();
     DisplayLocalAddress(local);
     // Save LoRa configuration to NVS
@@ -4925,14 +5509,14 @@ void handleTransaction() {
     }
     
     // Send the transaction
-    Radio.Send(txPacket, 8 + txLength);
+    SendLoRaAndWait(txPacket, 8 + txLength);
     DisplayTXMessage("Transaction: " + transaction.substring(0, 20) + "...", dest);
     
     // Forward to internet if connected
     if (internet_connected) {
       String internetResponse = sendTransactionToInternet(transaction);
-      Serial.println("Transaction also forwarded to internet gateway");
-      Serial.println("Internet response: " + internetResponse);
+      debugPrintln("Transaction also forwarded to internet gateway");
+      debugPrintln("Internet response: " + internetResponse);
     }
     
     server.send(200, "text/plain", "Transaction sent to " + address + " (" + type + ")" + (internet_connected ? " + Internet" : ""));
@@ -4971,7 +5555,7 @@ void handleBroadcast() {
     }
     
     // Send the broadcast
-    Radio.Send(broadcastPacket, 8 + messageLength);
+    SendLoRaAndWait(broadcastPacket, 8 + messageLength);
     DisplayBroadcastMessage("Broadcast: " + message, local);
     
     server.send(200, "text/plain", "Broadcast sent (" + type + ", " + priority + "): " + message);
@@ -5301,9 +5885,17 @@ void handleApiAddress() {
   if (server.method() == HTTP_POST) {
     // Set new address
     if (server.hasArg("region") && server.hasArg("community") && server.hasArg("node")) {
-      local.region = server.arg("region").toInt();
-      local.community = server.arg("community").toInt();
-      local.node = server.arg("node").toInt();
+      nodeAddress requested;
+      if (!parseLocalAddressOctets(server.arg("region").toInt(),
+                                   server.arg("community").toInt(),
+                                   server.arg("node").toInt(), requested)) {
+        response += "\"success\":false,";
+        response += "\"error\":\"Invalid address: each octet must be 0-255, and 255.255.255 is reserved for broadcast\"";
+        response += "}";
+        server.send(200, "application/json", response);
+        return;
+      }
+      local = requested;
       InitControlMessages();
       DisplayLocalAddress(local);
       // Save LoRa configuration to NVS
@@ -5335,7 +5927,7 @@ void handleApiWifi() {
   response += "\"ap_ssid\":\"" + String(ap_ssid) + "\",";
   response += "\"ap_ip\":\"" + WiFi.softAPIP().toString() + "\",";
   response += "\"internet_connected\":" + String(internet_connected ? "true" : "false") + ",";
-  response += "\"internet_ssid\":\"" + internet_ssid + "\",";
+  response += "\"internet_ssid\":\"" + escapeJsonString(internet_ssid) + "\",";
   if (internet_connected) {
     response += "\"internet_ip\":\"" + WiFi.localIP().toString() + "\",";
   }
@@ -5441,44 +6033,108 @@ void handleApiBridgeStatus() {
   response += "\"ap_gateway\":\"" + ap_gateway.toString() + "\",";
   response += "\"ap_subnet\":\"" + ap_subnet.toString() + "\",";
   response += "\"internet_ip\":\"" + (internet_connected ? WiFi.localIP().toString() : "none") + "\",";
-  response += "\"internet_ssid\":\"" + internet_ssid + "\"";
+  response += "\"internet_ssid\":\"" + escapeJsonString(internet_ssid) + "\"";
   response += "}";
   response += "}";
   server.send(200, "application/json", response);
 }
 
 // HTTP Proxy for Internet Bridge
+// Largest proxied response this device will hold in RAM.
+//
+// v0.4.2 — There was no limit: the whole remote body went into an Arduino String
+// on the heap. The board has a couple of hundred KB free with WiFi, BLE and the
+// web server running, so a single request for any ordinary web page was enough
+// to exhaust it and reset the device mid-transaction. 32 KB is generous for the
+// status pages this is meant to fetch and small enough to be safe.
+#define PROXY_MAX_RESPONSE_BYTES 32768
+
 void handleHttpProxy() {
+  // v0.4.2 — Gated on the operator having explicitly enabled the bridge, not
+  // merely on the board happening to have internet.
+  //
+  // This route is an open forward proxy: it will fetch any URL and return the
+  // body, so while the STA interface is up, anything that can reach this web
+  // server can reach the upstream network through it — the operator's router
+  // admin page, their NAS, anything else on that LAN. The bridge already has an
+  // explicit on/off switch and an API for it; requiring it here means the
+  // capability exists only while it has been asked for, instead of whenever the
+  // board is online.
+  if (!internet_bridge_enabled) {
+    server.send(403, "text/plain",
+                "The internet bridge is disabled. Enable it (POST /api/bridge/enable) to use the proxy.");
+    return;
+  }
   if (!internet_connected) {
     server.send(503, "text/plain", "Internet not connected");
     return;
   }
-  
+
   if (!server.hasArg("url")) {
     server.send(400, "text/plain", "Missing 'url' parameter. Usage: /proxy?url=http://example.com");
     return;
   }
-  
+
   String url = server.arg("url");
   HTTPClient http;
-  
+
   // Add http:// if not present
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     url = "http://" + url;
   }
-  
+
   http.begin(url);
   http.setTimeout(10000); // 10 second timeout
-  
+
   int httpCode = http.GET();
-  String response = http.getString();
-  
-  if (httpCode > 0) {
-    server.send(httpCode, "text/html", response);
-  } else {
+  if (httpCode <= 0) {
     server.send(500, "text/plain", "Error: " + String(httpCode));
+    http.end();
+    return;
   }
-  
+
+  // Refuse anything that declares itself too large before reading a byte of it.
+  int declaredSize = http.getSize();
+  if (declaredSize > (int)PROXY_MAX_RESPONSE_BYTES) {
+    server.send(502, "text/plain",
+                "Response too large to proxy (" + String(declaredSize) + " bytes, limit " +
+                String(PROXY_MAX_RESPONSE_BYTES) + ")");
+    http.end();
+    return;
+  }
+
+  // A chunked response declares no size, so read with a hard ceiling rather than
+  // trusting the header.
+  WiFiClient *stream = http.getStreamPtr();
+  String response;
+  response.reserve(declaredSize > 0 ? min(declaredSize, (int)PROXY_MAX_RESPONSE_BYTES) : 1024);
+  uint8_t buf[512];
+  size_t total = 0;
+  unsigned long lastData = millis();
+  while (http.connected() && total < PROXY_MAX_RESPONSE_BYTES) {
+    size_t avail = stream->available();
+    if (avail == 0) {
+      if (millis() - lastData > 10000) break;  // stalled
+      delay(1);
+      continue;
+    }
+    size_t want = min(avail, sizeof(buf));
+    if (total + want > PROXY_MAX_RESPONSE_BYTES) {
+      want = PROXY_MAX_RESPONSE_BYTES - total;
+    }
+    int got = stream->readBytes(buf, want);
+    if (got <= 0) break;
+    for (int i = 0; i < got; i++) {
+      response += (char)buf[i];
+    }
+    total += got;
+    lastData = millis();
+  }
+
+  if (total >= PROXY_MAX_RESPONSE_BYTES) {
+    addLog("[PROXY] Response truncated at " + String(PROXY_MAX_RESPONSE_BYTES) + " bytes: " + url);
+  }
+  server.send(httpCode, "text/html", response);
   http.end();
 }
 
@@ -5498,6 +6154,7 @@ void handleApiLoRaClear() {
 }
 
 void handleApiPasswordChange() {
+  bool restartAfterReply = false;
   String response = "{";
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
@@ -5513,12 +6170,9 @@ void handleApiPasswordChange() {
       // Save new password
       ap_password = newPassword;
       saveAPPassword(newPassword);
-      
-      // Restart AP with new password
-      restartAP();
-      
       response += "\"action\":\"password_change\",";
-      response += "\"message\":\"Password changed successfully. Access Point restarted with new password\"";
+      response += "\"message\":\"Password changed. The access point is restarting with the new password — rejoin it to continue.\"";
+      restartAfterReply = true;
     }
   } else {
     response += "\"success\":false,";
@@ -5527,6 +6181,13 @@ void handleApiPasswordChange() {
   
   response += "}";
   server.send(200, "application/json", response);
+
+  // v0.4.2 — restart AFTER replying. restartAP() calls softAPdisconnect(), which
+  // drops every client including the one waiting for this response, so the UI
+  // saw the request hang and could not tell success from failure.
+  if (restartAfterReply) {
+    restartAP();
+  }
 }
 
 void handleApiPasswordReset() {
@@ -5536,14 +6197,14 @@ void handleApiPasswordReset() {
   
   // Clear stored password and reset to default
   clearAPPassword();
-  
-  // Restart AP with default password
-  restartAP();
-  
+
   response += "\"action\":\"password_reset\",";
-  response += "\"message\":\"Password reset to default (radiodoge). Access Point restarted\"";
+  response += "\"message\":\"Password reset to the default. The access point is restarting — rejoin it to continue.\"";
   response += "}";
   server.send(200, "application/json", response);
+
+  // v0.4.2 — restart after replying; see handleApiPasswordChange.
+  restartAP();
 }
 
 void handleApiPasswordStatus() {
@@ -5600,11 +6261,11 @@ void handleApiGatewayStatus() {
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"gateway\":{";
-  response += "\"type\":\"" + gateway_type + "\",";
-  response += "\"ip\":\"" + gateway_ip + "\",";
-  response += "\"port\":\"" + gateway_port + "\",";
-  response += "\"endpoint\":\"" + gateway_endpoint + "\",";
-  response += "\"username\":\"" + gateway_username + "\",";
+  response += "\"type\":\"" + escapeJsonString(gateway_type) + "\",";
+  response += "\"ip\":\"" + escapeJsonString(gateway_ip) + "\",";
+  response += "\"port\":\"" + escapeJsonString(gateway_port) + "\",";
+  response += "\"endpoint\":\"" + escapeJsonString(gateway_endpoint) + "\",";
+  response += "\"username\":\"" + escapeJsonString(gateway_username) + "\",";
   response += "\"password\":\"";
   response += (gateway_password.length() > 0 ? "***" : "");
   response += "\"";
@@ -5635,7 +6296,7 @@ void handleApiGatewaySave() {
       password = gateway_password;
     }
 
-    addLog("[API] Gateway save request - Type: " + type + ", IP: " + ip + ", Port: " + port + ", Username: " + username + ", Password: [HIDDEN]");
+    addLog("[API] Gateway save request - Type: " + type + ", IP: " + ip + ", Port: " + port + ", Username: [REDACTED], Password: [REDACTED]");
     
     // Validate required fields
     if (type == "none") {
@@ -5744,7 +6405,7 @@ void handleApiGatewayDebug() {
     
     size_t endpoint_len = 64;
     char endpoint_buffer[64];
-    err = nvs_get_str(nvs_handle, "gateway_endpoint", endpoint_buffer, &endpoint_len);
+    err = nvs_get_str(nvs_handle, NVS_KEY_GATEWAY_ENDPOINT, endpoint_buffer, &endpoint_len);
     response += "\"gateway_endpoint_exists\":" + String(err == ESP_OK ? "true" : "false") + ",";
     response += "\"gateway_endpoint_error\":" + String(err) + ",";
     
@@ -5785,11 +6446,11 @@ void handleApiGatewayLoad() {
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"gateway\":{";
-  response += "\"type\":\"" + gateway_type + "\",";
-  response += "\"ip\":\"" + gateway_ip + "\",";
-  response += "\"port\":\"" + gateway_port + "\",";
-  response += "\"endpoint\":\"" + gateway_endpoint + "\",";
-  response += "\"username\":\"" + gateway_username + "\",";
+  response += "\"type\":\"" + escapeJsonString(gateway_type) + "\",";
+  response += "\"ip\":\"" + escapeJsonString(gateway_ip) + "\",";
+  response += "\"port\":\"" + escapeJsonString(gateway_port) + "\",";
+  response += "\"endpoint\":\"" + escapeJsonString(gateway_endpoint) + "\",";
+  response += "\"username\":\"" + escapeJsonString(gateway_username) + "\",";
   // SECURITY: the stored gateway RPC password is deliberately NOT returned.
   // This route is unauthenticated, so returning it disclosed the credential to
   // anyone on the board's AP. The password is write-only: the UI reports
@@ -5915,7 +6576,7 @@ void handleApiJsonRpc() {
 // New function to send RPC calls to Dogecoin Core
 bool sendRpcToGateway(String rpcBody, String gatewayUrl) {
   if (!internet_connected) {
-    Serial.println("No internet connection available");
+    debugPrintln("No internet connection available");
     return false;
   }
   
@@ -5927,12 +6588,12 @@ bool sendRpcToGateway(String rpcBody, String gatewayUrl) {
   
   if (httpResponseCode > 0) {
     String response = http.getString();
-    Serial.println("RPC call sent to gateway");
-    Serial.println("Response: " + response);
+    debugPrintln("RPC call sent to gateway");
+    debugPrintln("Response: " + response);
     http.end();
     return true;
   } else {
-    Serial.println("Error sending RPC call to gateway: " + String(httpResponseCode));
+    debugPrintln("Error sending RPC call to gateway: " + String(httpResponseCode));
     http.end();
     return false;
   }
@@ -6068,7 +6729,7 @@ void handleApiTransactionSend() {
       
       response += "\"action\":\"transaction_send\",";
       response += "\"message\":\"Transaction sent to stored gateway\",";
-      response += "\"gateway_type\":\"" + gateway_type + "\",";
+      response += "\"gateway_type\":\"" + escapeJsonString(gateway_type) + "\",";
       response += "\"gateway_url\":\"" + gatewayUrl + "\",";
       response += "\"server_response\":\"" + escapeJsonString(serverResponse) + "\"";
     }
@@ -6088,11 +6749,11 @@ void handleApiGatewayConfig() {
   response += "\"timestamp\":" + String(millis()) + ",";
   response += "\"action\":\"gateway_config_get\",";
   response += "\"config\":{";
-  response += "\"type\":\"" + gateway_type + "\",";
-  response += "\"ip\":\"" + gateway_ip + "\",";
-  response += "\"port\":\"" + gateway_port + "\",";
-  response += "\"endpoint\":\"" + gateway_endpoint + "\",";
-  response += "\"username\":\"" + gateway_username + "\",";
+  response += "\"type\":\"" + escapeJsonString(gateway_type) + "\",";
+  response += "\"ip\":\"" + escapeJsonString(gateway_ip) + "\",";
+  response += "\"port\":\"" + escapeJsonString(gateway_port) + "\",";
+  response += "\"endpoint\":\"" + escapeJsonString(gateway_endpoint) + "\",";
+  response += "\"username\":\"" + escapeJsonString(gateway_username) + "\",";
   response += "\"password\":\"";
   if (gateway_password.length() > 0) {
     response += "***";
@@ -6172,14 +6833,14 @@ void handleApiGatewayConfigSet() {
 // Function to send proper JSON-RPC calls to Dogecoin Core
 String sendJsonRpcToGateway(String transaction, String gatewayUrl, String rpcUser, String rpcPass) {
   if (!internet_connected) {
-    Serial.println("No internet connection available");
+    debugPrintln("No internet connection available");
     return "{\"error\":\"No internet connection available\"}";
   }
   
-  Serial.println("=== JSON-RPC Debug Info ===");
-  Serial.println("Gateway URL: " + gatewayUrl);
-  Serial.println("RPC User: " + rpcUser);
-  Serial.println("Transaction length: " + String(transaction.length()));
+  debugPrintln("=== JSON-RPC Debug Info ===");
+  debugPrintln("Gateway URL: " + gatewayUrl);
+  debugPrintln("RPC User: [REDACTED]");
+  debugPrintln("Transaction length: " + String(transaction.length()));
   
   HTTPClient http;
   http.setTimeout(10000); // 10 second timeout
@@ -6189,27 +6850,27 @@ String sendJsonRpcToGateway(String transaction, String gatewayUrl, String rpcUse
   
   // Create proper JSON-RPC payload
   String jsonPayload = "{\"jsonrpc\":\"1.0\",\"id\":\"curl\",\"method\":\"sendrawtransaction\",\"params\":[\"" + transaction + "\"]}";
-  Serial.println("JSON Payload: " + jsonPayload);
+  debugPrintln("JSON Payload: " + String(jsonPayload.length()) + " bytes");
   
   int httpResponseCode = http.POST(jsonPayload);
   String response = "";
   
-  Serial.println("HTTP Response Code: " + String(httpResponseCode));
+  debugPrintln("HTTP Response Code: " + String(httpResponseCode));
   
   if (httpResponseCode > 0) {
     response = http.getString();
-    Serial.println("Raw Response: " + response);
+    debugPrintln("Raw Response: " + response);
     
     if (response.length() == 0) {
       response = "{\"error\":\"Empty response from server (HTTP " + String(httpResponseCode) + ")\"}";
     }
   } else {
     response = "{\"error\":\"HTTP Error " + String(httpResponseCode) + " - " + http.errorToString(httpResponseCode) + "\"}";
-    Serial.println("Error sending JSON-RPC call to gateway: " + String(httpResponseCode) + " - " + http.errorToString(httpResponseCode));
+    debugPrintln("Error sending JSON-RPC call to gateway: " + String(httpResponseCode) + " - " + http.errorToString(httpResponseCode));
   }
   
   http.end();
-  Serial.println("=== End JSON-RPC Debug ===");
+  debugPrintln("=== End JSON-RPC Debug ===");
   return response;
 }
 

@@ -4,6 +4,7 @@
    */
 
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
@@ -25,7 +26,44 @@
   // Tracked so it can be cancelled if the user starts a new transaction before
   // the 5s window elapses (otherwise their freshly-typed inputs would be wiped).
   let _successClearTimer: ReturnType<typeof setTimeout> | null = null;
-  onMount(() => () => { if (_successClearTimer) clearTimeout(_successClearTimer); });
+
+  // On Android the backend hands the frames to the JS bridge and returns before
+  // they have been written, so a write failure arrives after we have already
+  // shown "sent". Replace the success message when that happens — a transaction
+  // that never reached the board is the one thing the user must not miss.
+  /**
+   * How far a multipart send has got, e.g. "3/8".
+   *
+   * A transaction larger than one packet becomes several independent LoRa
+   * transmissions, each acknowledged by the board before the next is written —
+   * seconds of real airtime, and considerably more at a high spreading factor.
+   * Without this the button just sat there.
+   */
+  let sendProgress = $state<{ sent: number; total: number } | null>(null);
+
+  function onMobileSendFailed(ev: Event) {
+    const detail = (ev as CustomEvent<string>).detail;
+    if (_successClearTimer !== null) {
+      clearTimeout(_successClearTimer);
+      _successClearTimer = null;
+    }
+    success = null;
+    sendProgress = null;
+    error = `😢 The transaction did not reach the board: ${detail}. Nothing was broadcast — check the cable or Bluetooth link and try again.`;
+    isSending = false;
+  }
+
+  onMount(() => {
+    window.addEventListener('radiodoge:tx-send-failed', onMobileSendFailed);
+    const progress = listen<{ sent: number; total: number }>('transaction-progress', (ev) => {
+      sendProgress = ev.payload;
+    });
+    return () => {
+      window.removeEventListener('radiodoge:tx-send-failed', onMobileSendFailed);
+      progress.then((fn) => fn());
+      if (_successClearTimer) clearTimeout(_successClearTimer);
+    };
+  });
 
   // Validation
   const isValidAddress = $derived(() => {
@@ -69,6 +107,7 @@
     isSending = true;
     success = null;
     error = null;
+    sendProgress = null;
 
     try {
       const result = await invoke<string>('send_transaction', {
@@ -98,6 +137,7 @@
       error = e instanceof Error ? e.message : String(e);
     } finally {
       isSending = false;
+      sendProgress = null;
     }
   }
 
@@ -352,7 +392,10 @@
         {isSending ? 'animation: pulse-glow 1s ease-in-out infinite;' : ''}
       "
     >
-      {#if isSending}
+      {#if isSending && sendProgress}
+        <DogeSpinner size="sm" message="" />
+        Beaming part {sendProgress.sent} of {sendProgress.total}... 📡
+      {:else if isSending}
         <DogeSpinner size="sm" message="" />
         Beaming into the radio ether... 📡
       {:else}

@@ -27,8 +27,24 @@
     } catch { entries = []; } finally { isLoading = false; }
   }
 
-  async function persist() {
-    await invoke('save_address_book', { entries }).catch(() => {});
+  /**
+   * Error from the last write, if it failed.
+   *
+   * `persist()` used to swallow every error, so a book that could not be written
+   * — read-only directory, disk full — was reported to the user as saved and
+   * silently reverted to the old contents on the next launch.
+   */
+  let persistError = $state<string | null>(null);
+
+  async function persist(): Promise<boolean> {
+    try {
+      await invoke('save_address_book', { entries });
+      persistError = null;
+      return true;
+    } catch (e: unknown) {
+      persistError = e instanceof Error ? e.message : String(e);
+      return false;
+    }
   }
 
   async function addEntry() {
@@ -48,16 +64,26 @@
       createdAt: Math.floor(Date.now() / 1000),
       notes: newNotes.trim() || undefined,
     };
+    const previous = entries;
     entries = [entry, ...entries];
-    await persist();
+    if (!await persist()) {
+      // Put the list back rather than showing an entry that is not on disk.
+      entries = previous;
+      formError = `Could not save the address book: ${persistError}`;
+      isSaving = false;
+      return;
+    }
     newLabel = ''; newAddress = ''; newNotes = '';
     showForm = false;
     isSaving = false;
   }
 
   async function removeEntry(id: string) {
+    const previous = entries;
     entries = entries.filter(e => e.id !== id);
-    await persist();
+    if (!await persist()) {
+      entries = previous;
+    }
   }
 
   async function copyAddress(address: string, id: string) {
@@ -111,6 +137,11 @@
           bind:value={newNotes}
           style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: 0.88rem; outline: none;"
         />
+        {#if persistError && !formError}
+          <p style="margin: 0; font-size: 0.78rem; color: #ff6060;" role="alert">
+            Could not save the address book: {persistError}
+          </p>
+        {/if}
         {#if formError}
           <p style="margin: 0; font-size: 0.78rem; color: #ff6060;">{formError}</p>
         {/if}

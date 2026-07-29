@@ -90,20 +90,36 @@ These are non-obvious and have each caused a real bug.
 
 ### The firmware reads header byte 1 as a length
 
-The host writes `[command, flags, src×3, dst×3, payload…]`. The firmware reads `[command, payload_size, …]`.
-The whole desktop protocol worked **only because flags are normally `0x00`**, which the board happens to read
-as "zero payload bytes follow". Anything else — multipart (`0x01`), or a relayed packet with a non-zero hop
-nibble — was mis-framed.
+The host writes `[command, flags, src×3, dst×3, payload…]`. The firmware's legacy parser reads
+`[command, payload_size, …]`. The whole desktop protocol worked **only because flags are normally `0x00`**,
+which the board happens to read as "zero payload bytes follow". Anything else — multipart (`0x01`), or a
+relayed packet with a non-zero hop nibble — was mis-framed.
 
-Firmware v0.4.1 dispatches desktop commands *before* `ReadSerialPayload`, so byte 1 is no longer read as a
-length for them. But note what you must still respect:
+Since v0.4.1 desktop commands are dispatched *before* `ReadSerialPayload`, so byte 1 is no longer read as a
+length for them; since v0.4.2 the rest of the frame is read to an exact length rather than by draining the
+serial buffer. What to respect now:
 
-- **`radio::check_host_payload_fits` is still enforced on every send path, deliberately.** The firmware fix is
-  compile-unverified and untested on hardware. Do not relax the guard until someone confirms a >192-byte
-  transaction survives host → board → air → gateway → daemon byte-for-byte. Relaxing it early re-creates the
-  original failure: silently transmitting a transaction no receiver can reconstruct.
-- When you do lift it, gate it on the board's reported firmware version so older boards keep the limit.
-- Full analysis: [PROTOCOL.md](docs/PROTOCOL.md#host--board-single-packet-only).
+- **Every host→board send goes through `radio::build_tx_frames`.** It is the single decision point for single
+  vs multipart framing and it refuses payloads the connected board cannot reassemble, gated on the reported
+  firmware build (`MIN_MULTIPART_FIRMWARE`). Don't build packets for a send path by hand; the reason there is
+  one function is that the GUI, the CLI and the Android bridge drifted apart three times before.
+- **Frames are written one at a time, waiting for the board's acknowledgement** (`SerialManager::send_frames`).
+  This is not politeness — the board's serial buffer holds less than a sequence and it does not read while the
+  radio is transmitting, so an unpaced burst is dropped with no error anywhere.
+- **A multipart frame declares its own chunk length** (header byte 12). That byte is what makes the frame
+  findable on a byte stream; without it a short final part consumed whatever was queued behind it.
+- Full analysis: [PROTOCOL.md](docs/PROTOCOL.md#host--board-multipart).
+
+### `Radio.Send` does not wait, and `isLoRaIdle` is not "TX finished"
+
+`Radio.Send()` only *starts* a transmission; `TxDone` arrives later through `Radio.IrqProcess()`. `isLoRaIdle`
+means something different — "nothing is happening, put the radio back into receive" — and the main loop acts on
+it. Setting it true right after `Radio.Send()` therefore had the next loop iteration abort the transmission a
+couple of milliseconds in. That silently killed every `CMD_DOGE_TX` and every gateway `TX_ACK` relay.
+
+Use `SendLoRaAndWait()` for anything you transmit. Never pace packets with a fixed `delay()`: the firmware's
+own multipart senders used 100 ms and 500 ms, both shorter than the airtime of the packet being paced, so each
+part overwrote the one before it.
 
 ### Firmware changes cannot be built in a container
 
@@ -159,8 +175,15 @@ still recognised.
 The protocol has no frame delimiter and no checksum, so after noise the framer
 can only *guess* where the next packet starts. Worse, the command set overlaps
 printable ASCII — `0x20` is both `CMD_GET_FIRMWARE_VERSION` and the space
-character — and the firmware writes `Serial.println` debug text down the same
-link, so log lines produce false packet starts.
+character — so any text sharing the link produces false packet starts.
+
+Firmware v0.4.2 stopped echoing its runtime log to the serial port, which is
+where nearly all of that text came from: `addLog` ended in `Serial.println`, and
+several addLog calls fire per received packet, *while it is being handled*. Do
+not put it back. The log is served by the web UI and `GET /api/logs`, and
+`HOST_SERIAL_DEBUG` exists for debugging with no host attached. Every board
+still prints a boot banner, and older firmware still logs to the wire, so the
+heuristic remains load-bearing.
 
 `looks_like_packet_start` also requires the next byte to be a legal flags value
 (low nibble `0x0` or `0x1`), which cuts false starts on realistic log lines by

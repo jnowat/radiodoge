@@ -59,6 +59,22 @@ pub struct AppState {
     pub tx_history: Arc<Mutex<Vec<TxHistoryEntry>>>,
     /// v0.3.6 — Background gateway daemon process handle.
     pub gateway_process: Arc<Mutex<Option<tokio::process::Child>>>,
+
+    /// The serial port this app released so the gateway daemon could own it.
+    ///
+    /// `Some` only when the app was itself connected to that port when the
+    /// daemon was started, so `stop_gateway` knows whether reconnecting is
+    /// taking back something of ours or stealing a port the user never gave us.
+    pub gateway_owned_port: Arc<Mutex<Option<String>>>,
+
+    /// Unix-epoch milliseconds until which a firmware-version reply is believed
+    /// on the Android path.
+    ///
+    /// Same reasoning as `SerialManager::firmware_query_until_ms`: the board
+    /// forwards over-the-air broadcasts to its host verbatim, so a node in radio
+    /// range can send a `0x20` packet claiming any version — and the version is
+    /// what decides whether a payload too large for one packet may be sent.
+    pub mobile_fw_query_until_ms: Arc<AtomicU64>,
     /// v0.3.6 — Connection type: "usb", "ble", or "usb-android"
     pub connection_type: Arc<Mutex<String>>,
     /// v0.3.10 — Raw byte accumulator for the Android USB bridge.
@@ -99,6 +115,8 @@ impl AppState {
             connection_generation: Arc::new(AtomicU64::new(0)),
             tx_history: Arc::new(Mutex::new(Vec::new())),
             gateway_process: Arc::new(Mutex::new(None)),
+            gateway_owned_port: Arc::new(Mutex::new(None)),
+            mobile_fw_query_until_ms: Arc::new(AtomicU64::new(0)),
             connection_type: Arc::new(Mutex::new("usb".to_string())),
             mobile_accumulator: Arc::new(Mutex::new(Vec::new())),
             mobile_reassembler: Arc::new(Mutex::new(radio::MultipartReassembler::new())),
@@ -124,6 +142,51 @@ fn emit_debug_traffic(app: &AppHandle, direction: &str, raw_hex: &str, parsed: &
         "rawHex": raw_hex,
         "parsed": parsed,
     }));
+}
+
+/// Milliseconds since the Unix epoch.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// How long a firmware-version reply is believed on the Android path after the
+/// connect handshake is built. Longer than the desktop window because BLE round
+/// trips are slower.
+const MOBILE_FIRMWARE_REPLY_WINDOW_MS: u64 = 6_000;
+
+// ─── Persistence helpers ─────────────────────────────────────────────────────
+
+/// Write `contents` to `path` so that a crash can never leave a partial file.
+///
+/// `fs::write` truncates first and writes second, so an interruption between
+/// the two leaves an empty or half-written file. For `tx_history.json` that
+/// costs a log; for `wallet.json` it costs the user's only copy of an encrypted
+/// private key. Writing to a sibling temp file and renaming it into place makes
+/// the switch atomic on every platform this app targets — the old file survives
+/// intact until the new one is complete.
+///
+/// The temp file is removed on failure so a full disk cannot accumulate debris.
+async fn write_file_atomically(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    // A per-call temp name, not a fixed one. Tauri commands run concurrently, and
+    // with a shared `wallet.tmp` two overlapping saves interleave: the slower
+    // writer can rename a file the faster one had only half written.
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "tmp{}",
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(e) = tokio::fs::write(&tmp, contents).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("could not write {}: {}", tmp.display(), e));
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("could not replace {}: {}", path.display(), e));
+    }
+    Ok(())
 }
 
 // ─── History helpers ──────────────────────────────────────────────────────────
@@ -155,7 +218,9 @@ async fn save_history_to_disk(app: &AppHandle, history: &[TxHistoryEntry]) {
     let _ = tokio::fs::create_dir_all(&dir).await;
     let path = dir.join("tx_history.json");
     if let Ok(json) = serde_json::to_string_pretty(history) {
-        let _ = tokio::fs::write(&path, json).await;
+        if let Err(e) = write_file_atomically(&path, &json).await {
+            eprintln!("[history] {}", e);
+        }
     }
 }
 
@@ -169,6 +234,21 @@ async fn list_ports() -> Result<Vec<String>, String> {
 #[tauri::command]
 async fn list_ports_detailed() -> Result<Vec<PortInfo>, String> {
     Ok(SerialManager::list_ports_with_info())
+}
+
+/// `true` when a `CMD_DOGE_TX` packet is an actual incoming transaction rather
+/// than the board's own acknowledgement of one we just sent.
+///
+/// The board answers every `0x10` the host writes with an 8-byte reply carrying
+/// the same command byte and no payload. Treating that as an arrival popped a
+/// "DOGE Transaction Received!" notification on the *sender* after every send —
+/// and once per frame, so a multipart transaction produced a burst of them.
+/// A real transaction always decodes to something; the bare acknowledgement
+/// cannot.
+fn is_incoming_doge_tx(packet: &IncomingPacket) -> bool {
+    packet.command == radio::CMD_DOGE_TX
+        && !packet.payload_hex.is_empty()
+        && packet.decoded.is_some()
 }
 
 /// Open a serial connection to the Heltec device.
@@ -197,7 +277,7 @@ async fn connect_port(
         let parsed = packet.decoded.clone().unwrap_or_default();
         emit_debug_traffic(&app_for_packets, "RX", &packet.payload_hex, &parsed);
 
-        if packet.command == radio::CMD_DOGE_TX {
+        if is_incoming_doge_tx(&packet) {
             let body = packet
                 .decoded
                 .clone()
@@ -262,10 +342,15 @@ async fn connect_port(
     // ── Query firmware version (up to 3 attempts) ────────────────────────────
     let mut firmware_version: Option<String> = None;
     for attempt in 1..=3 {
-        let fw_query = radio::build_get_firmware_version(&NodeAddress::default_local());
-        let fw_hex = hex::encode(&fw_query);
-        emit_debug_traffic(&app, "TX", &fw_hex, &format!("CMD_GET_FIRMWARE_VERSION (attempt {})", attempt));
-        state.serial.send_raw(fw_query).await.ok();
+        emit_debug_traffic(
+            &app,
+            "TX",
+            &hex::encode(radio::build_get_firmware_version(&NodeAddress::default_local())),
+            &format!("CMD_GET_FIRMWARE_VERSION (attempt {})", attempt),
+        );
+        // request_firmware_version, not send_raw: it opens the window in which a
+        // reply is believed. See SerialManager::firmware_query_until_ms.
+        state.serial.request_firmware_version().await.ok();
         tokio::time::sleep(Duration::from_millis(400)).await;
         firmware_version = state.serial.get_firmware_version().await;
         if firmware_version.is_some() {
@@ -345,7 +430,7 @@ async fn connect_port(
                 let _ = app_inner.emit("radio-packet", &packet);
                 let parsed = packet.decoded.clone().unwrap_or_default();
                 emit_debug_traffic(&app_inner, "RX", &packet.payload_hex, &parsed);
-                if packet.command == radio::CMD_DOGE_TX {
+                if is_incoming_doge_tx(&packet) {
                     let body = packet.decoded.clone().unwrap_or_else(|| "Incoming Dogecoin transaction".to_string());
                     let _ = app_inner.notification().builder().title("🐕 DOGE Transaction Received!").body(&body).show();
                 }
@@ -436,10 +521,13 @@ async fn query_firmware_version(
     app: AppHandle,
 ) -> Result<Option<String>, String> {
     if !state.serial.is_connected() { return Ok(None); }
-    let fw_query = radio::build_get_firmware_version(&NodeAddress::default_local());
-    let fw_hex = hex::encode(&fw_query);
-    emit_debug_traffic(&app, "TX", &fw_hex, "CMD_GET_FIRMWARE_VERSION (manual re-query)");
-    state.serial.send_raw(fw_query).await.map_err(|e| e.to_string())?;
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &hex::encode(radio::build_get_firmware_version(&NodeAddress::default_local())),
+        "CMD_GET_FIRMWARE_VERSION (manual re-query)",
+    );
+    state.serial.request_firmware_version().await.map_err(|e| e.to_string())?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_firmware_version().await)
 }
@@ -548,6 +636,24 @@ async fn scan_qr_from_image(
     .map_err(|e| format!("QR decode task failed: {}", e))?
 }
 
+/// `true` when the JS bridge, rather than the Rust `SerialManager`, owns the port.
+///
+/// This is an Android-only arrangement: there the serial port is opened by
+/// `tauri-plugin-serialplugin` or the BLE plugin in JavaScript, so
+/// `serial.is_connected()` is always false even while the board is attached.
+///
+/// It used to be *inferred* — "a port is set but the Rust side is not connected"
+/// — which is exactly the state a desktop machine enters when the USB cable is
+/// pulled: `is_connected()` goes false while `current_port` stays set until the
+/// user presses Disconnect. A desktop app in that state took the Android path,
+/// emitted the transaction frames as an event nothing listens to on desktop, and
+/// reported success for a signed transaction that was dropped on the floor.
+///
+/// Compiled per platform now, so a dropped cable is a dropped cable.
+async fn js_bridge_owns_port(state: &State<'_, AppState>) -> bool {
+    cfg!(target_os = "android") && state.current_port.lock().await.is_some()
+}
+
 #[tauri::command]
 async fn send_transaction(
     tx: TransactionRequest,
@@ -555,10 +661,13 @@ async fn send_transaction(
     app: AppHandle,
 ) -> Result<String, String> {
     // On Android the JS bridge owns the USB/BLE port, so serial.is_connected() is
-    // always false.  Allow the send when mobile is connected (current_port is set).
-    let is_mobile = state.current_port.lock().await.is_some() && !state.serial.is_connected();
+    // always false. Everywhere else, not connected means not connected.
+    let is_mobile = js_bridge_owns_port(&state).await;
     if !is_mobile && !state.serial.is_connected() {
-        return Err("Not connected to a Heltec device. Please connect first.".to_string());
+        return Err(
+            "Not connected to a Heltec device. Nothing was sent — check the cable and reconnect."
+                .to_string(),
+        );
     }
 
     if !wallet::is_valid_address(&tx.to_address) {
@@ -591,18 +700,20 @@ async fn send_transaction(
         .map_err(|e| e.to_string())?
     };
 
-    // The board cannot receive multipart over serial (see check_host_payload_fits).
-    // Reject here rather than transmitting packets the firmware will mis-frame.
-    radio::check_host_payload_fits(payload.len())?;
-
+    // How the payload is framed depends on what the board's firmware can
+    // receive: one packet on older builds, a multipart sequence on v0.4.2+.
+    // `build_tx_frames` refuses anything the board would mis-frame rather than
+    // transmitting a transaction no receiver can reconstruct.
     let src = state.serial.get_node_address().await;
     let dst = NodeAddress::broadcast();
+    let signed_label = tx.from_private_key_wif.is_some();
 
     if is_mobile {
         // Mobile path: the JS bridge owns the port; emit packet bytes via a
         // Tauri event so the connection-bridge session listener can write them.
-        let signed_label = tx.from_private_key_wif.is_some();
-        let packets = vec![radio::build_doge_tx(&src, &dst, &payload)];
+        let fw = state.mobile_fw_version.lock().await.clone();
+        let packets =
+            radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &payload, fw.as_deref())?;
         for (i, pkt) in packets.iter().enumerate() {
             let label = if signed_label {
                 format!("CMD_DOGE_TX signed (mobile {}/{})", i + 1, packets.len())
@@ -613,11 +724,43 @@ async fn send_transaction(
         }
         let _ = app.emit("mobile-tx-packets", &packets);
     } else {
-        let pkt = radio::build_doge_tx(&src, &dst, &payload);
-        let pkt_hex = hex::encode(&pkt);
-        let label = if tx.from_private_key_wif.is_some() { "CMD_DOGE_TX signed (single)" } else { "CMD_DOGE_TX (single packet)" };
-        emit_debug_traffic(&app, "TX", &pkt_hex, label);
-        state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+        let fw = state.serial.ensure_firmware_version().await;
+        let frames =
+            radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &payload, fw.as_deref())?;
+        for (i, pkt) in frames.iter().enumerate() {
+            let label = match (signed_label, frames.len()) {
+                (true, 1) => "CMD_DOGE_TX signed (single)".to_string(),
+                (false, 1) => "CMD_DOGE_TX (single packet)".to_string(),
+                (signed, n) => format!(
+                    "CMD_DOGE_TX{} (multipart {}/{})",
+                    if signed { " signed" } else { "" },
+                    i + 1,
+                    n
+                ),
+            };
+            emit_debug_traffic(&app, "TX", &hex::encode(pkt), &label);
+        }
+        // Frames go out one at a time, each acknowledged by the board before the
+        // next is written — see SerialManager::send_frames. A multipart send is
+        // several seconds of real airtime, so report progress rather than
+        // leaving the UI to guess whether anything is happening.
+        let total_frames = frames.len();
+        let app_for_progress = app.clone();
+        state
+            .serial
+            .send_frames_with_progress(frames, move |sent, total| {
+                if total > 1 {
+                    let _ = app_for_progress.emit(
+                        "transaction-progress",
+                        serde_json::json!({ "sent": sent, "total": total }),
+                    );
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        if total_frames > 1 {
+            log::info!("Transaction sent as {} LoRa frames", total_frames);
+        }
     }
 
     let msg = if tx.from_private_key_wif.is_some() {
@@ -713,7 +856,33 @@ async fn update_lora_settings(
         "CMD_SET_LORA_PARAMS → SF{} BW{}kHz CR4/{} {}MHz {}dBm",
         settings.spreading_factor, settings.bandwidth_khz, cr, settings.frequency_mhz, tx_power,
     ));
-    state.serial.send_raw(lora_pkt).await.map_err(|e| e.to_string())?;
+    // The board validates these before applying them and answers a legacy NACK,
+    // not a 0x21 packet, when they are out of range — it leaves the radio
+    // untouched rather than retuning to somewhere it can never be reached again.
+    // Without waiting for the 0x21 the UI reported "Verified" for settings the
+    // board had thrown away, which is precisely the failure the NACK exists to
+    // make visible. Firmware before v0.4.1 (FW10) treated 0x21 as a no-op ACK,
+    // so only newer boards are held to this.
+    let fw = state.serial.get_firmware_version().await;
+    let board_applies_lora_params = fw
+        .as_deref()
+        .and_then(radio::firmware_build_number)
+        .is_some_and(|b| b >= 10);
+
+    let params_acked = state
+        .serial
+        .send_and_await_reply(lora_pkt, radio::CMD_SET_LORA_PARAMS, 1500)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if board_applies_lora_params && !params_acked {
+        return Err(format!(
+            "The board rejected these radio settings and left its radio unchanged: \
+             SF{}, {} kHz, CR4/{}, {} MHz, {} dBm. Valid ranges are SF 7–12, \
+             bandwidth 125/250/500 kHz, coding rate 4/5–4/8, 150–960 MHz, and 2–22 dBm.",
+            settings.spreading_factor, settings.bandwidth_khz, cr, settings.frequency_mhz, tx_power
+        ));
+    }
 
     let verified = state
         .serial
@@ -764,8 +933,7 @@ async fn get_board_settings(
     // the Rust SerialManager.  is_connected() is always false on mobile.
     // Return the board settings cached by mobile_push_bytes when CMD_GET_SETTINGS
     // last arrived — this is the same data the frontend already has from board-sync.
-    let is_mobile_connected = state.current_port.lock().await.is_some()
-        && !state.serial.is_connected();
+    let is_mobile_connected = js_bridge_owns_port(&state).await;
 
     if is_mobile_connected {
         let cached = state.serial.get_board_settings().await;
@@ -844,6 +1012,14 @@ async fn get_history(
 
 /// v0.3.6 — Spawn `radiodoge-cli daemon -p <port>` as a background gateway process.
 /// Emits "gateway-status" event on start.
+///
+/// **The daemon takes ownership of the serial port.** A serial port has exactly
+/// one owner: on Windows the daemon's open would simply fail, and on Linux both
+/// processes read the same device and each receives a random subset of the
+/// bytes — on the path that carries transactions. Since the button is normally
+/// pressed for the port the app itself is holding, the app releases it here and
+/// takes it back in [`stop_gateway`], rather than leaving two readers fighting
+/// over one board.
 #[tauri::command]
 async fn start_gateway(
     port: String,
@@ -855,8 +1031,30 @@ async fn start_gateway(
         let mut gp = state.gateway_process.lock().await;
         if let Some(ref mut child) = *gp {
             let _ = child.kill().await;
+            let _ = child.wait().await;
         }
         *gp = None;
+        *state.gateway_owned_port.lock().await = None;
+    }
+
+    // Hand the port over if we are the one holding it. The auto-reconnect
+    // watchdog has to be stopped first, or it will reopen the port underneath
+    // the daemon a couple of seconds later.
+    let holding_this_port = state
+        .current_port
+        .lock()
+        .await
+        .as_deref()
+        .is_some_and(|p| p == port);
+    if holding_this_port {
+        log::info!("Releasing {} so the gateway daemon can own it", port);
+        state.reconnect_enabled.store(false, Ordering::Relaxed);
+        state.connection_generation.fetch_add(1, Ordering::SeqCst);
+        state.serial.disconnect().await.map_err(|e| e.to_string())?;
+        *state.current_port.lock().await = None;
+        let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
+        #[cfg(desktop)]
+        tray::update_tray_status(&app, false, None);
     }
 
     // v0.3.7 — Find radiodoge-cli: check same dir as this executable first (bundled),
@@ -874,6 +1072,10 @@ async fn start_gateway(
 
     let child = tokio::process::Command::new(&cli_path)
         .args(["daemon", "-p", &port])
+        // Without this the daemon outlives the app: closing the window would
+        // leave an orphan holding the serial port, and the next launch could not
+        // open the board at all.
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!(
             "Failed to spawn '{}': {}. \
@@ -881,13 +1083,49 @@ async fn start_gateway(
             cli_path, e
         ))?;
 
+    // Spawning succeeding only means the binary launched. The daemon can still
+    // exit immediately — no board on that port, no permission, port still held —
+    // and reporting "Gateway Online" for a process that is already dead is worse
+    // than reporting nothing. Give it a moment and check it is still alive.
+    let mut child = child;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            let mut msg = format!(
+                "The gateway daemon exited immediately ({}). The most common cause is that \
+                 {} could not be opened — check the board is attached and that nothing else \
+                 is using the port.",
+                status, port
+            );
+            // We took the port away for it; give it back rather than leaving the
+            // app disconnected after a failure it did not cause.
+            if holding_this_port {
+                match connect_port(port.clone(), state, app).await {
+                    Ok(()) => msg.push_str(" Reconnected the app to the board."),
+                    Err(e) => msg.push_str(&format!(" Reconnecting the app also failed: {}", e)),
+                }
+            }
+            return Err(msg);
+        }
+        Ok(None) => {}  // still running, as expected
+        Err(e) => log::warn!("Could not check the gateway daemon's state: {}", e),
+    }
+
     *state.gateway_process.lock().await = Some(child);
-    let _ = app.emit("gateway-status", serde_json::json!({ "online": true, "port": port }));
+    *state.gateway_owned_port.lock().await = Some(port.clone());
+    let _ = app.emit(
+        "gateway-status",
+        serde_json::json!({ "online": true, "port": port, "portReleased": holding_this_port }),
+    );
     log::info!("Gateway daemon started on port {}", port);
     Ok(())
 }
 
 /// v0.3.6 — Stop the background gateway daemon.
+///
+/// Reconnects to the port the daemon was given, if the app was the one that
+/// released it — otherwise stopping the gateway would leave the user staring at
+/// a disconnected app with no indication that they need to press Connect again.
 #[tauri::command]
 async fn stop_gateway(
     state: State<'_, AppState>,
@@ -895,9 +1133,24 @@ async fn stop_gateway(
 ) -> Result<(), String> {
     if let Some(mut child) = state.gateway_process.lock().await.take() {
         let _ = child.kill().await;
+        // The OS releases the port when the process actually exits, which is not
+        // instantaneous; reopening too early fails with "access denied".
+        let _ = child.wait().await;
     }
+    let released = state.gateway_owned_port.lock().await.take();
     let _ = app.emit("gateway-status", serde_json::json!({ "online": false }));
     log::info!("Gateway daemon stopped");
+
+    if let Some(port) = released {
+        if !state.serial.is_connected() {
+            log::info!("Reclaiming {} now the gateway daemon has exited", port);
+            if let Err(e) = connect_port(port.clone(), state, app).await {
+                // Not fatal: the user can press Connect. Say so rather than
+                // reporting a failure to stop the gateway, which did stop.
+                log::warn!("Could not reopen {} after stopping the gateway: {}", port, e);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -934,13 +1187,29 @@ async fn set_wifi_enabled(
     let pkt = radio::build_wifi_toggle(&src, enable);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_WIFI_TOGGLE (0x24) → {}", if enable { "ON" } else { "OFF" }));
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    // Re-query to confirm
+    // Wait for the board's own 0x24 reply. Without it this returned the value
+    // that had been *requested* — `unwrap_or(enable)` — so a board that never
+    // answered still flipped the toggle in the UI, and the user was looking at a
+    // setting that had not been applied.
+    let acked = state
+        .serial
+        .send_and_await_reply(pkt, radio::CMD_WIFI_TOGGLE, 2000)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !acked {
+        return Err(
+            "The board did not acknowledge the WiFi change, so it may not have been applied.              Nothing was changed in the app."
+                .to_string(),
+        );
+    }
+
+    // Re-query for the authoritative state.
     let confirm = radio::build_get_settings(&src);
     state.serial.send_raw(confirm).await.ok();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let bs = state.serial.get_board_settings().await;
+    // The board acknowledged, so falling back to the requested value is now a
+    // statement about something that actually happened.
     let confirmed = bs.as_ref().map(|s| s.wifi_enabled).unwrap_or(enable);
     if let Some(ref bs) = bs {
         let _ = app.emit("board-sync", bs);
@@ -992,8 +1261,7 @@ async fn query_battery(state: State<'_, AppState>, app: AppHandle) -> Result<Opt
 async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<String>, String> {
     // Android mobile path: MAC is cached by mobile_push_bytes on CMD_GET_MAC arrival.
     // Return the cached value immediately; the JS caller writes GET_MAC via bridge first.
-    let is_mobile_connected = state.current_port.lock().await.is_some()
-        && !state.serial.is_connected();
+    let is_mobile_connected = js_bridge_owns_port(&state).await;
     if is_mobile_connected {
         return Ok(state.serial.get_board_mac().await);
     }
@@ -1016,18 +1284,79 @@ async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
 
 /// v0.3.16 — Encrypt and persist the wallet to app-local storage.
 /// The WIF private key is encrypted with ChaCha20-Poly1305 (argon2id KDF, 64 MiB).
+/// Marker the frontend matches on to offer "replace it anyway".
+///
+/// A distinguishable prefix rather than prose, so the UI can react to this one
+/// case without pattern-matching an English sentence.
+pub const ERR_DIFFERENT_WALLET_SAVED: &str = "different_wallet_saved:";
+
+/// The address of the wallet currently saved on disk, if there is one.
+///
+/// Read from the plaintext `address` field of the encrypted file, so it needs no
+/// passphrase — the point is to know *which* wallet is stored without being able
+/// to open it.
+async fn saved_wallet_address(app: &AppHandle) -> Option<String> {
+    let path = app.path().app_data_dir().ok()?.join("wallet.json");
+    let json = tokio::fs::read_to_string(&path).await.ok()?;
+    if let Ok(enc) = serde_json::from_str::<wallet::EncryptedWalletFile>(&json) {
+        return Some(enc.address);
+    }
+    // Legacy plaintext format (pre-v0.3.16).
+    serde_json::from_str::<WalletInfo>(&json).ok().map(|w| w.address)
+}
+
 #[tauri::command]
-async fn save_wallet(wallet_info: WalletInfo, passphrase: String, app: AppHandle) -> Result<(), String> {
+async fn save_wallet(
+    wallet_info: WalletInfo,
+    passphrase: String,
+    allow_replace: Option<bool>,
+    app: AppHandle,
+) -> Result<(), String> {
     if passphrase.len() < 8 {
         return Err("Passphrase must be at least 8 characters.".to_string());
     }
+
+    // Never silently replace a *different* wallet. There is one wallet file, and
+    // overwriting it destroys the only copy of the previous key — which is
+    // trivially reachable: dismiss the unlock prompt on launch, generate a new
+    // wallet, save it. The UI cannot be the only thing standing between a user
+    // and that, so the refusal lives here and has to be overridden explicitly.
+    if !allow_replace.unwrap_or(false) {
+        if let Some(existing) = saved_wallet_address(&app).await {
+            if existing != wallet_info.address {
+                return Err(format!("{}{}", ERR_DIFFERENT_WALLET_SAVED, existing));
+            }
+        }
+    }
     let encrypted = wallet::encrypt_wallet(&wallet_info, &passphrase)
         .map_err(|e| e.to_string())?;
+
+    // Prove the ciphertext decrypts back to this exact wallet before anything is
+    // written. This file is often the user's only copy of the key, and a wallet
+    // that saved "successfully" but cannot be reopened is indistinguishable from
+    // losing the coins. The cost is one extra argon2 pass on save.
+    match wallet::decrypt_wallet(&encrypted, &passphrase) {
+        Ok(check) if check.private_key_wif == wallet_info.private_key_wif
+            && check.address == wallet_info.address => {}
+        Ok(_) => {
+            return Err("Refusing to save: the encrypted wallet did not decrypt back to the \
+                        same key. Nothing was written; your existing wallet file is untouched."
+                .to_string())
+        }
+        Err(e) => {
+            return Err(format!(
+                "Refusing to save: the encrypted wallet could not be decrypted back ({}). \
+                 Nothing was written; your existing wallet file is untouched.",
+                e
+            ))
+        }
+    }
+
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let path = dir.join("wallet.json");
     let json = serde_json::to_string_pretty(&encrypted).map_err(|e| e.to_string())?;
-    tokio::fs::write(&path, json).await.map_err(|e| e.to_string())?;
+    write_file_atomically(&path, &json).await?;
     log::info!("Encrypted wallet saved to disk.");
     Ok(())
 }
@@ -1114,7 +1443,7 @@ async fn save_address_book(entries: Vec<serde_json::Value>, app: AppHandle) -> R
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let path = dir.join("address_book.json");
     let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
-    tokio::fs::write(&path, json).await.map_err(|e| e.to_string())?;
+    write_file_atomically(&path, &json).await?;
     Ok(())
 }
 
@@ -1294,7 +1623,11 @@ async fn mobile_push_bytes(
 
         // Handle specific packet types
         match cmd {
-            radio::CMD_GET_FIRMWARE_VERSION => {
+            // Only inside the window opened by mobile_build_connect_queries — a
+            // relayed over-the-air packet must not be able to set this.
+            radio::CMD_GET_FIRMWARE_VERSION
+                if now_millis() < state.mobile_fw_query_until_ms.load(Ordering::Relaxed) =>
+            {
                 if let Ok(raw) = hex::decode(&packet.payload_hex) {
                     if let Ok(ver) = String::from_utf8(raw) {
                         let ver = ver.trim_matches('\0').trim().to_string();
@@ -1347,7 +1680,9 @@ async fn mobile_push_bytes(
                 }
             }
 
-            radio::CMD_DOGE_TX => {
+            // Skip the board's own bare acknowledgement of a send — see
+            // is_incoming_doge_tx.
+            radio::CMD_DOGE_TX if is_incoming_doge_tx(&packet) => {
                 // No system-tray notification on Android; emit an in-app event instead
                 let body = packet.decoded.clone()
                     .unwrap_or_else(|| "Incoming Dogecoin transaction over LoRa".to_string());
@@ -1484,8 +1819,20 @@ async fn set_ble_enabled(
     let pkt = radio::build_ble_toggle(&src, enable);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_BLE_TOGGLE (0x28) → {}", if enable { "ON" } else { "OFF" }));
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
-    // BLE toggle ACK is just the 9-byte echo — no follow-up GET_SETTINGS needed.
+    // The board answers 0x28 with a 9-byte echo carrying the state it applied.
+    // This used to return `enable` without looking, so the UI reported a toggle
+    // the board may never have received.
+    let acked = state
+        .serial
+        .send_and_await_reply(pkt, radio::CMD_BLE_TOGGLE, 2000)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !acked {
+        return Err(
+            "The board did not acknowledge the Bluetooth change, so it may not have been              applied. Nothing was changed in the app."
+                .to_string(),
+        );
+    }
     Ok(enable)
 }
 
@@ -1499,6 +1846,12 @@ async fn set_ble_enabled(
 #[tauri::command]
 async fn mobile_build_connect_queries(state: State<'_, AppState>) -> Result<Vec<Vec<u8>>, String> {
     let src = state.serial.get_node_address().await;
+    // Opening the window here rather than when the bytes are written: the JS
+    // layer writes these immediately, and a few seconds covers BLE's slower
+    // round trip. Outside it, a "version reply" is somebody else's LoRa packet.
+    state
+        .mobile_fw_query_until_ms
+        .store(now_millis() + MOBILE_FIRMWARE_REPLY_WINDOW_MS, Ordering::Relaxed);
     Ok(vec![
         radio::build_get_firmware_version(&src),
         radio::build_get_settings(&src),
@@ -1510,6 +1863,11 @@ async fn mobile_build_connect_queries(state: State<'_, AppState>) -> Result<Vec<
 /// Returns a `Vec<Vec<u8>>` — each inner Vec is one complete packet to write
 /// in order. Payloads ≤ 192 bytes produce a single packet; larger payloads
 /// are split into a multipart sequence (identical to the desktop send path).
+///
+/// The JS bridge must write these **one at a time with a gap between them** —
+/// see `MULTIPART_FRAME_GAP_MS` in `connection-bridge.ts`. The board's serial
+/// receive buffer holds only a few hundred bytes and it does not read while the
+/// radio is transmitting, so a burst is lost silently.
 #[tauri::command]
 async fn mobile_build_tx_packets(
     tx: TransactionRequest,
@@ -1536,8 +1894,11 @@ async fn mobile_build_tx_packets(
         .map_err(|e| e.to_string())?
     };
 
-    radio::check_host_payload_fits(payload.len())?;
-    Ok(vec![radio::build_doge_tx(&src, &dst, &payload)])
+    // Whether a multipart sequence can be handed to the board depends on its
+    // firmware. On Android the version is cached by mobile_push_bytes when the
+    // board answers CMD_GET_FIRMWARE_VERSION during the connect handshake.
+    let fw = state.mobile_fw_version.lock().await.clone();
+    radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &payload, fw.as_deref())
 }
 
 /// Build a SET_LORA_PARAMS packet (CMD 0x21) for the Android USB bridge.
@@ -1789,6 +2150,26 @@ pub fn run() {
             log::info!("RadioDoge GUI v0.3.16 started — much mesh, very wow 🐕");
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("Error running RadioDoge GUI")
+        .run(|app, event| {
+            // v0.4.2 — Kill the gateway daemon on the way out.
+            //
+            // The child is spawned with `kill_on_drop`, but that only fires when
+            // the `Child` is actually dropped — and it lives in managed state
+            // that the process never drops on exit. So closing the window left a
+            // `radiodoge-cli daemon` running and holding the serial port, and the
+            // next launch could not open the board at all.
+            if let tauri::RunEvent::Exit = event {
+                let state = app.state::<AppState>();
+                let gateway = Arc::clone(&state.gateway_process);
+                tauri::async_runtime::block_on(async move {
+                    if let Some(mut child) = gateway.lock().await.take() {
+                        log::info!("Stopping the gateway daemon before exit");
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                    }
+                });
+            }
+        })
 }

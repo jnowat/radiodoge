@@ -119,23 +119,52 @@ fn sha256d(data: &[u8]) -> [u8; 32] {
     Sha256::digest(first).into()
 }
 
+/// `true` if a compact `nBits` value is one Bitcoin Core's `SetCompact` accepts.
+///
+/// Two encodings are invalid and must never be expanded into a usable target:
+///
+/// - **Negative**, i.e. bit `0x0080_0000` set. That bit is a sign flag, not part
+///   of the mantissa. Reading it as mantissa yields a target roughly 128× the
+///   real one — and a *larger* target is *easier* to meet, so a forged header
+///   carrying `0x1d80ffff` would have passed a difficulty check it should fail.
+/// - **Overflowing**, i.e. a mantissa/exponent pair whose value does not fit in
+///   256 bits.
+pub fn compact_is_valid(bits: u32) -> bool {
+    let size = bits >> 24;
+    let word = bits & 0x007f_ffff;
+    if bits & 0x0080_0000 != 0 {
+        return false; // negative
+    }
+    if word == 0 {
+        return true; // zero is representable (and expands to a zero target)
+    }
+    // Mirrors Core's overflow test.
+    !(size > 34 || (word > 0xff && size > 33) || (word > 0xffff && size > 32))
+}
+
 /// Expand a compact `nBits` value into the full 256-bit target (big-endian bytes).
 ///
 /// Compact form: the most-significant byte is the base-256 exponent; the low
 /// three bytes are the mantissa. Mirrors Bitcoin Core's `SetCompact`.
+///
+/// A negative or overflowing encoding (see [`compact_is_valid`]) expands to a
+/// **zero** target, which no hash can meet. That is the safe direction: the old
+/// implementation ignored the sign bit and let `exponent` wrap, so
+/// `nBits = 0x2080_0000` produced a target of 2^255 — a value nearly every hash
+/// is below, making the proof-of-work check accept anything at all.
 pub fn bits_to_target(bits: u32) -> [u8; 32] {
-    let exponent = (bits >> 24) & 0xff;
-    let mantissa = bits & 0x00ff_ffff;
     let mut target = [0u8; 32];
+    if !compact_is_valid(bits) {
+        return target;
+    }
+    let exponent = (bits >> 24) & 0xff;
+    let mantissa = bits & 0x007f_ffff;
     if mantissa == 0 {
         return target;
     }
     // The mantissa occupies `exponent` bytes counting from the least-significant
     // end. Place its 3 bytes so the lowest mantissa byte sits at position
     // (exponent - 1) from the big-endian right edge.
-    // target = mantissa * 256^(exponent - 3). The mantissa bytes below are ordered
-    // most-significant first (i = 0), so mantissa byte i sits (exponent - 1 - i)
-    // bytes from the least-significant (right) edge of the 256-bit target.
     let exp = exponent as usize;
     for (i, m_byte) in [
         ((mantissa >> 16) & 0xff) as u8,
@@ -145,12 +174,13 @@ pub fn bits_to_target(bits: u32) -> [u8; 32] {
     .into_iter()
     .enumerate()
     {
-        // Byte offset from the right (least-significant) edge for this mantissa byte.
-        // wrapping_sub keeps bytes shifted past the right edge (small exponents)
-        // out of range so the `< 32` guard drops them.
-        let from_right = exp.wrapping_sub(1 + i);
-        if from_right < 32 {
-            target[31 - from_right] = m_byte;
+        // Byte offset from the right (least-significant) edge for this mantissa
+        // byte. `checked_sub` drops bytes shifted past the right edge by a small
+        // exponent; `compact_is_valid` has already excluded a large one.
+        if let Some(from_right) = exp.checked_sub(1 + i) {
+            if from_right < 32 {
+                target[31 - from_right] = m_byte;
+            }
         }
     }
     target
@@ -162,7 +192,13 @@ pub fn bits_to_target(bits: u32) -> [u8; 32] {
 /// See the module-level proof-of-work note about what this does and does not
 /// prove on Dogecoin.
 pub fn hash_meets_target(hash: &[u8; 32], bits: u32) -> bool {
+    if !compact_is_valid(bits) {
+        return false; // an encoding no honest header carries
+    }
     let target = bits_to_target(bits);
+    if target == [0u8; 32] {
+        return false; // nothing can be at or below zero
+    }
     // Compare big-endian. `hash` is little-endian internal order, so reverse it.
     let mut be = *hash;
     be.reverse();
@@ -214,16 +250,34 @@ pub fn verify_header_chain(headers: &[BlockHeader], check_pow: bool) -> Result<(
 /// - `index`: the 0-based position of the tx within the block's tx list. Bit 0
 ///   of `index` selects the side at the lowest level, bit 1 the next, etc.
 ///
-/// Returns the reconstructed merkle root in internal byte order.
+/// Returns the reconstructed merkle root in internal byte order, or `None` if
+/// the proof is structurally invalid — see the checks inside.
 pub fn merkle_root_from_branch(
     txid_internal: &[u8; 32],
     branch: &[[u8; 32]],
-    mut index: u32,
-) -> [u8; 32] {
+    index: u32,
+) -> Option<[u8; 32]> {
+    // A branch of `n` levels describes a tree with at most 2^n leaves, so an
+    // index needing more than `n` bits does not belong to this proof. The old
+    // code shifted the surplus bits away and returned a root regardless, which
+    // let one branch "prove" many different positions.
+    if branch.len() < 32 && (index >> branch.len()) != 0 {
+        return None;
+    }
+
     let mut acc = *txid_internal;
+    let mut idx = index;
     for sibling in branch {
+        // CVE-2012-2459. A Bitcoin merkle tree duplicates the last node when a
+        // level has an odd number of entries, so a node paired with *itself* is
+        // structurally possible — and an attacker can exploit that to build a
+        // second, different transaction list with the same root. A legitimate
+        // proof never needs a sibling equal to the node it is paired with.
+        if *sibling == acc {
+            return None;
+        }
         let mut buf = [0u8; 64];
-        if index & 1 == 0 {
+        if idx & 1 == 0 {
             // Current node is on the left.
             buf[..32].copy_from_slice(&acc);
             buf[32..].copy_from_slice(sibling);
@@ -233,9 +287,9 @@ pub fn merkle_root_from_branch(
             buf[32..].copy_from_slice(&acc);
         }
         acc = sha256d(&buf);
-        index >>= 1;
+        idx >>= 1;
     }
-    acc
+    Some(acc)
 }
 
 /// Reverse a 32-byte hash — converts between display (big-endian) hex order and
@@ -282,8 +336,13 @@ pub fn verify_merkle_proof(
         );
     }
     let expected_root = display_hex_to_internal(merkle_root_hex)?;
-    let computed = merkle_root_from_branch(&txid, &branch, index);
-    Ok(computed == expected_root)
+    match merkle_root_from_branch(&txid, &branch, index) {
+        Some(computed) => Ok(computed == expected_root),
+        // A structurally invalid proof is not "a proof of a different root" — it
+        // is not a proof at all. Reporting `false` rather than an error keeps the
+        // caller's contract ("does this prove inclusion?") answerable.
+        None => Ok(false),
+    }
 }
 
 /// The confirmation status of a transaction, as reported by a Blockbook server.
@@ -528,14 +587,52 @@ mod tests {
         // Proof for leaf index 2: siblings are leaf[3] (level 0) then n01 (level 1).
         let branch = [leaves[3], n01];
         let computed = merkle_root_from_branch(&leaves[2], &branch, 2);
-        assert_eq!(computed, root);
+        assert_eq!(computed, Some(root));
 
         // Proof for leaf index 0: siblings are leaf[1] then n23.
         let branch0 = [leaves[1], n23];
-        assert_eq!(merkle_root_from_branch(&leaves[0], &branch0, 0), root);
+        assert_eq!(merkle_root_from_branch(&leaves[0], &branch0, 0), Some(root));
 
         // A wrong index must not reconstruct the root.
-        assert_ne!(merkle_root_from_branch(&leaves[2], &branch, 0), root);
+        assert_ne!(merkle_root_from_branch(&leaves[2], &branch, 0), Some(root));
+
+        // An index that needs more bits than the branch has levels does not
+        // belong to this proof at all.
+        assert_eq!(merkle_root_from_branch(&leaves[2], &branch, 4), None);
+        assert_eq!(merkle_root_from_branch(&leaves[2], &branch, u32::MAX), None);
+
+        // CVE-2012-2459: a sibling equal to the node it is paired with is the
+        // duplicated-node shape used to forge a second transaction list with the
+        // same root. It is never needed by a legitimate proof.
+        assert_eq!(merkle_root_from_branch(&leaves[0], &[leaves[0]], 0), None);
+        // Also at a higher level: n23 paired with itself.
+        assert_eq!(merkle_root_from_branch(&leaves[2], &[leaves[3], n23], 2), None);
+    }
+
+    /// Compact difficulty values Bitcoin Core rejects must never expand into a
+    /// target a hash can meet.
+    ///
+    /// The sign bit used to be read as mantissa, so `0x1d80ffff` produced a
+    /// target ~128x the real one — and a bigger target is *easier* to meet. The
+    /// exponent was also allowed to wrap, so `0x20800000` gave a target of 2^255,
+    /// which nearly every hash is below.
+    #[test]
+    fn test_invalid_compact_bits_are_rejected() {
+        for bad in [0x0080_0000u32, 0x2080_0000, 0x1d80_ffff, 0xff00_0001, 0xff7f_ffff] {
+            assert!(!compact_is_valid(bad), "0x{:08x} should be rejected", bad);
+            assert_eq!(bits_to_target(bad), [0u8; 32], "0x{:08x} must expand to zero", bad);
+            assert!(
+                !hash_meets_target(&[0u8; 32], bad),
+                "0x{:08x} must not let even a zero hash pass",
+                bad
+            );
+        }
+
+        // Real values from the chain still work exactly as before.
+        for good in [0x1d00_ffffu32, 0x1b04_04cb, 0x1e0f_fff0, 0x2100_ffff] {
+            assert!(compact_is_valid(good), "0x{:08x} should be accepted", good);
+            assert_ne!(bits_to_target(good), [0u8; 32]);
+        }
     }
 
     /// A single-transaction block: the merkle root equals the coinbase txid, and

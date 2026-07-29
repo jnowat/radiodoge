@@ -88,6 +88,35 @@ export type MobileConnectionStatus =
 const BLE_WRITE_CHAR_UUID  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // NUS RX — host writes
 const BLE_NOTIFY_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // NUS TX — board notifies
 
+// ─── Host → board pacing ─────────────────────────────────────────────────────
+
+/**
+ * Gap between the frames of one multipart transaction.
+ *
+ * Each frame becomes its own LoRa transmission, and the board does not read the
+ * serial port while the radio is busy: a 200-byte packet is roughly 330 ms of
+ * airtime at the default SF7, and considerably more if the radio has been
+ * retuned to a higher spreading factor. Writing the next frame before the board
+ * comes back overruns its receive buffer, and the bytes are dropped with no
+ * error on either side — the receiving gateway simply never completes the
+ * sequence and the transaction disappears.
+ *
+ * The desktop path does better than a fixed delay: it waits for the board to
+ * acknowledge each frame, which paces the host to real airtime (see
+ * `SerialManager::send_frames`). This bridge has no acknowledgement plumbed
+ * through to JS, so it uses a delay sized for the slow case instead.
+ */
+const MULTIPART_FRAME_GAP_MS = 900;
+
+/**
+ * Gap between the two connect-handshake queries.
+ *
+ * Both are fixed-length commands the board now frames exactly, so this only has
+ * to be long enough for it to finish answering the first before the second
+ * arrives.
+ */
+const CONNECT_QUERY_GAP_MS = 150;
+
 // ─── USB VID/PID recognition ─────────────────────────────────────────────────
 
 const HELTEC_USB_VIDS = new Set([
@@ -140,9 +169,23 @@ export async function isAndroid(): Promise<boolean> {
 let activePort: InstanceType<typeof SerialPort> | null = null;
 
 /**
- * True while the USB polling read loop is running.
- * Set to false to stop the loop (on disconnect or error).
+ * Generation of the USB read loop that is allowed to run.
+ *
+ * A single boolean was not enough. Two loops can briefly overlap — a reconnect
+ * starts one while the previous is still inside its 100 ms read — and they then
+ * shared one flag, with two ways to go wrong: the old loop's exit set the flag
+ * false and killed the *new* one, or both kept running and each received a
+ * random subset of the bytes. The second is the worse outcome, because both
+ * push into the same accumulator and the byte stream arrives interleaved, which
+ * is indistinguishable from line noise to the framer.
+ *
+ * Bumping the generation retires every existing loop; each loop exits as soon as
+ * it notices it is no longer the current one, and only the current one may
+ * change shared state on the way out.
  */
+let readLoopGeneration = 0;
+
+/** True while a USB read loop is actually running (for diagnostics). */
 let activeReadLoopRunning = false;
 
 /** BLE device address (MAC) when connected over BLE (null when disconnected). */
@@ -413,7 +456,7 @@ async function _connectAndroid(devicePath: string): Promise<void> {
   const initPackets = await invoke<number[][]>('mobile_build_connect_queries');
   for (let i = 0; i < initPackets.length; i++) {
     await _usbWrite(new Uint8Array(initPackets[i]));
-    if (i < initPackets.length - 1) await _sleep(80);
+    if (i < initPackets.length - 1) await _sleep(CONNECT_QUERY_GAP_MS);
   }
 }
 
@@ -492,7 +535,7 @@ async function _connectBluetoothAndroid(address: string): Promise<void> {
   const initPackets = await invoke<number[][]>('mobile_build_connect_queries');
   for (let i = 0; i < initPackets.length; i++) {
     await _bleWrite(new Uint8Array(initPackets[i]));
-    if (i < initPackets.length - 1) await _sleep(80);
+    if (i < initPackets.length - 1) await _sleep(CONNECT_QUERY_GAP_MS);
   }
 }
 
@@ -512,8 +555,9 @@ export async function disconnect(): Promise<void> {
 async function _disconnectAndroid(notifyRust: boolean): Promise<void> {
   _clearSessionListeners();
 
-  // Tell the polling read loop to stop.  It will exit within at most one
-  // 100 ms read window (the current read_binary call).
+  // Retire every read loop. Each exits within at most one 100 ms read window
+  // (the current read_binary call).
+  readLoopGeneration++;
   activeReadLoopRunning = false;
 
   await _closePort();
@@ -556,8 +600,9 @@ async function _disconnectAndroid(notifyRust: boolean): Promise<void> {
 const READ_LOOP_IDLE_MS = 5;
 
 async function _startReadLoop(devicePath: string): Promise<void> {
+  const myGeneration = ++readLoopGeneration;
   activeReadLoopRunning = true;
-  while (activeReadLoopRunning) {
+  while (readLoopGeneration === myGeneration) {
     try {
       const raw = await invoke('plugin:serialplugin|read_binary', {
         path: devicePath,
@@ -575,7 +620,7 @@ async function _startReadLoop(devicePath: string): Promise<void> {
         await _sleep(READ_LOOP_IDLE_MS);
       }
     } catch (e: unknown) {
-      if (!activeReadLoopRunning) break;  // Normal shutdown — silently exit
+      if (readLoopGeneration !== myGeneration) break;  // Retired — silently exit
       const msg = String(e).toLowerCase();
       // A read timeout (no data in the 100 ms window) is normal and expected.
       if (
@@ -589,12 +634,30 @@ async function _startReadLoop(devicePath: string): Promise<void> {
         await _sleep(READ_LOOP_IDLE_MS);
         continue;
       }
-      // Any other error means the port is closed or device was unplugged.
-      console.warn('[bridge] USB read loop: port error, stopping:', e);
-      break;
+      // Any other error means the port is closed or the device was unplugged.
+      //
+      // This used to `break` and leave everything else untouched: the app went
+      // on showing "connected" with a dead reader, so nothing ever arrived
+      // again — no board replies, no TX_ACK — and a transaction sent afterwards
+      // went into a void that looked exactly like a working connection.
+      console.warn('[bridge] USB read loop: port error, disconnecting:', e);
+      if (readLoopGeneration === myGeneration) {
+        activeReadLoopRunning = false;
+        // Retire this generation so the teardown below cannot be undone by a
+        // loop that is still unwinding.
+        readLoopGeneration++;
+        await _disconnectAndroid(/* notifyRust */ true).catch((err) =>
+          console.warn('[bridge] teardown after read error failed:', err),
+        );
+      }
+      return;
     }
   }
-  activeReadLoopRunning = false;
+  // Only the current generation may clear the shared flag; a retired loop
+  // exiting must not report that the live one has stopped.
+  if (readLoopGeneration === myGeneration) {
+    activeReadLoopRunning = false;
+  }
 }
 
 async function _disconnectBluetoothAndroid(notifyRust: boolean): Promise<void> {
@@ -641,16 +704,18 @@ async function _registerSessionListeners(): Promise<void> {
 
   // send_transaction emits this event on Android so the bridge can write the
   // signed radio packets over USB or BLE without any protocol code in the UI.
+  // On Android the Rust `send_transaction` command builds the frames and returns
+  // straight away; the bytes are written here. A failure in this listener used to
+  // be an unhandled promise rejection — invisible — while the UI had already told
+  // the user the transaction was sent. Report it instead: a transaction that
+  // never reached the board is exactly what someone needs to know about.
   const unlistenMobileTx = await listen<number[][]>('mobile-tx-packets', async (ev) => {
-    const packets = ev.payload;
-    for (let i = 0; i < packets.length; i++) {
-      const chunk = new Uint8Array(packets[i]);
-      if (activeBleAddress) {
-        await _bleWrite(chunk);
-      } else {
-        await _usbWrite(chunk);
-      }
-      if (packets.length > 1 && i < packets.length - 1) await _sleep(120);
+    try {
+      await _writeTxFrames(ev.payload);
+    } catch (e: unknown) {
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error('[bridge] transaction write failed:', detail);
+      window.dispatchEvent(new CustomEvent('radiodoge:tx-send-failed', { detail }));
     }
   });
   sessionUnlistens.push(unlistenMobileTx);
@@ -671,13 +736,38 @@ function _clearSessionListeners(): void {
  * Logs the bytes to the debug traffic stream via `mobile_ble_write_characteristic`
  * (visible in the Debug Console tab), then performs the GATT write via blec.
  */
+/**
+ * Largest payload that fits in one GATT write on any connection.
+ *
+ * A BLE link starts at the mandatory 23-byte ATT MTU, of which 3 bytes are the
+ * write header — so 20 bytes is what every device is guaranteed to accept.
+ * Larger writes only work once both ends have negotiated a bigger MTU, which
+ * `plugin-blec` neither performs nor exposes: `send()` hands the whole buffer to
+ * a single platform GATT write.
+ *
+ * That matters now that a transaction can be a 200-byte frame. Without chunking
+ * such a write is rejected or silently truncated depending on the platform, and
+ * a truncated frame is a transaction the gateway can never reassemble. 20 bytes
+ * is slower than necessary on a link that did negotiate more, but it is the only
+ * size that is correct without being able to ask.
+ */
+const BLE_MAX_WRITE_CHUNK = 20;
+
 async function _bleWrite(data: Uint8Array): Promise<void> {
   if (!activeBleAddress) throw new Error('No active BLE connection');
   // Debug logging (non-blocking — fire-and-forget is fine here)
   invoke('mobile_ble_write_characteristic', { data: Array.from(data) }).catch(() => {});
   const blec = await _blec();
-  // plugin-blec v0.5+ uses send(char, data) instead of sendData(svc, char, data)
-  await blec.send(BLE_WRITE_CHAR_UUID, data, 'withoutResponse');
+
+  // Chunked, and 'withResponse' rather than 'withoutResponse': a write without
+  // response has no flow control, so the controller may drop chunks when its
+  // buffer fills and neither end finds out. For a signed transaction that is a
+  // silent loss, and the round trip per chunk is worth it.
+  for (let offset = 0; offset < data.length; offset += BLE_MAX_WRITE_CHUNK) {
+    const chunk = data.subarray(offset, Math.min(offset + BLE_MAX_WRITE_CHUNK, data.length));
+    // plugin-blec v0.5+ uses send(char, data) instead of sendData(svc, char, data)
+    await blec.send(BLE_WRITE_CHAR_UUID, chunk, 'withResponse');
+  }
 }
 
 // ─── Port helpers ─────────────────────────────────────────────────────────────
@@ -808,6 +898,28 @@ export async function mobilePing(): Promise<void> {
   }
 }
 
+
+/**
+ * Write the frames of one transaction, in order, over whichever transport is
+ * active.
+ *
+ * Frames are paced by `MULTIPART_FRAME_GAP_MS` because the board does not read
+ * serial while its radio is transmitting. Throws if any frame fails to write —
+ * a partially written sequence cannot be reassembled by the receiving gateway,
+ * so the caller must not report success.
+ */
+async function _writeTxFrames(packets: number[][]): Promise<void> {
+  for (let i = 0; i < packets.length; i++) {
+    const chunk = new Uint8Array(packets[i]);
+    if (activeBleAddress) {
+      await _bleWrite(chunk);
+    } else {
+      await _usbWrite(chunk);
+    }
+    if (packets.length > 1 && i < packets.length - 1) await _sleep(MULTIPART_FRAME_GAP_MS);
+  }
+}
+
 /**
  * Send a Dogecoin transaction.
  *
@@ -816,15 +928,7 @@ export async function mobilePing(): Promise<void> {
  */
 export async function mobileSendTransaction(tx: TransactionRequest): Promise<void> {
   const packets = await invoke<number[][]>('mobile_build_tx_packets', { tx });
-  for (let i = 0; i < packets.length; i++) {
-    const chunk = new Uint8Array(packets[i]);
-    if (activeBleAddress) {
-      await _bleWrite(chunk);
-    } else {
-      await _usbWrite(chunk);
-    }
-    if (packets.length > 1 && i < packets.length - 1) await _sleep(120);
-  }
+  await _writeTxFrames(packets);
 }
 
 /**

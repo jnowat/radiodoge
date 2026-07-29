@@ -1,0 +1,89 @@
+# RadioDoge — test and lint gate
+#
+# The workspace has a substantial test suite, including an end-to-end model of
+# the host ↔ board ↔ gateway path that a signed transaction takes. Until this
+# workflow existed nothing ran it: the two build workflows compile the app and
+# cargo-audit checks dependencies for CVEs, so a change that broke packet
+# framing would produce a green tick and a working installer.
+#
+# Everything here runs offline — no test touches the network — so this is fast
+# and deterministic.
+
+name: Test & Lint
+
+on:
+  push:
+    branches: [master, main, '0.0.1-Beta-1', 'claude/**']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust — test & clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # `serialport` needs libudev; the Tauri crate needs GTK/WebKit even for a
+      # `cargo test` that runs none of its UI.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libudev-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - name: Test workspace
+        run: cargo test --workspace --all-targets
+
+      # Doc-tests are excluded by --all-targets above, and one of them is the
+      # worked example for the multipart reassembler.
+      - name: Doc tests
+        run: cargo test --workspace --doc
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  frontend:
+    name: Frontend — svelte-check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: radiodoge-gui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: radiodoge-gui
+        run: npm ci
+
+      - name: Type-check
+        working-directory: radiodoge-gui
+        run: npm run check

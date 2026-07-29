@@ -144,7 +144,12 @@ export function setDisconnected() {
   connection.stats = null;
   connection.firmwareVersion = null;
   connection.gatewayMode = false;
-  connection.gatewayOnline = false;
+  // `gatewayOnline` is deliberately NOT cleared here. It tracks a separate
+  // daemon process, not this app's serial connection — and starting the daemon
+  // *disconnects* the app, because the port has one owner. Clearing it made the
+  // "Stop" button vanish the moment the daemon took the port, leaving a running
+  // daemon with no way to stop it from the UI. Only the `gateway-status` event
+  // may change it.
   connection.wifiEnabled = true;
   connection.addrConflict = false;
   connection.neighbors = [];

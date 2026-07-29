@@ -22,7 +22,8 @@
 //!   [9]  Part index (0-based, 1 byte)
 //!   [10] Part ID high byte
 //!   [11] Part ID low byte
-//!   [12+] Payload chunk
+//!   [12] Chunk length — how many payload bytes follow (v0.4.2)
+//!   [13+] Payload chunk
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -55,10 +56,40 @@ pub const CMD_BLE_TOGGLE: u8 = 0x28;          // v0.3.16: Enable/disable BLE adv
 pub const CMD_RECEIVED_ACK: u8 = 0x29;        // v0.4.0: Board-initiated: over-the-air ACK received from remote node
 pub const CMD_RECEIVED_PING: u8 = 0x2A;       // v0.4.0: Board-initiated: over-the-air Ping received from remote node
 
+// ─── Firmware legacy serial enum ─────────────────────────────────────────────
+//
+// The board serves its own older serial protocol on the same port, and two of
+// its replies reach a host that never asked for them. They are not desktop
+// packets and carry no addresses; they exist here only so the framing loops
+// consume exactly the right number of bytes and stay aligned.
+/// `[0x3F, 3, 'h', board_version, firmware_version]` — legacy hardware info.
+pub const LEGACY_HARDWARE_INFO: u8 = 0x3F;
+/// `[0xFE, 1, 0x06 | 0x15]` — legacy ACK / NACK result code.
+pub const LEGACY_RESULT_CODE: u8 = 0xFE;
+
 /// Single packet header length in bytes
 pub const SINGLE_HDR_LEN: usize = 8;
-/// Multipart packet header length (single header + 4 multipart bytes)
-pub const MULTIPART_HDR_LEN: usize = 12;
+/// Multipart packet header length (single header + 5 multipart bytes)
+///
+/// **v0.4.2 — grew from 12 to 13.** The fifth byte is the chunk length. Without
+/// it a multipart frame has no in-band size, so a framer reading a byte stream
+/// had to guess: it assumed every chunk was full and swallowed whatever followed
+/// a short final part. Serial is a byte stream in *both* directions — host→board
+/// and gateway board→daemon — so that guess corrupted the one frame that carries
+/// a signed transaction. With an explicit length every multipart frame is
+/// self-delimiting and framing is exact everywhere.
+pub const MULTIPART_HDR_LEN: usize = 13;
+
+/// Offset of the chunk-length byte inside a multipart header.
+pub const MULTIPART_LEN_OFFSET: usize = 12;
+
+/// Multipart header bytes beyond the standard 8-byte header:
+/// `[total, index, session_hi, session_lo, chunk_len]`.
+///
+/// The firmware calls the same quantity `DESKTOP_MULTIPART_EXTRA`; the two must
+/// agree, because it is how many bytes the board reads before it knows how long
+/// the chunk is.
+pub const MULTIPART_EXTRA_LEN: usize = MULTIPART_HDR_LEN - SINGLE_HDR_LEN;
 
 /// Flags byte: standard single packet
 pub const FLAG_STANDARD: u8 = 0x00;
@@ -242,6 +273,22 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
         CMD_RECEIVED_ACK    => Some(8),  // header only; src = remote node that sent the ACK
         CMD_RECEIVED_PING   => Some(8),  // header only; src = remote node that sent the Ping
+
+        // The firmware's legacy result code: `[0xFE, 1, ACK|NAK]`, three bytes,
+        // not a desktop packet at all. A gateway board emits one every time it
+        // relays a host MESSAGE — which is exactly what a `TX_ACK` is — so this
+        // lands in the daemon's stream routinely.
+        //
+        // Without a length here the framer treated `0xFE` as the start of an
+        // 8-byte packet, waited, and then took five bytes from whatever came
+        // next: an acknowledgement from the board corrupted the packet behind
+        // it. Framed at its real length the three bytes are consumed and
+        // discarded (`parse_incoming` rejects anything shorter than a header),
+        // and the stream stays aligned.
+        LEGACY_RESULT_CODE   => Some(3),
+        // Legacy hardware-info reply: `[0x3F, 3, 'h', board, firmware]`.
+        LEGACY_HARDWARE_INFO => Some(5),
+
         _ => None,                       // variable length (0x03 MSG, 0x20 FW version, etc.)
     }
 }
@@ -259,11 +306,16 @@ fn is_plausible_flags(flags: u8) -> bool {
 /// `true` if `buf` plausibly begins a packet.
 ///
 /// Stronger than [`is_known_command`] alone, because the command set overlaps
-/// heavily with printable ASCII and the firmware writes plain `Serial.println`
-/// debug text down the same link. `0x20` is both `CMD_GET_FIRMWARE_VERSION` and
-/// the space character, `0x21`–`0x2A` are `!"#$%&'()*`, and `0x62`/`0x64`/`0x68`/`0x6D`
-/// are `b`/`d`/`h`/`m` — so a log line resynchronises on its first space and the
+/// heavily with printable ASCII and text can share the link with packets.
+/// `0x20` is both `CMD_GET_FIRMWARE_VERSION` and the space character,
+/// `0x21`–`0x2A` are `!"#$%&'()*`, and `0x62`/`0x64`/`0x68`/`0x6D` are
+/// `b`/`d`/`h`/`m` — so a log line resynchronises on its first space and the
 /// next eight characters get read as a header.
+///
+/// Firmware v0.4.2 stopped writing its runtime log to the serial port for
+/// exactly this reason, but the check stays load-bearing: older boards write a
+/// line per received packet, every board still prints a boot banner, and
+/// `HOST_SERIAL_DEBUG` puts the log back on the wire deliberately.
 ///
 /// Requiring the following byte to be a valid flags value discards most of
 /// those: in text, the byte after a space is usually a letter, and only two of
@@ -297,43 +349,132 @@ pub fn resync_offset(buf: &[u8]) -> usize {
         .unwrap_or(buf.len())
 }
 
+// ─── Host → board capability gating ──────────────────────────────────────────
+
+/// First firmware build that frames a host→board multipart sequence correctly.
+///
+/// Builds before this read header byte 1 as a payload length while the host
+/// writes its *flags* there, and then drained every buffered byte into a single
+/// frame — so a multipart sequence arrived glued together and misaligned. Build
+/// 11 (v0.4.2) reads the exact number of bytes each frame declares, so parts
+/// stay separate no matter how they are buffered.
+pub const MIN_MULTIPART_FIRMWARE: u32 = 11;
+
+/// Extract the numeric build from a firmware version string.
+///
+/// The board reports `"RadioDoge NV3FW11"`; the app also stores the string with
+/// the `RadioDoge ` prefix already stripped, so both forms are accepted. Returns
+/// `None` when no `FW<digits>` field is present.
+pub fn firmware_build_number(version: &str) -> Option<u32> {
+    let idx = version.find("FW")?;
+    let digits: String = version[idx + 2..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// `true` when the connected board can receive a multipart sequence over serial.
+///
+/// An unknown version is treated as "cannot" — a board that never answered
+/// `GET_FIRMWARE_VERSION` is more likely to be old than new, and guessing wrong
+/// in the optimistic direction means transmitting a transaction no receiver can
+/// reconstruct.
+pub fn firmware_supports_multipart(version: Option<&str>) -> bool {
+    version
+        .and_then(firmware_build_number)
+        .is_some_and(|b| b >= MIN_MULTIPART_FIRMWARE)
+}
+
+/// The largest payload the connected board will accept from its serial host.
+pub fn max_host_payload_len(version: Option<&str>) -> usize {
+    if firmware_supports_multipart(version) {
+        MAX_MULTIPART_PAYLOAD_LEN
+    } else {
+        MAX_SINGLE_PAYLOAD_LEN
+    }
+}
+
 /// Check that a payload can actually reach the board over the host serial link.
 ///
-/// The Heltec firmware reads the host header as `[command, payload_size]` — it
-/// treats byte 1 as a length, while the host writes its flags byte there. That
-/// works only while flags are `0x00`: [`FLAG_MULTIPART`] (`0x01`) makes the
-/// board read one payload byte, swallowing the first source-address byte and
-/// misaligning every byte after it.
+/// On firmware ≥ [`MIN_MULTIPART_FIRMWARE`] the limit is the multipart ceiling,
+/// which comfortably covers any realistic signed transaction. On older firmware
+/// the limit is a single 192-byte packet: those builds mis-frame multipart, and
+/// sending anyway produced no error and a corrupted transmission — for a signed
+/// transaction, a silent loss of money. So the check is mandatory on every send
+/// path rather than advisory.
 ///
-/// So a host→board packet must fit in a single frame. Multipart is real
-/// protocol — the firmware speaks it over the air, and
-/// [`try_build_multipart_packets`] encodes it correctly — but it cannot
-/// currently be handed to the board over serial. Sending it anyway produced no
-/// error and a corrupted transmission, which for a signed transaction is a
-/// silent loss, so callers must check before sending.
-///
-/// Returns `Err` with a user-facing message when `payload_len` is too large.
-pub fn check_host_payload_fits(payload_len: usize) -> Result<(), String> {
-    if payload_len <= MAX_SINGLE_PAYLOAD_LEN {
+/// `firmware_version` is the string the board reported for
+/// [`CMD_GET_FIRMWARE_VERSION`], or `None` if it never answered.
+pub fn check_host_payload_fits(
+    payload_len: usize,
+    firmware_version: Option<&str>,
+) -> Result<(), String> {
+    let limit = max_host_payload_len(firmware_version);
+    if payload_len <= limit {
         return Ok(());
     }
+    if firmware_supports_multipart(firmware_version) {
+        return Err(format!(
+            "Payload is {} bytes; a multipart sequence carries at most {} ({} parts of {}). \
+             Broadcast it over the internet instead (`radiodoge-cli broadcast`, or the \
+             Wallet tab's direct broadcast).",
+            payload_len, MAX_MULTIPART_PAYLOAD_LEN, MAX_MULTIPART_PARTS, MULTIPART_CHUNK_LEN
+        ));
+    }
     Err(format!(
-        "Payload is {} bytes; the board's serial protocol accepts at most {} per packet. \
-         Multipart transfer to the board is not supported by the current firmware, so this \
-         cannot be sent over LoRa. A signed transaction exceeds the limit whenever it has a \
-         change output or more than one input — broadcast it over the internet instead \
-         (`radiodoge-cli broadcast`, or the Wallet tab's direct broadcast).",
-        payload_len, MAX_SINGLE_PAYLOAD_LEN
+        "Payload is {} bytes; this board accepts at most {} per packet. Sending a larger \
+         payload over LoRa needs firmware v0.4.2 (FW{}) or newer — the board reports {}. \
+         Flash the firmware in `heltec-firmware-v3/`, or broadcast this transaction over \
+         the internet instead (`radiodoge-cli broadcast`, or the Wallet tab's direct \
+         broadcast).",
+        payload_len,
+        MAX_SINGLE_PAYLOAD_LEN,
+        MIN_MULTIPART_FIRMWARE,
+        firmware_version.unwrap_or("no version"),
     ))
+}
+
+/// Build the frames for one host→board send, choosing single or multipart.
+///
+/// This is the one place that decides how a payload is put on the wire, so the
+/// GUI, the CLI and the Android bridge cannot drift apart on it. The caller must
+/// write the frames **in order, one at a time**, waiting for the board to
+/// acknowledge each — see `SerialManager::send_frames`. The board's serial
+/// receive buffer is small, and a burst that overruns it loses bytes silently.
+pub fn build_tx_frames(
+    src: &NodeAddress,
+    dst: &NodeAddress,
+    cmd: u8,
+    payload: &[u8],
+    firmware_version: Option<&str>,
+) -> Result<Vec<Vec<u8>>, String> {
+    if payload.is_empty() {
+        // The board skips the radio entirely for a zero-length payload but still
+        // acknowledges the frame, so an empty send would be reported as
+        // successful having transmitted nothing at all.
+        return Err("nothing to send: the payload is empty".to_string());
+    }
+    check_host_payload_fits(payload.len(), firmware_version)?;
+    if payload.len() <= MAX_SINGLE_PAYLOAD_LEN {
+        let mut pkt = build_header(cmd, FLAG_STANDARD, src, dst);
+        pkt.extend_from_slice(payload);
+        return Ok(vec![pkt]);
+    }
+    try_build_multipart_packets(src, dst, cmd, payload)
 }
 
 /// `true` if `byte` can legitimately start a packet.
 ///
-/// The framing loops use this to resynchronise: the firmware also emits plain
-/// `Serial.println` debug text, and any byte that cannot begin a packet is
-/// dropped until the stream lines up again. Every transport must agree on this
-/// set — a command missing here is silently discarded as noise, which then
-/// shifts every packet behind it by one byte.
+/// The framing loops use this to resynchronise: the board can also emit plain
+/// text (a boot banner always, its whole runtime log on firmware before v0.4.2),
+/// and any byte that cannot begin a packet is dropped until the stream lines up
+/// again. Every transport must agree on this set — a command missing here is
+/// silently discarded as noise, which then shifts every packet behind it by one
+/// byte.
 ///
 /// The trailing values (`0x3F`, `0x62`, `0x64`, `0x68`, `0x6D`, `0xFE`) are
 /// firmware-side message IDs that predate the desktop command range.
@@ -359,12 +500,12 @@ pub fn is_known_command(byte: u8) -> bool {
             | CMD_BLE_TOGGLE
             | CMD_RECEIVED_ACK
             | CMD_RECEIVED_PING
-            | 0x3F
+            | LEGACY_HARDWARE_INFO
             | 0x62
             | 0x64
             | 0x68
             | 0x6D
-            | 0xFE
+            | LEGACY_RESULT_CODE
     )
 }
 
@@ -388,19 +529,31 @@ pub fn is_known_command(byte: u8) -> bool {
 /// - Other variable-length commands have no in-band length, so all buffered
 ///   payload bytes are taken, capped at [`MAX_SINGLE_PAYLOAD_LEN`].
 pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
+    // The firmware's legacy replies are shorter than a desktop header, so their
+    // length has to be resolved before the header-length guard below —
+    // otherwise a three-byte result code would wait forever for five bytes that
+    // belong to the next packet.
+    if let Some(n) = exact_packet_len(cmd) {
+        if n < SINGLE_HDR_LEN {
+            return if buf.len() >= n { Some(n) } else { None };
+        }
+    }
+
     if buf.len() < SINGLE_HDR_LEN {
         return None;
     }
 
     // A multipart frame is identified by its flags byte, not its command byte —
-    // it reuses the carried command (e.g. CMD_DOGE_TX). It has a 12-byte header
-    // and, like other variable-length frames, no in-band chunk length.
+    // it reuses the carried command (e.g. CMD_DOGE_TX). Its 13-byte header ends
+    // with an explicit chunk length, so the frame boundary is exact: a short
+    // final part no longer consumes the packet queued behind it.
     if is_multipart_flags(buf[1]) {
         if buf.len() < MULTIPART_HDR_LEN {
             return None;
         }
-        let chunk = &buf[MULTIPART_HDR_LEN..];
-        return Some(MULTIPART_HDR_LEN + chunk.len().min(MULTIPART_CHUNK_LEN));
+        let chunk_len = (buf[MULTIPART_LEN_OFFSET] as usize).min(MULTIPART_CHUNK_LEN);
+        let total = MULTIPART_HDR_LEN + chunk_len;
+        return if buf.len() >= total { Some(total) } else { None };
     }
 
     if let Some(n) = exact_packet_len(cmd) {
@@ -486,11 +639,12 @@ pub const MAX_MULTIPART_PAYLOAD_LEN: usize = MULTIPART_CHUNK_LEN * MAX_MULTIPART
 
 /// Split a large payload into multipart packets (for payloads > MAX_SINGLE_PAYLOAD_LEN).
 ///
-/// Each part has a 12-byte header:
+/// Each part has a 13-byte header:
 ///   [0..8]  Standard header (with FLAG_MULTIPART)
 ///   [8]     Total parts count
 ///   [9]     This part's index (0-based)
 ///   [10-11] Unique session ID (random u16, same for all parts)
+///   [12]    Chunk length — payload bytes in this part
 ///
 /// Returns an empty vec if `payload` exceeds [`MAX_MULTIPART_PAYLOAD_LEN`].
 /// Prefer [`try_build_multipart_packets`], which reports that as an error
@@ -518,6 +672,12 @@ pub fn try_build_multipart_packets(
     cmd: u8,
     payload: &[u8],
 ) -> Result<Vec<Vec<u8>>, String> {
+    if payload.is_empty() {
+        // `chunks` yields nothing for an empty slice, which would stamp every
+        // frame with total_parts = 0 — a shape the parser rejects. There is
+        // nothing to split, so say so instead of emitting an empty sequence.
+        return Err("cannot build a multipart sequence for an empty payload".to_string());
+    }
     if payload.len() > MAX_MULTIPART_PAYLOAD_LEN {
         return Err(format!(
             "payload of {} bytes needs {} multipart parts, but the protocol allows at most {} ({} bytes)",
@@ -540,6 +700,9 @@ pub fn try_build_multipart_packets(
             packet.push(total_parts as u8);
             packet.push(idx as u8);
             packet.extend_from_slice(&session_id.to_be_bytes());
+            // Explicit chunk length (v0.4.2). `chunks` never yields more than
+            // MULTIPART_CHUNK_LEN (187) bytes, so this always fits in a u8.
+            packet.push(chunk.len() as u8);
             packet.extend_from_slice(chunk);
             packet
         })
@@ -569,6 +732,12 @@ pub struct MultipartPart<'a> {
 /// Parse a multipart frame. Returns `None` if `buf` is not a well-formed
 /// multipart packet — including structurally impossible part counts/indices,
 /// which are rejected here so the reassembler never has to defend against them.
+///
+/// The declared chunk length (v0.4.2) is authoritative: the chunk is exactly
+/// that many bytes, and a frame whose declared length exceeds either
+/// [`MULTIPART_CHUNK_LEN`] or the bytes actually present is rejected rather than
+/// silently shortened. Reassembling a transaction from a chunk the sender did
+/// not write is worse than dropping the frame and letting the session time out.
 pub fn parse_multipart(buf: &[u8]) -> Option<MultipartPart<'_>> {
     if buf.len() < MULTIPART_HDR_LEN || !is_multipart_flags(buf[1]) {
         return None;
@@ -576,6 +745,10 @@ pub fn parse_multipart(buf: &[u8]) -> Option<MultipartPart<'_>> {
     let total_parts = buf[8];
     let index = buf[9];
     if total_parts == 0 || total_parts > MAX_MULTIPART_PARTS || index >= total_parts {
+        return None;
+    }
+    let chunk_len = buf[MULTIPART_LEN_OFFSET] as usize;
+    if chunk_len > MULTIPART_CHUNK_LEN || buf.len() < MULTIPART_HDR_LEN + chunk_len {
         return None;
     }
     Some(MultipartPart {
@@ -586,7 +759,7 @@ pub fn parse_multipart(buf: &[u8]) -> Option<MultipartPart<'_>> {
         total_parts,
         index,
         session_id: u16::from_be_bytes([buf[10], buf[11]]),
-        chunk: &buf[MULTIPART_HDR_LEN..],
+        chunk: &buf[MULTIPART_HDR_LEN..MULTIPART_HDR_LEN + chunk_len],
     })
 }
 
@@ -1217,15 +1390,88 @@ mod tests {
         );
     }
 
-    /// The board reads header byte 1 as a payload length, so only single packets
-    /// can be sent to it over serial.
+    const NEW_FW: &str = "RadioDoge NV3FW11";
+    const OLD_FW: &str = "RadioDoge NV3FW10";
+
+    /// Firmware older than FW11 mis-frames multipart, so it is held to one
+    /// packet; FW11 and newer get the full multipart ceiling.
     #[test]
     fn test_check_host_payload_fits() {
-        assert!(check_host_payload_fits(0).is_ok());
-        assert!(check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN).is_ok());
-        let err = check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN + 1)
-            .expect_err("oversized payloads must be rejected");
+        // Old firmware: single packet only.
+        assert!(check_host_payload_fits(0, Some(OLD_FW)).is_ok());
+        assert!(check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN, Some(OLD_FW)).is_ok());
+        let err = check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN + 1, Some(OLD_FW))
+            .expect_err("oversized payloads must be rejected on old firmware");
         assert!(err.contains("193"), "the error should name the actual size: {}", err);
+        assert!(err.contains("v0.4.2"), "the error should say what to flash: {}", err);
+
+        // Unknown firmware is treated as old — guessing optimistically would
+        // transmit a transaction no receiver could reconstruct.
+        assert!(check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN + 1, None).is_err());
+
+        // New firmware: a real signed transaction fits.
+        assert!(check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN + 1, Some(NEW_FW)).is_ok());
+        assert!(check_host_payload_fits(MAX_MULTIPART_PAYLOAD_LEN, Some(NEW_FW)).is_ok());
+        let err = check_host_payload_fits(MAX_MULTIPART_PAYLOAD_LEN + 1, Some(NEW_FW))
+            .expect_err("beyond the multipart ceiling is still an error");
+        assert!(err.contains("multipart"), "{}", err);
+    }
+
+    #[test]
+    fn test_firmware_build_number_parsing() {
+        assert_eq!(firmware_build_number("RadioDoge NV3FW11"), Some(11));
+        assert_eq!(firmware_build_number("NV3FW09"), Some(9));
+        assert_eq!(firmware_build_number("NV2FW11"), Some(11));
+        // The app strips the "RadioDoge " prefix before storing — still parses.
+        assert_eq!(firmware_build_number("NV3FW123"), Some(123));
+        assert_eq!(firmware_build_number("no version here"), None);
+        assert_eq!(firmware_build_number("FW"), None);
+
+        assert!(!firmware_supports_multipart(None));
+        assert!(!firmware_supports_multipart(Some("RadioDoge NV3FW10")));
+        assert!(firmware_supports_multipart(Some("RadioDoge NV3FW11")));
+        assert!(firmware_supports_multipart(Some("RadioDoge NV3FW12")));
+
+        assert_eq!(max_host_payload_len(None), MAX_SINGLE_PAYLOAD_LEN);
+        assert_eq!(max_host_payload_len(Some(NEW_FW)), MAX_MULTIPART_PAYLOAD_LEN);
+    }
+
+    /// `build_tx_frames` is the single decision point for how a payload goes on
+    /// the wire; every send path uses it, so its choices must be exact.
+    #[test]
+    fn test_build_tx_frames_chooses_single_or_multipart() {
+        let (src, dst) = (test_src(), test_dst());
+
+        // Small payload → exactly one single-packet frame, regardless of firmware.
+        for fw in [None, Some(OLD_FW), Some(NEW_FW)] {
+            let frames = build_tx_frames(&src, &dst, CMD_DOGE_TX, b"small", fw).unwrap();
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0][0], CMD_DOGE_TX);
+            assert_eq!(frames[0][1], FLAG_STANDARD, "a single frame is not multipart");
+            assert_eq!(&frames[0][SINGLE_HDR_LEN..], b"small");
+        }
+
+        // Exactly at the single-packet limit — still one frame, no multipart.
+        let at_limit = vec![0x5Au8; MAX_SINGLE_PAYLOAD_LEN];
+        let frames = build_tx_frames(&src, &dst, CMD_DOGE_TX, &at_limit, Some(NEW_FW)).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), SINGLE_HDR_LEN + MAX_SINGLE_PAYLOAD_LEN);
+
+        // One byte over → multipart, and the sequence reassembles byte-exact.
+        let over = vec![0xA5u8; MAX_SINGLE_PAYLOAD_LEN + 1];
+        let frames = build_tx_frames(&src, &dst, CMD_DOGE_TX, &over, Some(NEW_FW)).unwrap();
+        assert!(frames.len() > 1);
+        let mut rx = MultipartReassembler::new();
+        let mut out = None;
+        for f in &frames {
+            if let Some(d) = ingest_packet(f, 0, &mut rx, 0) {
+                out = Some(d);
+            }
+        }
+        assert_eq!(hex::decode(&out.unwrap().payload_hex).unwrap(), over);
+
+        // Old firmware refuses the same payload rather than mis-framing it.
+        assert!(build_tx_frames(&src, &dst, CMD_DOGE_TX, &over, Some(OLD_FW)).is_err());
     }
 
     /// Truncating an over-long message must not split a multi-byte character.
@@ -1626,8 +1872,8 @@ mod tests {
         );
     }
 
-    /// Framing must size multipart frames by their 12-byte header, not the
-    /// 8-byte single-packet one.
+    /// Framing must size multipart frames by their 13-byte header and the chunk
+    /// length it declares, not the 8-byte single-packet header.
     #[test]
     fn test_frame_packet_len_handles_multipart() {
         let payload = vec![0xEEu8; 400];
@@ -1639,12 +1885,132 @@ mod tests {
             Some(first.len()),
             "a complete multipart frame is consumed whole"
         );
-        // Still arriving: not even the header is in yet.
-        assert_eq!(frame_packet_len(first[0], &first[..MULTIPART_HDR_LEN - 1]), None);
+        // Still arriving: every prefix short of the whole frame must wait.
+        for n in 0..first.len() {
+            assert_eq!(
+                frame_packet_len(first[0], &first[..n]),
+                None,
+                "a {}-byte prefix of a {}-byte multipart frame must wait",
+                n,
+                first.len()
+            );
+        }
         // Back-to-back frames: the first must not swallow the second.
         let mut two = first.clone();
         two.extend_from_slice(&packets[1]);
         assert_eq!(frame_packet_len(two[0], &two), Some(first.len()));
+    }
+
+    /// The regression the chunk-length byte exists for.
+    ///
+    /// The final part of a sequence is almost always short. Without a declared
+    /// length the framer assumed every chunk was full and consumed 187 payload
+    /// bytes, eating whatever packet was queued behind it — for a gateway that
+    /// is a `TX_ACK` swallowed by the transaction it acknowledges.
+    #[test]
+    fn test_short_final_multipart_part_does_not_swallow_the_next_packet() {
+        // 200 bytes → part 0 is full (187), part 1 carries just 13.
+        let payload: Vec<u8> = (0..200u32).map(|i| (i % 256) as u8).collect();
+        let packets = multipart_for(&payload);
+        assert_eq!(packets.len(), 2);
+        let last = packets.last().unwrap();
+        assert!(
+            last.len() < MULTIPART_HDR_LEN + MULTIPART_CHUNK_LEN,
+            "the final part must actually be short for this test to mean anything"
+        );
+
+        // The short final part, immediately followed by an unrelated packet.
+        let ack = build_message(&test_dst(), &test_src(), "TX_ACK:deadbeef");
+        let mut stream = last.clone();
+        stream.extend_from_slice(&ack);
+
+        let n = frame_packet_len(stream[0], &stream).expect("frame is complete");
+        assert_eq!(n, last.len(), "the short part must end where the sender ended it");
+
+        // And the whole stream still decodes into both packets, in order.
+        let mut rx = MultipartReassembler::new();
+        let mut acc = packets[0].clone();
+        acc.extend_from_slice(&stream);
+        let mut decoded = Vec::new();
+        while !acc.is_empty() {
+            let len = match frame_packet_len(acc[0], &acc) {
+                Some(l) => l,
+                None => break,
+            };
+            if let Some(p) = ingest_packet(&acc[..len], 0, &mut rx, 0) {
+                decoded.push(p);
+            }
+            acc.drain(..len);
+        }
+        assert_eq!(decoded.len(), 2, "the transaction and the ACK both survive");
+        assert_eq!(hex::decode(&decoded[0].payload_hex).unwrap(), payload);
+        assert_eq!(decoded[1].decoded.as_deref(), Some("✅ TX confirmed: txid=deadbeef"));
+    }
+
+    /// A frame whose declared chunk length is impossible must be rejected, not
+    /// reassembled from bytes the sender never wrote.
+    #[test]
+    fn test_multipart_rejects_bad_declared_length() {
+        let packets = multipart_for(&vec![0x33u8; 400]);
+
+        // Declared longer than the protocol allows.
+        let mut too_long = packets[0].clone();
+        too_long[MULTIPART_LEN_OFFSET] = (MULTIPART_CHUNK_LEN + 1) as u8;
+        assert!(parse_multipart(&too_long).is_none());
+
+        // Declared longer than the bytes actually present.
+        let mut truncated = packets[0].clone();
+        truncated.truncate(MULTIPART_HDR_LEN + 10);
+        assert!(parse_multipart(&truncated).is_none());
+
+        // A zero-length chunk is structurally legal and must parse (the
+        // reassembler simply contributes nothing for that part).
+        let mut empty = packets[0][..MULTIPART_HDR_LEN].to_vec();
+        empty[MULTIPART_LEN_OFFSET] = 0;
+        let part = parse_multipart(&empty).expect("a zero-length chunk is well-formed");
+        assert!(part.chunk.is_empty());
+    }
+
+    /// A gateway board emits a legacy 3-byte result code every time it relays a
+    /// host MESSAGE, which is what a `TX_ACK` is. Framed as an 8-byte desktop
+    /// packet it swallowed five bytes of whatever came next.
+    #[test]
+    fn test_legacy_result_code_is_framed_at_three_bytes() {
+        let host_ack = [LEGACY_RESULT_CODE, 0x01, 0x06]; // {RESULT_CODE, 1, ACK}
+
+        // Resynchronisation must accept it, or the bytes are dropped one at a
+        // time and the framer lands mid-code.
+        assert!(looks_like_packet_start(&host_ack));
+        assert_eq!(resync_offset(&host_ack), 0);
+
+        assert_eq!(frame_packet_len(LEGACY_RESULT_CODE, &host_ack), Some(3));
+        assert_eq!(frame_packet_len(LEGACY_RESULT_CODE, &host_ack[..2]), None);
+
+        // It carries no addresses, so it yields no packet — but the three bytes
+        // are consumed and the packet behind it survives intact.
+        let ack_msg = build_message(&test_dst(), &test_src(), "TX_ACK:c0ffee");
+        let mut stream = host_ack.to_vec();
+        stream.extend_from_slice(&ack_msg);
+
+        let mut rx = MultipartReassembler::new();
+        let mut decoded = Vec::new();
+        while !stream.is_empty() {
+            let skip = resync_offset(&stream);
+            if skip > 0 {
+                stream.drain(..skip);
+                continue;
+            }
+            let len = match frame_packet_len(stream[0], &stream) {
+                Some(l) => l,
+                None => break,
+            };
+            if let Some(p) = ingest_packet(&stream[..len], 0, &mut rx, 0) {
+                decoded.push(p);
+            }
+            stream.drain(..len);
+        }
+        assert_eq!(decoded.len(), 1, "only the MESSAGE is a packet");
+        assert_eq!(decoded[0].decoded.as_deref(), Some("✅ TX confirmed: txid=c0ffee"));
     }
 
     /// Verify exact_packet_len returns the correct size for every fixed-length command
