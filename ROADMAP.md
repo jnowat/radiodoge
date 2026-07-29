@@ -84,6 +84,18 @@ Rock-solid against real hardware, and now on your phone.
 
 ## 🔨 v0.4.x — Mesh Reliability & Firmware Parity *(in progress)*
 
+- ✅ **LoRa transmissions actually complete (v0.4.2)** — `Radio.Send` only *starts* a transmission, but the
+  desktop command handlers marked the radio idle immediately afterwards, so the main loop switched it back to
+  receive a couple of milliseconds into a packet that needed hundreds. Every send now goes through
+  `SendLoRaAndWait`, which blocks until `TxDone`; the fixed inter-part delays in the firmware's own multipart
+  senders (100 ms and 500 ms, both shorter than the airtime they were pacing) are gone with it
+- ✅ **Exact host→board framing (v0.4.2)** — the board read a desktop command by sleeping 500 ms and draining
+  its serial buffer, so two commands sent close together merged and the second was lost, and a multipart
+  sequence arrived as one unparseable blob. Frames are now read to an exact length wherever the protocol
+  defines one, and only genuinely unbounded payloads fall back to a gap in the byte stream
+- ✅ **Gateway-side stream alignment (v0.4.2)** — the board's legacy 3-byte ACK/NACK result code and its
+  duplicate-address warning were framed by the host as 8-byte packets, so each one corrupted the packet behind
+  it. A gateway emits a result code every time it relays a `TX_ACK`, so this was on the money path
 - ✅ **Broadcast deduplication** — FNV-1a hash + source address, 20-entry table, 2-minute TTL, to suppress
   mesh-storm re-delivery
 - ✅ **Host ACK/Ping notifications** — the board now tells the host over serial when it hears an over-the-air ACK
@@ -106,10 +118,11 @@ Rock-solid against real hardware, and now on your phone.
 - ✅ **QR code scanning** — a "📷 Scan QR" button on the Send tab decodes a Dogecoin QR from an image file (or
   camera capture on mobile) via a pure-Rust `rqrr` backend command, and a `radiodoge-core::qr` parser fills the
   recipient — plus amount and memo — from a bare address or a BIP21 `dogecoin:…?amount=…&label=…` URI
-- 🔨 **Host → board multipart framing** — the one gap that keeps most real transactions off the air. Needs a
-  firmware host header that doesn't overload byte 1 as a length, plus reassembly in the framing loops and the
-  gateway daemon. Oversized sends currently fail fast with an explanatory error; see
-  [Known Limitations](#-known-limitations--in-progress)
+- ✅ **Host → board multipart framing** — the gap that kept most real transactions off the air. Firmware v0.4.2
+  reads each frame to an exact length instead of draining its serial buffer, multipart frames carry a chunk
+  length so they are self-delimiting on a byte stream, and transmissions wait for `TxDone` instead of being
+  aborted by the main loop. The host splits a payload over 192 bytes into frames and sends them one at a time,
+  waiting for the board to acknowledge each, gated on the board reporting `FW11` or newer
 - 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee.
   Today the fee is a flat 1 DOGE regardless of transaction size
 
@@ -142,35 +155,28 @@ Bridge RadioDoge with the existing Meshtastic community.
 
 Honesty keeps the mesh healthy. These are real gaps in the current build, each already on a roadmap line above:
 
-- **🔴 Host → board is limited to one 192-byte packet, so most signed transactions can't go over LoRa.**
-  The firmware parses the host header as `[command, payload_size]`, reading byte 1 as a length — but the app
-  writes its *flags* byte there. The protocol works only while flags are `0x00`; a multipart frame sets
-  `0x01`, and the board then swallows a source-address byte and misframes the rest. A signed P2PKH transaction
-  is exactly 192 bytes at its smallest (1 input, 1 output, no change), so a change output (`+34`) or a second
-  input (`+148`) pushes it over.
-  **Both halves are now implemented; the host guard stays on until hardware confirms it.**
-  - ✅ *Host-side reassembly (tested).* `radio::MultipartReassembler` reassembles sequences keyed by
-    `(source, session id)`, tolerating out-of-order and duplicated parts, with a 30 s session timeout and a
-    bounded session table. Both framing loops call `radio::ingest_packet`, so the GUI, the packet log, and the
-    gateway daemon all receive one complete packet instead of fragments. A gateway correctly reassembles a
-    multipart transaction arriving over the air.
-  - ✅ *Firmware host-framing (v0.4.1, compile-unverified).* Desktop commands are now dispatched **before**
-    `ReadSerialPayload`, so header byte 1 is never interpreted as a length for them and any flags value frames
-    correctly. The `0x10`/`0x11` relay paths preserve the flags byte instead of hardcoding `0x00`, so a
-    multipart frame reaches the air intact — the board forwards each part verbatim and the receiving gateway's
-    host reassembles, meaning the firmware needs no reassembly buffer of its own.
-  - 🔒 *The host guard is deliberately still enforced.* `radio::check_host_payload_fits` continues to reject
-    oversized sends. Lifting it before the firmware path is validated on hardware would re-expose the original
-    failure — silently transmitting a transaction no receiver can reconstruct — so this is the one change that
-    should not be made blind.
-
-  **To finish this:** flash firmware v0.4.1 (`FIRMWARE_VERSION 10`), confirm a >192-byte signed transaction
-  survives host → board → air → gateway → daemon intact, then relax `check_host_payload_fits` to allow up to
-  `MAX_MULTIPART_PAYLOAD_LEN` and restore the multipart branches in the send paths (GUI `send_transaction`,
-  `mobile_build_tx_packets`, CLI `cmd_send`). Gate it on the reported firmware version so older boards keep the
-  single-packet limit.
-
-  Full analysis: [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
+- **🟡 App-format packets are not relayed hop to hop.**
+  A board that hears a `DOGE_TX` addressed elsewhere hands it to its own serial host but does not retransmit
+  it, so the sender and the gateway must be within direct radio range of each other. The hop count in the
+  header flags is carried and reported end to end, and the firmware's own broadcast format does rebroadcast
+  with a hop limit and a dedup table — but the desktop packet format has neither a relay path nor the dedup
+  a relay path would need, and adding one without both is how mesh storms start.
+- **🟡 A LoRa frame lost in the air is not retransmitted.**
+  A multipart transaction is several independent LoRa transmissions and boards do not acknowledge each other's
+  data packets. If one part is lost, the gateway's reassembler discards the session after 30 s
+  (`MULTIPART_SESSION_TIMEOUT_SECS`) and the transaction is never broadcast — the sender simply never sees a
+  `TX_ACK` and has to send again. The host *does* retransmit a frame the **board** fails to acknowledge over
+  serial, and a duplicate is harmless (the reassembler is keyed by `(source, session id)` and ignores a part it
+  already holds; the gateway daemon remembers txids it has broadcast and re-acknowledges rather than
+  re-broadcasting), so per-part over-the-air acknowledgement is a natural next step rather than a rewrite.
+  The larger a transaction is, the more frames it needs and the likelier this becomes — prefer a wallet with
+  few UTXOs, or broadcast over the internet when the link is marginal.
+- **🟡 The v0.4.2 firmware has not been validated on hardware by the authors.**
+  The host↔board contract it implements is tested end to end in software — `crates/radiodoge-core/tests/`
+  models both boards' framing byte for byte and drives a transaction through the whole path — but the sketch
+  itself has not been flashed to a board and exercised over the air here. The changes it contains are
+  substantial: exact-length host framing, blocking LoRa transmission, and the multipart chunk-length byte. If
+  you have two boards, this is the single most valuable thing to confirm.
 - ~~**BLE is notify-oriented in firmware.**~~ *Fixed in v0.4.1 firmware (needs hardware validation):* inbound
   BLE writes accumulated in `bleRxBuffer` and were never read, so the app could connect and receive
   notifications but every command it sent over Bluetooth was silently ignored. `HandleDesktopCommand` no longer

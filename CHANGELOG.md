@@ -7,6 +7,117 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — 🐕 Dogecoin Over LoRa, End to End — Much Send. Very Multipart. Wow.
+
+> **A real signed Dogecoin transaction can now travel from an offline device, over LoRa, to a board attached to
+> an internet gateway, and onto the network.** Three independent defects each broke that path on their own; all
+> three are fixed, and the whole route is covered by tests that model both boards byte for byte.
+
+### Fixed
+
+#### The board aborted its own LoRa transmissions — including every transaction
+
+`Radio.Send()` only *starts* a transmission on the SX1262; completion arrives asynchronously as `TxDone`. The
+desktop command handlers set `isLoRaIdle = true` immediately after calling it, and `isLoRaIdle` is what the
+main loop reads to decide "nothing is happening, put the radio into receive". So the next loop iteration called
+`Radio.Rx(0)` a couple of milliseconds into a packet that needs several hundred, aborting it. This hit `0x10`
+`CMD_DOGE_TX`, `0x11` `CMD_REQUEST_BALANCE`, and the gateway's `TX_ACK` relay — the entire money path.
+
+- New `SendLoRaAndWait()` sets a dedicated `loRaTxPending` flag, transmits, and pumps `Radio.IrqProcess()`
+  until `TxDone` or a 10-second ceiling. Every transmission in the firmware now goes through it.
+- The firmware's own multipart senders paced their parts with `delay(100)` / `delay(500)`, both shorter than
+  the airtime of the packet being paced, so each part overwrote the one before it. Those delays are gone.
+- The host acknowledgement for `0x10` is written only after the transmission completes, which makes it real
+  flow control rather than a formality.
+
+#### Host → board framing merged whatever arrived together
+
+`HostSerialRead()` read a desktop command's first two bytes, slept 500 ms, and then drained every buffered
+byte as that frame's payload. Two consequences, both silent:
+
+- A multipart sequence — frames written back to back by definition — arrived as one oversized blob. This is
+  why host→board multipart never worked, and why the host capped payloads at a single 192-byte packet.
+- Any command queued behind another was swallowed as its payload and lost. The GUI's connect handshake worked
+  around this by asking for the firmware version up to three times.
+
+Frames are now read to an exact length wherever the protocol defines one: a fixed-size command by its known
+total, a multipart frame by its declared chunk length, and only genuinely unbounded payloads (single-packet
+`0x10`/`0x11`, a relayed `0x03`) by waiting for a 30 ms gap in the byte stream. The BLE framer got the same
+treatment. `Serial.setRxBufferSize(1024)` gives the FIFO room for more than one frame while the radio is busy.
+
+#### Multipart frames had no in-band length, so a short final part ate the next packet
+
+Serial is a byte stream in both directions and the final part of a sequence is almost always short. A framer
+with no declared length had to assume every chunk was full and consumed 187 payload bytes regardless — taking
+whatever packet was queued behind it. At a gateway that means a `TX_ACK` swallowed by the transaction it
+acknowledges.
+
+The multipart header grew from 12 to 13 bytes; byte 12 is the chunk length. Every multipart frame is now
+self-delimiting on the host, in the firmware, and over BLE. A frame declaring more than 187 bytes, or more
+than are present, is rejected rather than shortened — reassembling a transaction from bytes the sender never
+wrote is worse than dropping the frame.
+
+#### Two board replies corrupted the packet behind them
+
+- The firmware's legacy 3-byte result code `[0xFE, 1, ACK|NAK]` was framed by the host as an 8-byte desktop
+  packet, so it waited and then took five bytes from whatever came next. A gateway emits one **every time it
+  relays a `TX_ACK`**, so this was squarely on the money path. `exact_packet_len` now knows its real length
+  (and the legacy 5-byte hardware-info reply's), and `frame_packet_len` resolves lengths shorter than a header
+  before the header-length guard.
+- The duplicate-address warning (`0x25`) went out in the legacy `[cmd, size, payload…]` shape, five bytes,
+  while the host frames `0x25` as a standard 8-byte packet. It is now a proper 8-byte packet.
+
+#### A non-gateway board pinged a random address when asked to relay a message
+
+A desktop `CMD_MESSAGE` (`0x03`) reaching a board with gateway mode off fell through to the legacy
+`PING_REQUEST` case — enum value 3 collides with `CMD_MESSAGE` — and transmitted a ping to whatever address was
+left in the serial buffer. It now consumes the frame and NACKs.
+
+#### A duplicate broadcast cost the sender its acknowledgement
+
+A transaction addressed to the broadcast address is handed to its host by *every* board that hears it, so a
+gateway routinely sees the same signed bytes more than once. The second POST is rejected as a duplicate, which
+looked like a broadcast failure: three retries, then "broadcast failed", and no `TX_ACK` — for a transaction
+that was on the network the whole time. The daemon now remembers what it has broadcast by txid and
+re-acknowledges instead of re-POSTing, and recognises the "already in mempool / already known" family of
+errors as success. `wallet::compute_txid` derives the txid from the raw bytes, so the acknowledgement is
+correct even when the network returns no id.
+
+### Added
+
+- **Host→board multipart, gated on firmware version.** `radio::build_tx_frames` is the single decision point
+  for how a payload goes on the wire — used by the GUI, the CLI and the Android bridge — and refuses anything
+  the connected board cannot reassemble. A board reporting a build older than `FW11`, or reporting nothing, is
+  held to one 192-byte packet with an error that says what to flash.
+- **`SerialManager::send_frames`** — writes frames one at a time, waiting for the board's acknowledgement
+  before each next one, with up to two retransmissions per frame. Because the board answers only once the
+  transmission is on the air, the host paces itself to real airtime. A multipart sequence that loses an
+  acknowledgement fails loudly rather than putting an unreassemblable fragment on the air.
+- **`SerialManager::ensure_firmware_version`** — queries the board if the version is not already cached, so a
+  headless caller that connects and immediately sends is not silently held to the old limit.
+- **`radiodoge-cli daemon` enables gateway mode on its board at startup**, and warns when the board is too old
+  to relay a full-size transaction. Gateway mode is what lets the board radio a `TX_ACK` back to the sender;
+  forgetting it produced a gateway that broadcast perfectly and never acknowledged anything.
+- **End-to-end tests** (`crates/radiodoge-core/tests/end_to_end_lora_tx.rs`) that model both boards' framing
+  byte for byte and drive transactions of 100 … 3,740 bytes through host → board → air → gateway → daemon,
+  with every serial stream concatenated with no gaps — the worst case for a byte-stream framer and exactly
+  what used to fail. Also covers two senders at once, every single-frame-dropped permutation, and the
+  old-firmware refusal.
+
+### Changed
+
+- **Firmware version 11 (v0.4.2).** The version is now a capability gate, not just a display string.
+- `MULTIPART_HDR_LEN` 12 → 13, `MULTIPART_CHUNK_LEN` 188 → 187, `MAX_MULTIPART_PAYLOAD_LEN` 3,760 → 3,740.
+- `radio::check_host_payload_fits` takes the board's firmware version.
+- The Android bridge paces multipart frames at 900 ms (`MULTIPART_FRAME_GAP_MS`) — it has no acknowledgement
+  plumbed through to JS — and its connect handshake at 150 ms now that the board frames commands exactly.
+- README, `docs/PROTOCOL.md`, `docs/USER_MANUAL.md`, `ROADMAP.md` and the firmware README updated. The
+  headline "most real transactions can't be relayed over LoRa yet" warning is replaced by what is now true,
+  including the two limitations that remain: no over-the-air retransmission of a lost frame, and no hardware
+  validation of this firmware by the authors.
+
+---
+
 ## [Unreleased] — 🔍 Full Review: Build, Framing & Honest Docs — Much Audit. Very Fixed. Wow.
 
 > **A full-repository review pass. The headline: a clean clone could not build at all, both packet-framing

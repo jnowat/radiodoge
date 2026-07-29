@@ -72,7 +72,7 @@ Every push also builds a debug APK, signed with the Gradle debug key so it insta
 ## ✨ Highlights
 
 - **No internet required** — transactions travel over LoRa radio (line-of-sight range in the kilometres)
-- **Mesh relay** — packets hop between nodes toward the nearest internet gateway
+- **Direct-to-gateway** — any board in range forwards what it hears to its host; a gateway pushes it on-chain
 - **Real, local crypto** — pure-Rust wallet generates genuine `D…` mainnet addresses; keys never leave your device unencrypted
 - **BIP39 + BIP44** — 12-word recovery phrase, HD derivation at `m/44'/3'/0'/0/0`, mnemonic import
 - **Encrypted at rest** — WIF keys sealed with ChaCha20-Poly1305, keyed by argon2id (64 MiB)
@@ -105,20 +105,29 @@ Every push also builds a debug APK, signed with the Gradle debug key so it insta
 1. The app **builds and signs a real Dogecoin P2PKH transaction** locally — UTXO fetch → coin selection
    (largest-first) → secp256k1 `SIGHASH_ALL` signing.
 2. The raw signed transaction is sent to the Heltec over USB-C serial (or BLE) and broadcast over LoRa.
-3. Relay nodes forward the packet through the mesh, decrementing a hop budget as they go.
+3. Any board in range hands the packet to its own serial host. *(Multi-hop relay of app-format packets is not
+   implemented in the firmware — the sender and the gateway have to hear each other directly. Hop counting and
+   rebroadcast exist for the firmware's own broadcast format only; see
+   [Known Limitations](ROADMAP.md#-known-limitations--in-progress).)*
 4. A **gateway** — either a host running `radiodoge-cli daemon`, or a Heltec with the firmware WiFi gateway
    configured — receives the packet and **POSTs the raw transaction to Trezor Blockbook** for broadcast.
 5. The gateway radios a `TX_ACK:<txid>` message back to the sender.
 6. 🎉 Your transaction lands on-chain.
 
 > **⚠️ End-to-end status — read this before trying to move real money over the air.**
-> Every link above works *except* one size limit. A host can only hand the board a **single 192-byte packet**;
-> the firmware reads the host header's byte 1 as a payload length, so multipart frames get mis-framed. A signed
-> transaction is 192 bytes at its very smallest (1 input, 1 output, **no change**) — add a change output or a
-> second input and it no longer fits. In practice, **most real transactions can't be relayed over LoRa yet**;
-> the app now refuses them with a clear message instead of transmitting a corrupt packet. Broadcast those over
-> the internet (`radiodoge-cli broadcast`, or the Wallet tab) until the firmware framing is fixed. Full analysis:
-> [PROTOCOL.md → Host → board is single-packet only](docs/PROTOCOL.md#host--board-single-packet-only).
+> **Flash firmware v0.4.2 on both boards.** A transaction of any realistic size now goes over LoRa: the host
+> splits it into multipart frames, sends them one at a time waiting for the board to acknowledge each, and the
+> gateway reassembles and broadcasts. Older firmware could not receive multipart at all, so against a board
+> reporting anything below `FW11` the app still refuses payloads over 192 bytes and tells you to flash — a
+> signed transaction is 192 bytes only at its very smallest (1 input, 1 output, **no change**), so on old
+> firmware most real transactions still have to go over the internet (`radiodoge-cli broadcast`, or the Wallet
+> tab). Details: [PROTOCOL.md → Host → board multipart](docs/PROTOCOL.md#host--board-multipart).
+>
+> The remaining gap is **over-the-air loss**: individual LoRa frames are not acknowledged between boards, so if
+> one part of a multipart transaction is lost in the air the gateway times out after 30 s and you simply never
+> receive a `TX_ACK`. Re-send. Everything in this repository is tested in software end to end; the firmware
+> changes have not been validated on hardware by the authors — see
+> [Known Limitations](ROADMAP.md#-known-limitations--in-progress).
 
 ---
 
@@ -241,7 +250,7 @@ BIN=./target/release/radiodoge-cli
 | `radiodoge-cli wallet import-wif <WIF>` | Import a wallet from a WIF key (starts with `Q`) |
 | `radiodoge-cli wallet validate <ADDRESS>` | Check whether an address is a valid Dogecoin address |
 | `radiodoge-cli ping -p <PORT>` | Ping the Heltec and report round-trip time |
-| `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub. Fails if the payload exceeds one 192-byte packet — [see the size limit](docs/PROTOCOL.md#host--board-single-packet-only) |
+| `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub. Payloads over 192 bytes are split into multipart frames on firmware v0.4.2+; on older firmware the send is refused — [see the size gate](docs/PROTOCOL.md#host--board-multipart) |
 | `radiodoge-cli receive -p <PORT> [-T <SECS>]` | Listen for incoming packets (`-T 0` = forever; default 30 s) |
 | `radiodoge-cli connect <PORT>` | Interactive REPL (`port` is positional, no `-p`) |
 | `radiodoge-cli balance -a <ADDRESS>` | Query a confirmed balance via Blockbook (internet, no board) |
@@ -310,9 +319,10 @@ Rust core as desktop** (`mobile_build_*` / `mobile_push_bytes`) — zero protoco
 ## 🧩 Serial & Packet Protocol
 
 The app talks to the Heltec at **115,200 baud** using a compact binary frame. Single packets carry an 8-byte
-header. A multipart form with a 12-byte header exists for larger payloads, but
-[today's firmware can't receive it from a host](docs/PROTOCOL.md#host--board-single-packet-only) — host→board
-payloads must fit in one 192-byte packet.
+header. Larger payloads use a multipart form with a 13-byte header, whose last byte is the chunk length —
+that is what makes a frame self-delimiting on a serial byte stream. Host→board multipart needs
+[firmware v0.4.2 or newer](docs/PROTOCOL.md#host--board-multipart); older boards are held to one 192-byte
+packet.
 
 ```
 Byte 0   Command   (see table)
@@ -438,10 +448,10 @@ interop, iOS), and an honest **Known Limitations** section — lives in [**ROADM
 **Shipped:** Tauri + Svelte GUI · pure-Rust wallet · real P2PKH signing & broadcast · wallet encryption ·
 BIP39/BIP44 HD wallet · balance queries · Android APK · Android USB-C · Android BLE (preview) · headless CLI +
 gateway daemon · broadcast dedup + host ACK/Ping notifications · SPV inclusion checks · multi-hop relay status ·
-QR scanning.
+QR scanning · host→board multipart so a full-size signed transaction fits over LoRa.
 
-**Next up:** host→board multipart framing (the size limit above) · runtime `SET_LORA_PARAMS` · fee estimation ·
-firmware BLE command execution · Meshtastic bridging.
+**Next up:** hardware validation of the v0.4.2 firmware · over-the-air retransmission of lost frames · fee
+estimation · Meshtastic bridging.
 
 ---
 
