@@ -239,6 +239,41 @@ uint8_t  lora_coding_rate      = LORA_CODINGRATE;
 #define MULTIPART_TIMEOUT_MS 30000  // 30 seconds timeout for reassembly
 #define MULTIPART_HEADER_SIZE 12  // Packet type + dest + src + part info
 
+// ─── v0.4.2 — Desktop-protocol multipart (host <-> board, and on the air) ─────
+//
+// Distinct from the firmware's own MULTIPART_PACKET ('m') format above. A
+// desktop multipart frame is an ordinary 8-byte desktop header whose flags byte
+// has 0x1 in its low nibble, followed by five bytes the board never interprets
+// and forwards verbatim:
+//
+//   [0..8]  cmd, flags, src(3), dst(3)
+//   [8]     total parts
+//   [9]     part index (0-based)
+//   [10-11] session id (big-endian u16, same for every part)
+//   [12]    chunk length — how many payload bytes follow
+//   [13..]  chunk
+//
+// The chunk-length byte is what makes the frame self-delimiting on a byte
+// stream. Serial has no packet boundaries, so without it neither this firmware
+// nor the receiving host could tell where a short final part ended, and the
+// frame carrying a signed transaction was framed by guesswork.
+#define DESKTOP_FLAG_MULTIPART 0x01
+#define DESKTOP_MULTIPART_EXTRA 5    // [total, index, sess_hi, sess_lo, chunk_len]
+#define DESKTOP_MULTIPART_CHUNK_MAX 187  // 192 - DESKTOP_MULTIPART_EXTRA
+
+// How long to wait for the remainder of a host frame whose length is known.
+#define HOST_FRAME_TIMEOUT_MS 1000
+// A variable-length host frame carries no length, so a gap in the byte stream
+// marks its end. At 115200 baud consecutive bytes are ~0.09 ms apart, so 30 ms
+// of silence is several hundred byte-times of margin.
+#define HOST_FRAME_QUIET_MS 30
+// How long to wait for a variable-length payload to start arriving at all.
+#define HOST_PAYLOAD_START_TIMEOUT_MS 250
+// Upper bound on how long a single LoRa transmission may take before the board
+// gives up waiting for it. Sized for the slowest configuration the radio can be
+// retuned to (SF12, 125 kHz, a full 200-byte packet is ~6 s of airtime).
+#define LORA_TX_TIMEOUT_MS 10000
+
 // Mesh networking configuration
 #define ENABLE_MESH_REBROADCAST true
 // v0.4.0 — Maximum number of mesh hops a multipart broadcast may traverse before
@@ -282,7 +317,12 @@ struct PendingRequest {
   bool requiresConfirmation;
   String requestId;      // Unique identifier for tracking
 };
-#define FIRMWARE_VERSION 10  // v0.4.1
+// Bumped whenever the host↔board contract changes. The host reads this back
+// from GET_FIRMWARE_VERSION and uses it to decide what it may send:
+// radio::MIN_MULTIPART_FIRMWARE (11) is the build that frames a host→board
+// multipart sequence correctly, so only from 11 onward will a host split a
+// transaction that does not fit in one packet.
+#define FIRMWARE_VERSION 11  // v0.4.2
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -353,6 +393,18 @@ int8_t lastSnr = 0;      // v0.3.6 — for OLED status cycle
 bool isLoRaIdle = true;
 bool needToSendACK = false;
 
+// v0.4.2 — True from the moment Radio.Send() is called until TxDone or
+// TxTimeout fires.
+//
+// `isLoRaIdle` cannot serve this purpose: it also means "nothing is happening,
+// put the radio back into receive", and the main loop acts on it. Any path that
+// set it true straight after Radio.Send() therefore had the next loop iteration
+// call Radio.Rx(0) a couple of milliseconds into a transmission that needs
+// hundreds — which aborts the transmission on the SX1262. Every desktop
+// command, including the one that carries a signed transaction, did exactly
+// that. Transmissions now go through SendLoRaAndWait(), which watches this flag.
+volatile bool loRaTxPending = false;
+
 // v0.3.6 — OLED status cycle state
 unsigned long lastStatusCycle = 0;
 int statusPage = 0;
@@ -381,8 +433,17 @@ nodeAddress dest;
 nodeAddress senderAddress;
 
 void setup() {
+  // v0.4.2 — Enlarge the UART receive FIFO before opening the port.
+  //
+  // A multipart transaction is a burst of ~200-byte frames, and the board does
+  // not read serial while the radio is transmitting. The default 256-byte FIFO
+  // is barely one frame, so anything queued behind the one being sent was
+  // dropped with no error on either side. 1 KiB holds several frames, which
+  // turns a host that sends slightly too fast into a delay rather than a
+  // corrupted transaction. Must precede Serial.begin() to take effect.
+  Serial.setRxBufferSize(1024);
   Serial.begin(115200);
-  
+
   // CRITICAL: Set Vext pin LOW FIRST for V3 display power
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, LOW);
@@ -1817,6 +1878,7 @@ void CommandAndControlLoop() {
 void OnTxDone(void) {
   // v0.3.6 — pktTxCount tracked for OLED status display
   pktTxCount++;
+  loRaTxPending = false;
   addLog("[LoRa] TX completed successfully");
   isLoRaIdle = true;
 }
@@ -1825,8 +1887,54 @@ void OnTxTimeout(void) {
   Radio.Sleep();
   // Indicate that TX failed (debug)
   //Serial.println("OOPS TX BAD");
+  loRaTxPending = false;
   addLog("[LoRa] TX timeout - transmission failed");
   isLoRaIdle = true;
+}
+
+// v0.4.2 — Transmit a packet and block until the radio has actually finished.
+//
+// Radio.Send() only *starts* a transmission; completion arrives asynchronously
+// as TxDone via Radio.IrqProcess(). Callers that returned immediately after
+// Send() left the main loop free to flip the radio back into receive mid-packet
+// (see loRaTxPending), and callers that sent several packets in a row — a
+// multipart sequence — overwrote each transmission with the next one.
+//
+// Pumping IrqProcess() here is what makes a multipart send work: each part is
+// fully on the air before the next byte of the next part is read from serial,
+// and the host acknowledgement written afterwards doubles as flow control, so
+// the host paces itself to real airtime instead of a guessed delay.
+//
+// Returns true if TxDone was seen, false on TxTimeout or if the radio never
+// reported completion within LORA_TX_TIMEOUT_MS.
+bool SendLoRaAndWait(uint8_t *buffer, uint8_t length) {
+  // Never start a transmission on top of one still in progress.
+  uint32_t waitStart = millis();
+  while (loRaTxPending && (millis() - waitStart) < LORA_TX_TIMEOUT_MS) {
+    Radio.IrqProcess();
+    delay(1);
+  }
+
+  loRaTxPending = true;
+  isLoRaIdle = false;
+  Radio.Send(buffer, length);
+
+  uint32_t start = millis();
+  while (loRaTxPending && (millis() - start) < LORA_TX_TIMEOUT_MS) {
+    Radio.IrqProcess();
+    delay(1);
+  }
+
+  if (loRaTxPending) {
+    // The radio never reported completion. Clear the flag so one stuck
+    // transmission cannot wedge every later send, and let the main loop put the
+    // radio back into receive.
+    loRaTxPending = false;
+    isLoRaIdle = true;
+    addLog("[LoRa] TX did not complete within " + String(LORA_TX_TIMEOUT_MS) + " ms");
+    return false;
+  }
+  return true;
 }
 
 void OnRxTimeout(void) {
@@ -1858,9 +1966,17 @@ void OnRxDone(uint8_t *payload, uint16_t messageSize, int16_t rssiMeasured, int8
     addrConflict = true;
     addLog("[WARN] Duplicate node address detected! Another node is using " +
            String(local.region) + "." + String(local.community) + "." + String(local.node));
-    // Notify host over serial: CMD_ADDR_CONFLICT (0x25) + 3-byte conflicting address
-    uint8_t conflictMsg[5] = {0x25, 3, local.region, local.community, local.node};
-    Serial.write(conflictMsg, 5);
+    // Notify the host over serial: CMD_ADDR_CONFLICT (0x25).
+    //
+    // v0.4.2 — this used to go out in the legacy [cmd, payloadSize, payload…]
+    // shape, five bytes long, but the host frames 0x25 as a standard 8-byte
+    // desktop packet. It therefore waited for three more bytes and took them
+    // from whatever arrived next, so a duplicate address on the mesh corrupted
+    // the packet behind the warning. The conflicting address is this board's
+    // own, which the header already carries as the source.
+    uint8_t conflictMsg[8] = {0x25, 0x00, local.region, local.community, local.node,
+                              0xFF, 0xFF, 0xFF};
+    Serial.write(conflictMsg, 8);
   }
 
   ParseReceivedMessage();
@@ -1974,7 +2090,7 @@ void SendPing(nodeAddress destination) {
   addLog("[LoRa] Sending PING to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
   // v0.3.7 — ACK host BEFORE Radio.Send (LoRa TX at SF7 takes ~200-500ms; serial ACK must arrive first)
   Serial.write(hostACK, HOST_ACK_NACK_SIZE);
-  Radio.Send(controlPacket, CONTROL_SIZE);
+  SendLoRaAndWait(controlPacket, CONTROL_SIZE);
 }
 
 // Send an ACK to the specified destination address
@@ -1987,7 +2103,7 @@ void SendACK(nodeAddress destination) {
   DisplayTXMessage("ACK", destination);
   isLoRaIdle = false;
   addLog("[LoRa] Sending ACK to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
-  Radio.Send(controlPacket, CONTROL_SIZE);
+  SendLoRaAndWait(controlPacket, CONTROL_SIZE);
   //Serial.printf("Sending ACK to %d.%d.%d\n", destination.region, destination.community, destination.node);
   Serial.write(hostACK, HOST_ACK_NACK_SIZE);
 }
@@ -2026,7 +2142,7 @@ void SendMessage(nodeAddress destination, String message, String type) {
   
   addLog("[LoRa] Sending MESSAGE to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node) + " - Type: " + type + ", Length: " + String(totalPacketLength));
   addLog("[LoRa] Message content: " + messageData.substring(0, min(50, (int)messageData.length())) + "...");
-  Radio.Send(serialBuf, (uint8_t)totalPacketLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)totalPacketLength);
   addLog("[LoRa] MESSAGE transmission completed");
 }
 
@@ -2092,10 +2208,11 @@ void SendMultipartMessage(nodeAddress destination, String message, String type) 
     
     // Send the packet
     addLog("[LoRa] Sending MULTIPART MESSAGE part " + String(part + 1) + "/" + String(totalParts) + " to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
-    Radio.Send(packet, packetSize);
-    
-    // Small delay between parts
-    delay(100);
+    // v0.4.2 — wait for each part to reach the air. The fixed delay that used
+    // to stand in for this was shorter than the airtime of the packet it was
+    // pacing, so the next Radio.Send() overwrote a transmission still in
+    // progress and the receiver saw a sequence with holes in it.
+    SendLoRaAndWait(packet, packetSize);
   }
   
   addLog("[LoRa] MULTIPART MESSAGE completed - " + String(totalParts) + " parts sent");
@@ -2123,7 +2240,7 @@ void SendTransaction(nodeAddress destination, String transaction, String type) {
   // Update packet header and send the transaction over the air
   serialBuf[0] = (uint8_t)TRANSACTION;
   addLog("[LoRa] Sending TRANSACTION to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node) + " - Type: " + type + ", Length: " + String(txLength));
-  Radio.Send(serialBuf, (uint8_t)txLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)txLength);
 }
 
 // Send a large transaction using multipart packets
@@ -2195,10 +2312,9 @@ void SendMultipartTransaction(nodeAddress destination, String transaction, Strin
     
     // Send the packet
     addLog("[LoRa] Sending MULTIPART part " + String(part + 1) + "/" + String(totalParts) + " to " + String(destination.region) + "." + String(destination.community) + "." + String(destination.node));
-    Radio.Send(packet, packetSize);
-    
-    // Small delay between parts to avoid overwhelming the receiver
-    delay(500);
+    // v0.4.2 — wait for each part to reach the air rather than guessing at a
+    // delay; see SendLoRaAndWait.
+    SendLoRaAndWait(packet, packetSize);
   }
   
   addLog("[LoRa] MULTIPART TRANSACTION completed - " + String(totalParts) + " parts sent");
@@ -2275,10 +2391,9 @@ void SendMultipartBroadcast(String message, String type, String priority, uint8_
     
     // Send the packet
     addLog("[LoRa] Sending MULTIPART BROADCAST part " + String(part + 1) + "/" + String(totalParts));
-    Radio.Send(packet, packetSize);
-    
-    // Small delay between parts
-    delay(500);
+    // v0.4.2 — wait for each part to reach the air rather than guessing at a
+    // delay; see SendLoRaAndWait.
+    SendLoRaAndWait(packet, packetSize);
   }
   
   addLog("[LoRa] MULTIPART BROADCAST completed - " + String(totalParts) + " parts sent");
@@ -3046,7 +3161,7 @@ void SendBroadcast(String message, String type, String priority) {
   // Update packet header and send the broadcast over the air
   serialBuf[0] = (uint8_t)BROADCAST;
   addLog("[LoRa] Sending BROADCAST - Type: " + type + ", Priority: " + priority + ", Length: " + String(broadcastLength));
-  Radio.Send(serialBuf, (uint8_t)broadcastLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)broadcastLength);
 }
 
 // Basically we will just send out the the serial buffer
@@ -3064,7 +3179,7 @@ void SendMessageFromBuffer(int messageLength) {
 
   // Update packet header and send the message over the air
   serialBuf[0] = (uint8_t)MESSAGE;
-  Radio.Send(serialBuf, (uint8_t)messageLength);
+  SendLoRaAndWait(serialBuf, (uint8_t)messageLength);
 }
 
 // Read the serial header and extract the command type and payload size from it.
@@ -3079,6 +3194,70 @@ bool ReadSerialHeader(serialCommand &commandType, uint8_t &payloadSize) {
   commandType = (serialCommand)serialHeader[0];
   payloadSize = serialHeader[1];
   return true;
+}
+
+// v0.4.2 — Read exactly `n` bytes from the host, waiting up to `timeoutMs` in
+// total for them to arrive.
+//
+// Serial.readBytes() has its own stream timeout, but it is a global setting the
+// rest of this sketch also depends on; taking the wait explicitly keeps the
+// framing rules for a host frame in one readable place and makes a truncated
+// frame a definite failure rather than a partial read nobody checks.
+bool ReadHostBytes(uint8_t *dst, size_t n, uint32_t timeoutMs) {
+  if (n == 0) {
+    return true;
+  }
+  size_t got = 0;
+  uint32_t start = millis();
+  while (got < n && (millis() - start) < timeoutMs) {
+    int avail = Serial.available();
+    if (avail <= 0) {
+      delay(1);
+      continue;
+    }
+    size_t want = n - got;
+    if ((size_t)avail < want) {
+      want = (size_t)avail;
+    }
+    got += Serial.readBytes(dst + got, want);
+  }
+  return got == n;
+}
+
+// v0.4.2 — Read a host payload that carries no length of its own.
+//
+// The desktop protocol has no size field for CMD_DOGE_TX / CMD_REQUEST_BALANCE
+// single packets or for a relayed CMD_MESSAGE, so the only boundary available is
+// a gap in the byte stream. This waits briefly for the payload to start, then
+// consumes bytes until the host has been quiet for HOST_FRAME_QUIET_MS.
+//
+// What it deliberately does *not* do is drain everything currently buffered,
+// which is what the previous implementation did after a fixed delay(500). That
+// glued any command queued behind this one onto its payload and then discarded
+// it — so two commands sent close together lost the second, and a multipart
+// sequence arrived as one oversized, unparseable frame.
+//
+// Returns the number of bytes read (0 if the payload never started).
+uint8_t ReadHostPayloadUntilQuiet(uint8_t *dst, uint8_t maxLen) {
+  uint8_t len = 0;
+  uint32_t start = millis();
+  // Wait for the first byte.
+  while (Serial.available() <= 0 && (millis() - start) < HOST_PAYLOAD_START_TIMEOUT_MS) {
+    delay(1);
+  }
+  uint32_t lastByte = millis();
+  while (len < maxLen) {
+    if (Serial.available() > 0) {
+      dst[len++] = (uint8_t)Serial.read();
+      lastByte = millis();
+      continue;
+    }
+    if ((millis() - lastByte) >= HOST_FRAME_QUIET_MS) {
+      break;
+    }
+    delay(1);
+  }
+  return len;
 }
 
 // Read the host payload into the serial buffer.
@@ -3139,13 +3318,26 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
         memcpy(ota + 8, extraPayload, payLen);
         int otaLen = 8 + payLen;
-        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
-        pktTxCount++;
+        if ((flags & 0x0F) == DESKTOP_FLAG_MULTIPART &&
+            extraLen >= DESKTOP_MULTIPART_EXTRA) {
+          nodeAddress mpDest = { hdrRest[3], hdrRest[4], hdrRest[5] };
+          char partLabel[32];
+          snprintf(partLabel, sizeof(partLabel), "TX part %u/%u",
+                   (unsigned)(extraPayload[1] + 1), (unsigned)extraPayload[0]);
+          DisplayTXMessage(String(partLabel), mpDest);
+        }
+        // v0.4.2 — block until the packet is actually on the air. This used to
+        // set isLoRaIdle = true immediately, which made the next loop iteration
+        // switch the radio to receive a few milliseconds into a transmission
+        // that needs hundreds — so the transaction never left the board.
+        SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
         // v0.3.6 — trigger "TX OK!" OLED page after successful send
         showTxOk = true;
         txOkTimestamp = millis();
-        isLoRaIdle = true;
       }
+      // The host treats this reply as its acknowledgement, and — because it is
+      // written only after the transmission completed — as permission to send
+      // the next frame of a multipart sequence.
       uint8_t reply[8] = {0x10, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
       bleSend(reply, 8);
@@ -3163,8 +3355,8 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
         if (8 + payLen > BUFFER_SIZE) payLen = BUFFER_SIZE - 8;
         memcpy(ota + 8, extraPayload, payLen);
         int otaLen = 8 + payLen;
-        Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
-        isLoRaIdle = true;
+        // v0.4.2 — wait for the transmission to finish; see the 0x10 case.
+        SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
       }
       uint8_t reply[8] = {0x11, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
@@ -3366,31 +3558,32 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
 // firmware's messageType MESSAGE == 0x03), so the destination node forwards it to
 // its own host app, which parses the TX_ACK:/BAL: prefix.
 void RelayDesktopMessageOverLoRa() {
-  // ReadSerialHeader already consumed [0x03, 0x00]; the delay(500) in HostSerialRead
-  // has let the rest arrive: [src_r, src_c, src_n, dst_r, dst_c, dst_n, ...text...].
+  // ReadSerialHeader already consumed [0x03, 0x00]. The rest of the frame is
+  // [src_r, src_c, src_n, dst_r, dst_c, dst_n, ...text...]; the six address
+  // bytes have a known length, the text does not, so it ends at a gap in the
+  // byte stream (v0.4.2 — this used to drain everything buffered, which glued a
+  // second acknowledgement queued behind the first onto its text).
   uint8_t rest[BUFFER_SIZE];
-  int restLen = 0;
-  while (Serial.available() > 0 && restLen < BUFFER_SIZE) {
-    rest[restLen++] = (uint8_t)Serial.read();
-  }
-  if (restLen < 6) {
+  if (!ReadHostBytes(rest, 6, HOST_FRAME_TIMEOUT_MS)) {
     Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
     return;
   }
+  uint8_t textLen = ReadHostPayloadUntilQuiet(rest + 6, (uint8_t)(BUFFER_SIZE - 8 - 6));
+
   uint8_t ota[BUFFER_SIZE];
   ota[0] = 0x03;  // CMD_MESSAGE == messageType MESSAGE
   ota[1] = 0x00;
   for (int i = 0; i < 6; i++) ota[2 + i] = rest[i];  // src(3) + dst(3)
-  int textLen = restLen - 6;
-  if (8 + textLen > BUFFER_SIZE) textLen = BUFFER_SIZE - 8;
   for (int i = 0; i < textLen; i++) ota[8 + i] = rest[6 + i];
   int otaLen = 8 + textLen;
   nodeAddress relayDest = { ota[5], ota[6], ota[7] };
   DisplayTXMessage("Relay", relayDest);
-  Radio.Send(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
+  // v0.4.2 — wait for the transmission rather than declaring the radio idle and
+  // letting the main loop abort it. This is the path that carries TX_ACK back to
+  // the sender, so aborting it left a broadcast transaction unacknowledged.
+  SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
   addLog("[GATEWAY] Relayed host MESSAGE over LoRa to " + String(ota[5]) + "." + String(ota[6]) + "." + String(ota[7]) + " (" + String(otaLen) + " bytes)");
   Serial.write(hostACK, HOST_ACK_NACK_SIZE);
-  isLoRaIdle = true;
 }
 
 // ─── v0.4.1 — BLE command execution ──────────────────────────────────────────
@@ -3422,13 +3615,31 @@ void ProcessBleCommands() {
     return;
   }
 
-  uint16_t need = desktopCommandLength(cmdByte);
-  if (need > 0) {
-    if (bleRxLen < (int)need) return;  // fixed-length packet still arriving
+  uint16_t need;
+  if ((bleRxBuffer[1] & 0x0F) == DESKTOP_FLAG_MULTIPART) {
+    // v0.4.2 — a multipart frame declares its own chunk length, so it is framed
+    // exactly rather than by a quiet gap. Without this a sequence written as
+    // fast as GATT allows arrives as one run of bytes with no boundaries in it.
+    const int mpHdr = SINGLE_PACKET_HEADER_SIZE + DESKTOP_MULTIPART_EXTRA;
+    if (bleRxLen < mpHdr) return;  // header still arriving
+    uint8_t chunkLen = bleRxBuffer[mpHdr - 1];
+    if (chunkLen > DESKTOP_MULTIPART_CHUNK_MAX) {
+      addLog("[BLE] Multipart chunk length " + String(chunkLen) + " out of range — dropping");
+      bleRxLen = 0;
+      blePendingData = false;
+      return;
+    }
+    need = (uint16_t)(mpHdr + chunkLen);
+    if (bleRxLen < (int)need) return;  // chunk still arriving
   } else {
-    // Variable length: no in-band size, so a quiet gap marks the boundary.
-    if (millis() - lastBleRxMillis < BLE_FRAME_QUIET_MS) return;
-    need = (uint16_t)bleRxLen;
+    need = desktopCommandLength(cmdByte);
+    if (need > 0) {
+      if (bleRxLen < (int)need) return;  // fixed-length packet still arriving
+    } else {
+      // Variable length: no in-band size, so a quiet gap marks the boundary.
+      if (millis() - lastBleRxMillis < BLE_FRAME_QUIET_MS) return;
+      need = (uint16_t)bleRxLen;
+    }
   }
 
   // Capture the header fields before the buffer is shifted below.
@@ -3487,23 +3698,94 @@ void HostSerialRead() {
   // length for these commands, so any flags value frames correctly.
   if (isDesktopCommandByte(cmdByte)) {
     uint8_t flags = payloadSize;  // byte 1 is FLAGS for desktop commands
-    delay(500);                   // let the rest of the packet arrive
 
     // The 6 remaining header bytes: [src_r, src_c, src_n, dst_r, dst_c, dst_n].
     uint8_t hdrRest[6] = {0};
-    Serial.readBytes(hdrRest, 6);
+    if (!ReadHostBytes(hdrRest, 6, HOST_FRAME_TIMEOUT_MS)) {
+      addLog("[HOST] Truncated desktop header for cmd 0x" + String(cmdByte, HEX));
+      Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+      bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+      return;
+    }
 
-    // Everything after the 8-byte header. For a multipart frame this begins
-    // with [total_parts, part_index, session_hi, session_lo] followed by the
-    // chunk, which HandleDesktopCommand forwards over the air verbatim.
+    // Everything after the 8-byte header, read to an exact length wherever the
+    // protocol defines one. The old code slept 500 ms and then swallowed every
+    // buffered byte, which merged whatever the host sent next into this frame.
     uint8_t extraPayload[BUFFER_SIZE];
     memset(extraPayload, 0, sizeof(extraPayload));
     uint8_t extraLen = 0;
-    while (Serial.available() > 0 && extraLen < (uint8_t)(BUFFER_SIZE - 1)) {
-      extraPayload[extraLen++] = (uint8_t)Serial.read();
+
+    if ((flags & 0x0F) == DESKTOP_FLAG_MULTIPART) {
+      // Multipart: five header bytes ending in an explicit chunk length, then
+      // exactly that many payload bytes. This is what makes a transaction
+      // spanning several frames arrive intact instead of glued together.
+      if (!ReadHostBytes(extraPayload, DESKTOP_MULTIPART_EXTRA, HOST_FRAME_TIMEOUT_MS)) {
+        addLog("[HOST] Truncated multipart header for cmd 0x" + String(cmdByte, HEX));
+        Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+        bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+        return;
+      }
+      uint8_t chunkLen = extraPayload[DESKTOP_MULTIPART_EXTRA - 1];
+      if (chunkLen > DESKTOP_MULTIPART_CHUNK_MAX) {
+        addLog("[HOST] Multipart chunk length " + String(chunkLen) + " out of range");
+        Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+        bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+        return;
+      }
+      if (!ReadHostBytes(extraPayload + DESKTOP_MULTIPART_EXTRA, chunkLen, HOST_FRAME_TIMEOUT_MS)) {
+        addLog("[HOST] Truncated multipart chunk (" + String(chunkLen) + " bytes expected)");
+        Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+        bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+        return;
+      }
+      extraLen = (uint8_t)(DESKTOP_MULTIPART_EXTRA + chunkLen);
+    } else {
+      uint8_t fixedTotal = desktopCommandLength(cmdByte);
+      if (fixedTotal > 0) {
+        // A command with a known total size: read precisely its payload and
+        // leave anything behind it for the next pass of the loop. Two commands
+        // sent back to back are now both executed; previously the second was
+        // consumed as payload of the first and lost.
+        uint8_t want = (uint8_t)(fixedTotal - SINGLE_PACKET_HEADER_SIZE);
+        if (want > 0 && !ReadHostBytes(extraPayload, want, HOST_FRAME_TIMEOUT_MS)) {
+          addLog("[HOST] Truncated payload for cmd 0x" + String(cmdByte, HEX));
+          Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+          bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+          return;
+        }
+        extraLen = want;
+      } else {
+        // No length anywhere in the protocol (single-packet 0x10 / 0x11), so
+        // the frame ends at a gap in the byte stream.
+        extraLen = ReadHostPayloadUntilQuiet(
+            extraPayload, (uint8_t)(BUFFER_SIZE - SINGLE_PACKET_HEADER_SIZE));
+      }
     }
 
     HandleDesktopCommand(cmdByte, flags, hdrRest, extraPayload, extraLen);
+    return;
+  }
+
+  // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
+  // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
+  // PING_REQUEST(3) enum value, which carries a non-zero payload size.
+  //
+  // v0.4.2 — decided before ReadSerialPayload and without the blanket delay:
+  // RelayDesktopMessageOverLoRa now frames the rest of the packet itself, and a
+  // desktop MESSAGE has no legacy payload for ReadSerialPayload to consume.
+  if (cmdByte == 0x03 && payloadSize == 0) {
+    if (gateway_mode) {
+      RelayDesktopMessageOverLoRa();
+      return;
+    }
+    // v0.4.2 — Not a gateway, so there is nothing to relay. Consume the frame
+    // and say so. Falling through would reach the legacy PING_REQUEST case
+    // (enum value 3 collides with CMD_MESSAGE) and transmit a ping to whatever
+    // address happened to be left in the serial buffer.
+    uint8_t discard[BUFFER_SIZE];
+    ReadHostPayloadUntilQuiet(discard, (uint8_t)(BUFFER_SIZE - 1));
+    addLog("[HOST] Ignoring MESSAGE relay request — gateway mode is off");
+    Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
     return;
   }
 
@@ -3514,14 +3796,6 @@ void HostSerialRead() {
     return;
   }
   delay(500);
-
-  // v0.4.0 (WP1) — Gateway relay of a desktop MESSAGE (0x03) from the host over LoRa.
-  // payloadSize == 0 (the desktop flags byte) distinguishes this from the legacy
-  // PING_REQUEST(3) enum value, which carries a non-zero payload size.
-  if (gateway_mode && cmdByte == 0x03 && payloadSize == 0) {
-    RelayDesktopMessageOverLoRa();
-    return;
-  }
 
   switch (commandVal) {
     case NONE: // 0x00 = desktop CMD_GET_NODE_ADDR
@@ -3597,7 +3871,7 @@ void HostSerialRead() {
       SetDestinationFromSerialBuffer(5);
       DisplayTXMessage("Custom Packet!", dest);
       // Send out the host formed packet
-      Radio.Send(serialBuf, payloadSize);
+      SendLoRaAndWait(serialBuf, payloadSize);
       // Acknowledge the host that we sent the packet
       Serial.write(hostACK, HOST_ACK_NACK_SIZE);
       break;
@@ -3606,7 +3880,7 @@ void HostSerialRead() {
       char tempBuf[64];
       sprintf(tempBuf, "Part %i of %i", serialBuf[10], serialBuf[11]);
       DisplayTXMessage(String(tempBuf), dest);
-      Radio.Send(serialBuf, payloadSize);
+      SendLoRaAndWait(serialBuf, payloadSize);
       // Send ACK to let them know we sent out that part
       Serial.write(hostACK, HOST_ACK_NACK_SIZE);
       break;
@@ -3719,8 +3993,44 @@ void ForwardReceivedPacketToHost() {
   }
 }
 
+// v0.4.2 — Is this a desktop-protocol multipart frame (as opposed to the
+// firmware's own 'm' multipart format)? Identified by the flags byte, since the
+// command byte is the one the sequence carries, e.g. 0x10 CMD_DOGE_TX.
+bool IsDesktopMultipartFrame() {
+  if (rxSize < SINGLE_PACKET_HEADER_SIZE + DESKTOP_MULTIPART_EXTRA) {
+    return false;
+  }
+  if ((rxPacket[1] & 0x0F) != DESKTOP_FLAG_MULTIPART) {
+    return false;
+  }
+  uint8_t cmd = rxPacket[0];
+  return cmd == 0x10 || cmd == 0x11 || cmd == 0x03;
+}
+
 void ParseReceivedMessage() {
   addLog("[DEBUG] Received packet - Size: " + String(rxSize) + " bytes, First byte: " + String(rxPacket[0]));
+
+  // v0.4.2 — A desktop multipart frame is a fragment: only the host can put the
+  // sequence back together, so hand it over untouched and stop. Running it
+  // through the switch below would read the multipart header as message text
+  // and print it to the OLED, and would never forward it at all.
+  if (IsDesktopMultipartFrame()) {
+    if (CheckIfPacketForMe() || CheckIfPacketIsGlobalBroadcast()) {
+      uint8_t cmd   = (uint8_t)rxPacket[0];
+      uint8_t total = (uint8_t)rxPacket[SINGLE_PACKET_HEADER_SIZE];
+      uint8_t part  = (uint8_t)rxPacket[SINGLE_PACKET_HEADER_SIZE + 1] + 1;  // 0-based on the wire
+      Serial.write(rxPacket, rxSize);
+      SetSenderAddress();
+      char partLabel[32];
+      snprintf(partLabel, sizeof(partLabel), "Part %u/%u",
+               (unsigned)part, (unsigned)total);
+      DisplayRXMessage(String(partLabel), senderAddress);
+      addLog("[HOST] Forwarded multipart cmd 0x" + String(cmd, HEX) +
+             " part " + String(part) + "/" + String(total) +
+             " to serial host (" + String(rxSize) + " bytes)");
+    }
+    return;
+  }
 
   if (CheckIfPacketForMe()) {
     addLog("[DEBUG] Packet is for me - processing...");
@@ -4862,7 +5172,7 @@ void handleMessage() {
     }
     
     // Send the message
-    Radio.Send(messagePacket, 8 + messageLength);
+    SendLoRaAndWait(messagePacket, 8 + messageLength);
     DisplayTXMessage(message, dest);
     
     server.send(200, "text/plain", "Message sent to " + address + ": " + message);
@@ -4925,7 +5235,7 @@ void handleTransaction() {
     }
     
     // Send the transaction
-    Radio.Send(txPacket, 8 + txLength);
+    SendLoRaAndWait(txPacket, 8 + txLength);
     DisplayTXMessage("Transaction: " + transaction.substring(0, 20) + "...", dest);
     
     // Forward to internet if connected
@@ -4971,7 +5281,7 @@ void handleBroadcast() {
     }
     
     // Send the broadcast
-    Radio.Send(broadcastPacket, 8 + messageLength);
+    SendLoRaAndWait(broadcastPacket, 8 + messageLength);
     DisplayBroadcastMessage("Broadcast: " + message, local);
     
     server.send(200, "text/plain", "Broadcast sent (" + type + ", " + priority + "): " + message);
