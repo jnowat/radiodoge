@@ -56,7 +56,10 @@ Rock-solid against real hardware, and now on your phone.
   broadcast via Trezor Blockbook, with a `TX_ACK` reply over LoRa
 - ✅ **Wallet encryption at rest** — argon2id (64 MiB) + ChaCha20-Poly1305; passphrase modals on save & unlock;
   legacy plaintext wallets auto-detected with a re-encrypt nudge
-- ✅ **Incoming TX verification** — secp256k1 ECDSA verified in-process; ✅/⚠️ label in every packet view
+- ✅ **Incoming TX signature check** — secp256k1 ECDSA verified in-process, with the packet view stating plainly
+  that a valid signature is *not* proof of payment (the scriptPubKey is reconstructed from the transaction's own
+  public keys, so it says nothing about whether the inputs exist). On-chain confirmation is the
+  `verify-tx` / History-tab inclusion check
 - ✅ **Balance query** — direct Blockbook query, plus a `REQUEST_BALANCE` gateway path that relays a balance
   back over LoRa
 - ✅ **BIP32/BIP44 HD wallet** — 12-word BIP39 mnemonic, derivation at `m/44'/3'/0'/0/0`, recovery-phrase backup
