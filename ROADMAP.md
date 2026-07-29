@@ -161,6 +161,20 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   header flags is carried and reported end to end, and the firmware's own broadcast format does rebroadcast
   with a hop limit and a dedup table — but the desktop packet format has neither a relay path nor the dedup
   a relay path would need, and adding one without both is how mesh storms start.
+- **🔴 An incoming transaction display is not proof of payment.**
+  Nothing on the LoRa link is authenticated. When a `DOGE_TX` packet arrives, the app checks that its
+  signatures are consistent with the public keys inside it — but the UTXO those signatures are checked against
+  is reconstructed from those same public keys, because that check has no network access. It therefore says
+  nothing about whether the inputs exist, are unspent, or belong to the sender. **Anyone within radio range can
+  build a transaction paying you any amount, sign it with a key they generated a second earlier, and send it
+  for the cost of one packet.** The app says so in the packet description now rather than showing a checkmark,
+  but the only real answer is the chain: use `radiodoge-cli verify-tx <txid>` or the History tab's inclusion
+  check before treating anything as received.
+- **🟡 The web/REST interface has no authentication, by design.**
+  Any device that can reach the board's web server can call every `/api/*` route — and in dual-WiFi mode that
+  includes hosts on the upstream LAN, not only devices joined to the board's own access point. Treat a firmware
+  gateway as a device on a trusted network. `/proxy` is now gated on the internet bridge being explicitly
+  enabled and capped at 32 KB per response, but it remains a forward proxy for whoever can reach it.
 - **🟡 A LoRa frame lost in the air is not retransmitted.**
   A multipart transaction is several independent LoRa transmissions and boards do not acknowledge each other's
   data packets. If one part is lost, the gateway's reassembler discards the session after 30 s

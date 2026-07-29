@@ -112,6 +112,11 @@ Every push also builds a debug APK, signed with the Gradle debug key so it insta
 4. A **gateway** — either a host running `radiodoge-cli daemon`, or a Heltec with the firmware WiFi gateway
    configured — receives the packet and **POSTs the raw transaction to Trezor Blockbook** for broadcast.
 5. The gateway radios a `TX_ACK:<txid>` message back to the sender.
+
+> **A transaction shown as received is not a transaction you have been paid.** Nothing on the LoRa link is
+> authenticated, and the signature check the app performs cannot tell whether the inputs exist — anyone in
+> radio range can send a convincing-looking payment for the cost of one packet. Verify the txid on-chain
+> (`radiodoge-cli verify-tx`, or the History tab) before treating anything as settled.
 6. 🎉 Your transaction lands on-chain.
 
 > **⚠️ End-to-end status — read this before trying to move real money over the air.**
