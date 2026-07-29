@@ -125,6 +125,9 @@
   let gatewayError = $state<string | null>(null);
   let isStartingDaemon = $state(false);
   let daemonError = $state<string | null>(null);
+  /// Non-error status about the daemon — most importantly that starting it
+  /// hands over the serial port, which looks like an unexplained disconnect.
+  let daemonNote = $state<string | null>(null);
 
   // ── v0.3.16 — BLE Advertising toggle ────────────────────────────────────
   // Tracks local UI state only — board state persists independently in NVS.
@@ -186,13 +189,22 @@
     }
   }
 
+  /**
+   * Hand this board's serial port to a `radiodoge-cli daemon` process.
+   *
+   * A serial port has one owner, so the app disconnects from the board while the
+   * daemon runs — that is expected, not a failure. Stopping the daemon gives the
+   * port back and the app reconnects.
+   */
   async function startGatewayDaemon() {
     const port = connection.portName;
     if (!port) return;
     isStartingDaemon = true;
     daemonError = null;
+    daemonNote = null;
     try {
       await invoke('start_gateway', { port });
+      daemonNote = `The daemon now owns ${port}, so the app has disconnected from the board. Stop the gateway to reconnect.`;
     } catch (e: unknown) {
       daemonError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -201,7 +213,13 @@
   }
 
   async function stopGatewayDaemon() {
-    try { await invoke('stop_gateway'); } catch (_) {}
+    daemonNote = null;
+    try {
+      await invoke('stop_gateway');
+      daemonNote = 'Gateway stopped — the app is reclaiming the serial port.';
+    } catch (e: unknown) {
+      daemonError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   // ── v0.3.6 — Manual board sync ───────────────────────────────────────────
@@ -790,6 +808,9 @@
       {/if}
       {#if daemonError}
         <div style="margin-top: 8px; color: var(--doge-red); font-size: 0.78rem;" role="alert">❌ Daemon: {daemonError}</div>
+      {/if}
+      {#if daemonNote}
+        <div style="margin-top: 8px; color: var(--doge-muted); font-size: 0.78rem;" role="status">ℹ️ {daemonNote}</div>
       {/if}
     </div>
 

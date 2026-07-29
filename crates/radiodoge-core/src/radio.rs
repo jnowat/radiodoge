@@ -306,11 +306,16 @@ fn is_plausible_flags(flags: u8) -> bool {
 /// `true` if `buf` plausibly begins a packet.
 ///
 /// Stronger than [`is_known_command`] alone, because the command set overlaps
-/// heavily with printable ASCII and the firmware writes plain `Serial.println`
-/// debug text down the same link. `0x20` is both `CMD_GET_FIRMWARE_VERSION` and
-/// the space character, `0x21`–`0x2A` are `!"#$%&'()*`, and `0x62`/`0x64`/`0x68`/`0x6D`
-/// are `b`/`d`/`h`/`m` — so a log line resynchronises on its first space and the
+/// heavily with printable ASCII and text can share the link with packets.
+/// `0x20` is both `CMD_GET_FIRMWARE_VERSION` and the space character,
+/// `0x21`–`0x2A` are `!"#$%&'()*`, and `0x62`/`0x64`/`0x68`/`0x6D` are
+/// `b`/`d`/`h`/`m` — so a log line resynchronises on its first space and the
 /// next eight characters get read as a header.
+///
+/// Firmware v0.4.2 stopped writing its runtime log to the serial port for
+/// exactly this reason, but the check stays load-bearing: older boards write a
+/// line per received packet, every board still prints a boot banner, and
+/// `HOST_SERIAL_DEBUG` puts the log back on the wire deliberately.
 ///
 /// Requiring the following byte to be a valid flags value discards most of
 /// those: in text, the byte after a space is usually a letter, and only two of
@@ -458,11 +463,12 @@ pub fn build_tx_frames(
 
 /// `true` if `byte` can legitimately start a packet.
 ///
-/// The framing loops use this to resynchronise: the firmware also emits plain
-/// `Serial.println` debug text, and any byte that cannot begin a packet is
-/// dropped until the stream lines up again. Every transport must agree on this
-/// set — a command missing here is silently discarded as noise, which then
-/// shifts every packet behind it by one byte.
+/// The framing loops use this to resynchronise: the board can also emit plain
+/// text (a boot banner always, its whole runtime log on firmware before v0.4.2),
+/// and any byte that cannot begin a packet is dropped until the stream lines up
+/// again. Every transport must agree on this set — a command missing here is
+/// silently discarded as noise, which then shifts every packet behind it by one
+/// byte.
 ///
 /// The trailing values (`0x3F`, `0x62`, `0x64`, `0x68`, `0x6D`, `0xFE`) are
 /// firmware-side message IDs that predate the desktop command range.

@@ -636,6 +636,36 @@ impl SerialManager {
         .unwrap_or(false))
     }
 
+    /// Send `packet` and wait for the board to answer with `expect_cmd`.
+    ///
+    /// Returns `Ok(false)` if no such reply arrives within `timeout_ms`. Use this
+    /// where the board's reply is the only signal that a command was *accepted*
+    /// rather than merely received — `SET_LORA_PARAMS`, for instance, answers
+    /// with a `0x21` packet when it applies the values and a legacy NACK when it
+    /// rejects them as out of range. Without waiting, a rejected retune is
+    /// indistinguishable from a successful one.
+    pub async fn send_and_await_reply(
+        &self,
+        packet: Vec<u8>,
+        expect_cmd: u8,
+        timeout_ms: u64,
+    ) -> Result<bool> {
+        let mut rx = self.packet_tx.subscribe();
+        self.send_raw(packet).await?;
+        Ok(tokio::time::timeout(Duration::from_millis(timeout_ms), async move {
+            loop {
+                match rx.recv().await {
+                    Ok(pkt) if pkt.command == expect_cmd => return true,
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false))
+    }
+
     /// Write a complete host→board send — one frame, or a multipart sequence.
     ///
     /// Frames go out strictly one at a time, each waiting for the board's

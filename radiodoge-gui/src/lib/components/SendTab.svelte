@@ -25,7 +25,29 @@
   // Tracked so it can be cancelled if the user starts a new transaction before
   // the 5s window elapses (otherwise their freshly-typed inputs would be wiped).
   let _successClearTimer: ReturnType<typeof setTimeout> | null = null;
-  onMount(() => () => { if (_successClearTimer) clearTimeout(_successClearTimer); });
+
+  // On Android the backend hands the frames to the JS bridge and returns before
+  // they have been written, so a write failure arrives after we have already
+  // shown "sent". Replace the success message when that happens — a transaction
+  // that never reached the board is the one thing the user must not miss.
+  function onMobileSendFailed(ev: Event) {
+    const detail = (ev as CustomEvent<string>).detail;
+    if (_successClearTimer !== null) {
+      clearTimeout(_successClearTimer);
+      _successClearTimer = null;
+    }
+    success = null;
+    error = `😢 The transaction did not reach the board: ${detail}. Nothing was broadcast — check the cable or Bluetooth link and try again.`;
+    isSending = false;
+  }
+
+  onMount(() => {
+    window.addEventListener('radiodoge:tx-send-failed', onMobileSendFailed);
+    return () => {
+      window.removeEventListener('radiodoge:tx-send-failed', onMobileSendFailed);
+      if (_successClearTimer) clearTimeout(_successClearTimer);
+    };
+  });
 
   // Validation
   const isValidAddress = $derived(() => {

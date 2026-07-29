@@ -59,6 +59,13 @@ pub struct AppState {
     pub tx_history: Arc<Mutex<Vec<TxHistoryEntry>>>,
     /// v0.3.6 — Background gateway daemon process handle.
     pub gateway_process: Arc<Mutex<Option<tokio::process::Child>>>,
+
+    /// The serial port this app released so the gateway daemon could own it.
+    ///
+    /// `Some` only when the app was itself connected to that port when the
+    /// daemon was started, so `stop_gateway` knows whether reconnecting is
+    /// taking back something of ours or stealing a port the user never gave us.
+    pub gateway_owned_port: Arc<Mutex<Option<String>>>,
     /// v0.3.6 — Connection type: "usb", "ble", or "usb-android"
     pub connection_type: Arc<Mutex<String>>,
     /// v0.3.10 — Raw byte accumulator for the Android USB bridge.
@@ -99,6 +106,7 @@ impl AppState {
             connection_generation: Arc::new(AtomicU64::new(0)),
             tx_history: Arc::new(Mutex::new(Vec::new())),
             gateway_process: Arc::new(Mutex::new(None)),
+            gateway_owned_port: Arc::new(Mutex::new(None)),
             connection_type: Arc::new(Mutex::new("usb".to_string())),
             mobile_accumulator: Arc::new(Mutex::new(Vec::new())),
             mobile_reassembler: Arc::new(Mutex::new(radio::MultipartReassembler::new())),
@@ -124,6 +132,31 @@ fn emit_debug_traffic(app: &AppHandle, direction: &str, raw_hex: &str, parsed: &
         "rawHex": raw_hex,
         "parsed": parsed,
     }));
+}
+
+// ─── Persistence helpers ─────────────────────────────────────────────────────
+
+/// Write `contents` to `path` so that a crash can never leave a partial file.
+///
+/// `fs::write` truncates first and writes second, so an interruption between
+/// the two leaves an empty or half-written file. For `tx_history.json` that
+/// costs a log; for `wallet.json` it costs the user's only copy of an encrypted
+/// private key. Writing to a sibling temp file and renaming it into place makes
+/// the switch atomic on every platform this app targets — the old file survives
+/// intact until the new one is complete.
+///
+/// The temp file is removed on failure so a full disk cannot accumulate debris.
+async fn write_file_atomically(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    if let Err(e) = tokio::fs::write(&tmp, contents).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("could not write {}: {}", tmp.display(), e));
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("could not replace {}: {}", path.display(), e));
+    }
+    Ok(())
 }
 
 // ─── History helpers ──────────────────────────────────────────────────────────
@@ -155,7 +188,9 @@ async fn save_history_to_disk(app: &AppHandle, history: &[TxHistoryEntry]) {
     let _ = tokio::fs::create_dir_all(&dir).await;
     let path = dir.join("tx_history.json");
     if let Ok(json) = serde_json::to_string_pretty(history) {
-        let _ = tokio::fs::write(&path, json).await;
+        if let Err(e) = write_file_atomically(&path, &json).await {
+            eprintln!("[history] {}", e);
+        }
     }
 }
 
@@ -171,9 +206,6 @@ async fn list_ports_detailed() -> Result<Vec<PortInfo>, String> {
     Ok(SerialManager::list_ports_with_info())
 }
 
-/// Open a serial connection to the Heltec device.
-/// v0.3.6: After connecting, queries CMD_GET_SETTINGS (0x22) to sync board state.
-/// Board is source of truth — node address and gateway_mode update from board reply.
 /// `true` when a `CMD_DOGE_TX` packet is an actual incoming transaction rather
 /// than the board's own acknowledgement of one we just sent.
 ///
@@ -189,6 +221,9 @@ fn is_incoming_doge_tx(packet: &IncomingPacket) -> bool {
         && packet.decoded.is_some()
 }
 
+/// Open a serial connection to the Heltec device.
+/// v0.3.6: After connecting, queries CMD_GET_SETTINGS (0x22) to sync board state.
+/// Board is source of truth — node address and gateway_mode update from board reply.
 #[tauri::command]
 async fn connect_port(
     port: String,
@@ -744,7 +779,33 @@ async fn update_lora_settings(
         "CMD_SET_LORA_PARAMS → SF{} BW{}kHz CR4/{} {}MHz {}dBm",
         settings.spreading_factor, settings.bandwidth_khz, cr, settings.frequency_mhz, tx_power,
     ));
-    state.serial.send_raw(lora_pkt).await.map_err(|e| e.to_string())?;
+    // The board validates these before applying them and answers a legacy NACK,
+    // not a 0x21 packet, when they are out of range — it leaves the radio
+    // untouched rather than retuning to somewhere it can never be reached again.
+    // Without waiting for the 0x21 the UI reported "Verified" for settings the
+    // board had thrown away, which is precisely the failure the NACK exists to
+    // make visible. Firmware before v0.4.1 (FW10) treated 0x21 as a no-op ACK,
+    // so only newer boards are held to this.
+    let fw = state.serial.get_firmware_version().await;
+    let board_applies_lora_params = fw
+        .as_deref()
+        .and_then(radio::firmware_build_number)
+        .is_some_and(|b| b >= 10);
+
+    let params_acked = state
+        .serial
+        .send_and_await_reply(lora_pkt, radio::CMD_SET_LORA_PARAMS, 1500)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if board_applies_lora_params && !params_acked {
+        return Err(format!(
+            "The board rejected these radio settings and left its radio unchanged: \
+             SF{}, {} kHz, CR4/{}, {} MHz, {} dBm. Valid ranges are SF 7–12, \
+             bandwidth 125/250/500 kHz, coding rate 4/5–4/8, 150–960 MHz, and 2–22 dBm.",
+            settings.spreading_factor, settings.bandwidth_khz, cr, settings.frequency_mhz, tx_power
+        ));
+    }
 
     let verified = state
         .serial
@@ -875,6 +936,14 @@ async fn get_history(
 
 /// v0.3.6 — Spawn `radiodoge-cli daemon -p <port>` as a background gateway process.
 /// Emits "gateway-status" event on start.
+///
+/// **The daemon takes ownership of the serial port.** A serial port has exactly
+/// one owner: on Windows the daemon's open would simply fail, and on Linux both
+/// processes read the same device and each receives a random subset of the
+/// bytes — on the path that carries transactions. Since the button is normally
+/// pressed for the port the app itself is holding, the app releases it here and
+/// takes it back in [`stop_gateway`], rather than leaving two readers fighting
+/// over one board.
 #[tauri::command]
 async fn start_gateway(
     port: String,
@@ -888,6 +957,26 @@ async fn start_gateway(
             let _ = child.kill().await;
         }
         *gp = None;
+    }
+
+    // Hand the port over if we are the one holding it. The auto-reconnect
+    // watchdog has to be stopped first, or it will reopen the port underneath
+    // the daemon a couple of seconds later.
+    let holding_this_port = state
+        .current_port
+        .lock()
+        .await
+        .as_deref()
+        .is_some_and(|p| p == port);
+    if holding_this_port {
+        log::info!("Releasing {} so the gateway daemon can own it", port);
+        state.reconnect_enabled.store(false, Ordering::Relaxed);
+        state.connection_generation.fetch_add(1, Ordering::SeqCst);
+        state.serial.disconnect().await.map_err(|e| e.to_string())?;
+        *state.current_port.lock().await = None;
+        let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
+        #[cfg(desktop)]
+        tray::update_tray_status(&app, false, None);
     }
 
     // v0.3.7 — Find radiodoge-cli: check same dir as this executable first (bundled),
@@ -905,6 +994,10 @@ async fn start_gateway(
 
     let child = tokio::process::Command::new(&cli_path)
         .args(["daemon", "-p", &port])
+        // Without this the daemon outlives the app: closing the window would
+        // leave an orphan holding the serial port, and the next launch could not
+        // open the board at all.
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!(
             "Failed to spawn '{}': {}. \
@@ -912,13 +1005,50 @@ async fn start_gateway(
             cli_path, e
         ))?;
 
+    // Spawning succeeding only means the binary launched. The daemon can still
+    // exit immediately — no board on that port, no permission, port still held —
+    // and reporting "Gateway Online" for a process that is already dead is worse
+    // than reporting nothing. Give it a moment and check it is still alive.
+    let mut child = child;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            let released = state.gateway_owned_port.lock().await.take();
+            let mut msg = format!(
+                "The gateway daemon exited immediately ({}). The most common cause is that \
+                 {} could not be opened — check the board is attached and that nothing else \
+                 is using the port.",
+                status, port
+            );
+            // We took the port away for it; give it back rather than leaving the
+            // app disconnected after a failure it did not cause.
+            if released.is_some() || holding_this_port {
+                match connect_port(port.clone(), state, app).await {
+                    Ok(()) => msg.push_str(" Reconnected the app to the board."),
+                    Err(e) => msg.push_str(&format!(" Reconnecting the app also failed: {}", e)),
+                }
+            }
+            return Err(msg);
+        }
+        Ok(None) => {}  // still running, as expected
+        Err(e) => log::warn!("Could not check the gateway daemon's state: {}", e),
+    }
+
     *state.gateway_process.lock().await = Some(child);
-    let _ = app.emit("gateway-status", serde_json::json!({ "online": true, "port": port }));
+    *state.gateway_owned_port.lock().await = Some(port.clone());
+    let _ = app.emit(
+        "gateway-status",
+        serde_json::json!({ "online": true, "port": port, "portReleased": holding_this_port }),
+    );
     log::info!("Gateway daemon started on port {}", port);
     Ok(())
 }
 
 /// v0.3.6 — Stop the background gateway daemon.
+///
+/// Reconnects to the port the daemon was given, if the app was the one that
+/// released it — otherwise stopping the gateway would leave the user staring at
+/// a disconnected app with no indication that they need to press Connect again.
 #[tauri::command]
 async fn stop_gateway(
     state: State<'_, AppState>,
@@ -926,9 +1056,24 @@ async fn stop_gateway(
 ) -> Result<(), String> {
     if let Some(mut child) = state.gateway_process.lock().await.take() {
         let _ = child.kill().await;
+        // The OS releases the port when the process actually exits, which is not
+        // instantaneous; reopening too early fails with "access denied".
+        let _ = child.wait().await;
     }
+    let released = state.gateway_owned_port.lock().await.take();
     let _ = app.emit("gateway-status", serde_json::json!({ "online": false }));
     log::info!("Gateway daemon stopped");
+
+    if let Some(port) = released {
+        if !state.serial.is_connected() {
+            log::info!("Reclaiming {} now the gateway daemon has exited", port);
+            if let Err(e) = connect_port(port.clone(), state, app).await {
+                // Not fatal: the user can press Connect. Say so rather than
+                // reporting a failure to stop the gateway, which did stop.
+                log::warn!("Could not reopen {} after stopping the gateway: {}", port, e);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1054,11 +1199,33 @@ async fn save_wallet(wallet_info: WalletInfo, passphrase: String, app: AppHandle
     }
     let encrypted = wallet::encrypt_wallet(&wallet_info, &passphrase)
         .map_err(|e| e.to_string())?;
+
+    // Prove the ciphertext decrypts back to this exact wallet before anything is
+    // written. This file is often the user's only copy of the key, and a wallet
+    // that saved "successfully" but cannot be reopened is indistinguishable from
+    // losing the coins. The cost is one extra argon2 pass on save.
+    match wallet::decrypt_wallet(&encrypted, &passphrase) {
+        Ok(check) if check.private_key_wif == wallet_info.private_key_wif
+            && check.address == wallet_info.address => {}
+        Ok(_) => {
+            return Err("Refusing to save: the encrypted wallet did not decrypt back to the \
+                        same key. Nothing was written; your existing wallet file is untouched."
+                .to_string())
+        }
+        Err(e) => {
+            return Err(format!(
+                "Refusing to save: the encrypted wallet could not be decrypted back ({}). \
+                 Nothing was written; your existing wallet file is untouched.",
+                e
+            ))
+        }
+    }
+
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let path = dir.join("wallet.json");
     let json = serde_json::to_string_pretty(&encrypted).map_err(|e| e.to_string())?;
-    tokio::fs::write(&path, json).await.map_err(|e| e.to_string())?;
+    write_file_atomically(&path, &json).await?;
     log::info!("Encrypted wallet saved to disk.");
     Ok(())
 }
@@ -1145,7 +1312,7 @@ async fn save_address_book(entries: Vec<serde_json::Value>, app: AppHandle) -> R
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let path = dir.join("address_book.json");
     let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
-    tokio::fs::write(&path, json).await.map_err(|e| e.to_string())?;
+    write_file_atomically(&path, &json).await?;
     Ok(())
 }
 

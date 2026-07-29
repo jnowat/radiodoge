@@ -670,16 +670,18 @@ async function _registerSessionListeners(): Promise<void> {
 
   // send_transaction emits this event on Android so the bridge can write the
   // signed radio packets over USB or BLE without any protocol code in the UI.
+  // On Android the Rust `send_transaction` command builds the frames and returns
+  // straight away; the bytes are written here. A failure in this listener used to
+  // be an unhandled promise rejection — invisible — while the UI had already told
+  // the user the transaction was sent. Report it instead: a transaction that
+  // never reached the board is exactly what someone needs to know about.
   const unlistenMobileTx = await listen<number[][]>('mobile-tx-packets', async (ev) => {
-    const packets = ev.payload;
-    for (let i = 0; i < packets.length; i++) {
-      const chunk = new Uint8Array(packets[i]);
-      if (activeBleAddress) {
-        await _bleWrite(chunk);
-      } else {
-        await _usbWrite(chunk);
-      }
-      if (packets.length > 1 && i < packets.length - 1) await _sleep(MULTIPART_FRAME_GAP_MS);
+    try {
+      await _writeTxFrames(ev.payload);
+    } catch (e: unknown) {
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error('[bridge] transaction write failed:', detail);
+      window.dispatchEvent(new CustomEvent('radiodoge:tx-send-failed', { detail }));
     }
   });
   sessionUnlistens.push(unlistenMobileTx);
@@ -837,14 +839,17 @@ export async function mobilePing(): Promise<void> {
   }
 }
 
+
 /**
- * Send a Dogecoin transaction.
+ * Write the frames of one transaction, in order, over whichever transport is
+ * active.
  *
- * Handles single and multipart payloads transparently.
- * Routes through USB or BLE depending on active transport.
+ * Frames are paced by `MULTIPART_FRAME_GAP_MS` because the board does not read
+ * serial while its radio is transmitting. Throws if any frame fails to write —
+ * a partially written sequence cannot be reassembled by the receiving gateway,
+ * so the caller must not report success.
  */
-export async function mobileSendTransaction(tx: TransactionRequest): Promise<void> {
-  const packets = await invoke<number[][]>('mobile_build_tx_packets', { tx });
+async function _writeTxFrames(packets: number[][]): Promise<void> {
   for (let i = 0; i < packets.length; i++) {
     const chunk = new Uint8Array(packets[i]);
     if (activeBleAddress) {
@@ -854,6 +859,17 @@ export async function mobileSendTransaction(tx: TransactionRequest): Promise<voi
     }
     if (packets.length > 1 && i < packets.length - 1) await _sleep(MULTIPART_FRAME_GAP_MS);
   }
+}
+
+/**
+ * Send a Dogecoin transaction.
+ *
+ * Handles single and multipart payloads transparently.
+ * Routes through USB or BLE depending on active transport.
+ */
+export async function mobileSendTransaction(tx: TransactionRequest): Promise<void> {
+  const packets = await invoke<number[][]>('mobile_build_tx_packets', { tx });
+  await _writeTxFrames(packets);
 }
 
 /**
