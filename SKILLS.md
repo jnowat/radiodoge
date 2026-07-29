@@ -175,8 +175,15 @@ still recognised.
 The protocol has no frame delimiter and no checksum, so after noise the framer
 can only *guess* where the next packet starts. Worse, the command set overlaps
 printable ASCII — `0x20` is both `CMD_GET_FIRMWARE_VERSION` and the space
-character — and the firmware writes `Serial.println` debug text down the same
-link, so log lines produce false packet starts.
+character — so any text sharing the link produces false packet starts.
+
+Firmware v0.4.2 stopped echoing its runtime log to the serial port, which is
+where nearly all of that text came from: `addLog` ended in `Serial.println`, and
+several addLog calls fire per received packet, *while it is being handled*. Do
+not put it back. The log is served by the web UI and `GET /api/logs`, and
+`HOST_SERIAL_DEBUG` exists for debugging with no host attached. Every board
+still prints a boot banner, and older firmware still logs to the wire, so the
+heuristic remains load-bearing.
 
 `looks_like_packet_start` also requires the next byte to be a legal flags value
 (low nibble `0x0` or `0x1`), which cuts false starts on realistic log lines by

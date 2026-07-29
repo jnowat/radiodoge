@@ -37,6 +37,18 @@ Please read before deploying:
   to the exact length it declares rather than by draining the serial buffer, and the relay paths preserve the
   flags byte. The host lifts its 192-byte cap for any board reporting FW11 or newer. See
   [`docs/PROTOCOL.md`](../docs/PROTOCOL.md#host--board-multipart).
+- **The runtime log no longer goes to the serial port (v0.4.2).** `addLog` used to end in
+  `Serial.println`, so every one of its hundred-odd call sites — several per received packet, fired while the
+  packet was being handled — wrote text down the wire the host reads binary packets from. Because the command
+  set overlaps printable ASCII, the host could mistake a log line for a packet header and consume the real
+  packet behind it. The log is unchanged in the web UI and at `GET /api/logs`; set `HOST_SERIAL_DEBUG` to 1 to
+  put it back on the wire when debugging with a serial monitor and no host software attached. Gateway
+  usernames and password lengths are redacted rather than relocated, since `/api/logs` has no authentication.
+- **Received multipart packets are validated before they index anything (v0.4.2).** `totalParts` was never
+  checked, so a packet claiming 255 parts wrote past the ends of the 20-element `partsReceived` and
+  `partSizes` arrays, and an over-long chunk could push the reassembled total past the 4000-byte assembly
+  buffer. Both are bounded now, and a session whose part count changes mid-sequence restarts instead of mixing
+  two payloads.
 - **Transmissions block until the radio finishes (v0.4.2).** `SendLoRaAndWait` pumps `Radio.IrqProcess()` until
   `TxDone`. Before this, handlers returned straight after `Radio.Send` and marked the radio idle, so the main
   loop switched it into receive mid-packet — desktop `DOGE_TX` sends and gateway `TX_ACK` relays were aborted a

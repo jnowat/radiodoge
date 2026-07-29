@@ -7,6 +7,129 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — 🔬 Second Pass: Memory Safety, Serial Hygiene & a Test Gate
+
+> **A follow-up audit of everything the transaction work did not touch.** The
+> headline: the firmware could be made to write past the end of three arrays by
+> anyone within radio range, it was narrating its own log down the wire the host
+> reads packets from, and nothing in CI had ever run the test suite.
+
+### Fixed
+
+#### Remote memory corruption in the firmware's multipart reassembly
+
+`ProcessMultipartPacket` created a session and only then checked the part
+number, and never checked `totalParts` at all. Every one of those fields arrives
+over the air from an unauthenticated sender:
+
+- A packet claiming 255 parts wrote `partsReceived[254]` into a 20-element array
+  and `partSizes[254]` into a 20-element array.
+- A chunk longer than `MULTIPART_CHUNK_SIZE` overflowed into the next part's slot
+  and had its oversized length recorded, so the reassembled total could run past
+  the 4000-byte stack buffer in `ReassembleMultipartPacket`.
+- That function also computed a size it never used by calling `strlen()` on
+  binary chunk data, reading past any chunk that contained no NUL.
+
+The header is now validated before it indexes anything, the assembly copy is
+bounded regardless of what the recorded sizes claim, the dead `strlen` loop is
+gone, and a session whose part count changes mid-sequence restarts rather than
+mixing two payloads. `OnRxDone` clamps `messageSize` before the `memcpy` and the
+NUL that follows it.
+
+#### The firmware narrated its log down the protocol wire
+
+`addLog` ended in `Serial.println`. With over a hundred call sites — several
+fired per received packet, *while that packet was being handled* — the board was
+writing a stream of text into the link the host reads binary packets from. The
+desktop command set overlaps printable ASCII (`0x20` is both
+`CMD_GET_FIRMWARE_VERSION` and the space character), so the host's framer can
+mistake a log line for a packet header and then consume the real packet behind
+it. This is most of the reason resynchronisation is needed at all.
+
+The log now lives only where it was already available — the web UI and
+`GET /api/logs` — with `HOST_SERIAL_DEBUG` to put it back on the wire when
+debugging with no host attached. The legacy `TRANSACTION:` / `MESSAGE:` /
+`BROADCAST:` text lines are behind the same switch. The boot banner stays on
+Serial: it happens once, before a host is talking.
+
+Rerouting rather than removing would have made one thing worse — the gateway RPC
+username and password length were among the lines being logged, and
+`GET /api/logs` has no authentication. Those are redacted, not relocated. The
+banner also no longer prints the AP password, and reports the real firmware
+version instead of a hardcoded `v0.3.7`.
+
+#### The gateway daemon and the app fought over the same serial port
+
+"Spawn Daemon" passed the port the app itself had open. A serial port has one
+owner: on Windows the daemon's open fails, and on Linux both processes read the
+same device and each gets a random subset of the bytes — on the path that
+carries transactions. The app now releases the port (stopping the auto-reconnect
+watchdog first, or it would take it straight back), and reclaims it when the
+gateway is stopped. Three related fixes came with it:
+
+- The daemon was spawned without `kill_on_drop`, so closing the app orphaned a
+  process still holding the serial port.
+- `start_gateway` reported success as soon as the binary launched. A daemon that
+  exited immediately — no board, no permission, port busy — left the UI showing
+  "Gateway Online" forever. It is now checked for liveness before being reported.
+- `setDisconnected()` cleared `gatewayOnline`, so the "Stop" button vanished the
+  moment the daemon took the port, leaving a running daemon with no way to stop
+  it from the UI. Only the `gateway-status` event may change that flag now.
+
+#### A crash while saving could destroy the wallet
+
+`wallet.json`, `address_book.json` and `tx_history.json` were written with
+`fs::write`, which truncates first and writes second. An interruption between
+the two leaves an empty file — and `wallet.json` is often the only copy of an
+encrypted private key. All three are now written to a temp file and renamed into
+place, so the previous contents survive until the new file is complete.
+
+`save_wallet` additionally decrypts the ciphertext back and compares it to the
+wallet in hand before writing anything. A wallet that saved "successfully" but
+cannot be reopened is indistinguishable from losing the coins; the cost of being
+sure is one extra argon2 pass.
+
+#### Rejected radio settings were reported as verified
+
+The firmware validates `SET_LORA_PARAMS` and answers a legacy NACK — leaving the
+radio untouched — when a value is out of range. The app never looked, so it
+showed "Verified ✓" for settings the board had discarded. It now waits for the
+`0x21` reply and reports what actually happened, with the valid ranges.
+
+#### A send popped a "transaction received" notification on the sender
+
+The board answers every `0x10` with an 8-byte reply carrying the same command
+byte. The desktop notification handler treated that as an arrival, so every send
+notified the sender that they had received a transaction — once per frame, so a
+multipart send produced a burst.
+
+#### Android reported success for transactions it had not sent
+
+`send_transaction` hands the frames to the JS bridge and returns immediately, so
+the UI showed "sent" while the bytes were still being written — and a write
+failure inside the event listener was an unhandled promise rejection, invisible.
+Failures now replace the success message with what went wrong. Both mobile send
+paths share one frame writer instead of two copies of the pacing loop.
+
+### Added
+
+- **`Test & Lint` workflow.** Nothing in CI had ever run `cargo test`: the build
+  workflows compile the app and `cargo-audit` checks dependencies, so a change
+  that broke packet framing produced a green tick and a working installer. The
+  new job runs the workspace tests, the doc tests, `clippy -D warnings`, and
+  `svelte-check`. Every test is offline, so it is fast and deterministic.
+
+### Changed
+
+- `MAX_MULTIPART_SESSIONS` split out of `MAX_MULTIPART_PARTS` in the firmware.
+  They shared a value while meaning entirely different things — how many senders
+  may be mid-sequence versus how many parts one sequence has — which is what
+  made the missing bounds check easy to miss. The value is unchanged; the table
+  still costs about 82 KB of static RAM, which is now stated where it is
+  allocated.
+
+---
+
 ## [Unreleased] — 🐕 Dogecoin Over LoRa, End to End — Much Send. Very Multipart. Wow.
 
 > **A real signed Dogecoin transaction can now travel from an offline device, over LoRa, to a board attached to
