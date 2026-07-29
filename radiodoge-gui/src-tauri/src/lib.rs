@@ -636,6 +636,24 @@ async fn scan_qr_from_image(
     .map_err(|e| format!("QR decode task failed: {}", e))?
 }
 
+/// `true` when the JS bridge, rather than the Rust `SerialManager`, owns the port.
+///
+/// This is an Android-only arrangement: there the serial port is opened by
+/// `tauri-plugin-serialplugin` or the BLE plugin in JavaScript, so
+/// `serial.is_connected()` is always false even while the board is attached.
+///
+/// It used to be *inferred* — "a port is set but the Rust side is not connected"
+/// — which is exactly the state a desktop machine enters when the USB cable is
+/// pulled: `is_connected()` goes false while `current_port` stays set until the
+/// user presses Disconnect. A desktop app in that state took the Android path,
+/// emitted the transaction frames as an event nothing listens to on desktop, and
+/// reported success for a signed transaction that was dropped on the floor.
+///
+/// Compiled per platform now, so a dropped cable is a dropped cable.
+async fn js_bridge_owns_port(state: &State<'_, AppState>) -> bool {
+    cfg!(target_os = "android") && state.current_port.lock().await.is_some()
+}
+
 #[tauri::command]
 async fn send_transaction(
     tx: TransactionRequest,
@@ -643,10 +661,13 @@ async fn send_transaction(
     app: AppHandle,
 ) -> Result<String, String> {
     // On Android the JS bridge owns the USB/BLE port, so serial.is_connected() is
-    // always false.  Allow the send when mobile is connected (current_port is set).
-    let is_mobile = state.current_port.lock().await.is_some() && !state.serial.is_connected();
+    // always false. Everywhere else, not connected means not connected.
+    let is_mobile = js_bridge_owns_port(&state).await;
     if !is_mobile && !state.serial.is_connected() {
-        return Err("Not connected to a Heltec device. Please connect first.".to_string());
+        return Err(
+            "Not connected to a Heltec device. Nothing was sent — check the cable and reconnect."
+                .to_string(),
+        );
     }
 
     if !wallet::is_valid_address(&tx.to_address) {
@@ -912,8 +933,7 @@ async fn get_board_settings(
     // the Rust SerialManager.  is_connected() is always false on mobile.
     // Return the board settings cached by mobile_push_bytes when CMD_GET_SETTINGS
     // last arrived — this is the same data the frontend already has from board-sync.
-    let is_mobile_connected = state.current_port.lock().await.is_some()
-        && !state.serial.is_connected();
+    let is_mobile_connected = js_bridge_owns_port(&state).await;
 
     if is_mobile_connected {
         let cached = state.serial.get_board_settings().await;
@@ -1225,8 +1245,7 @@ async fn query_battery(state: State<'_, AppState>, app: AppHandle) -> Result<Opt
 async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<String>, String> {
     // Android mobile path: MAC is cached by mobile_push_bytes on CMD_GET_MAC arrival.
     // Return the cached value immediately; the JS caller writes GET_MAC via bridge first.
-    let is_mobile_connected = state.current_port.lock().await.is_some()
-        && !state.serial.is_connected();
+    let is_mobile_connected = js_bridge_owns_port(&state).await;
     if is_mobile_connected {
         return Ok(state.serial.get_board_mac().await);
     }

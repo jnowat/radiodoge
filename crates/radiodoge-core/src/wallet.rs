@@ -195,11 +195,32 @@ pub(crate) const BLOCKBOOK_BASE: &str = "https://doge1.trezor.io/api/v2";
 /// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
 pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
 
+/// Blocks a coinbase output must age before it can be spent.
+///
+/// Dogecoin's maturity is 60 blocks (`COINBASE_MATURITY`); the extra margin
+/// costs nothing and covers a reorg near the boundary. Spending an immature
+/// coinbase produces a transaction every node rejects.
+const COINBASE_MATURITY_BLOCKS: u32 = 100;
+
 #[derive(serde::Deserialize)]
 struct UtxoEntry {
     txid: String,
     vout: u32,
     value: String, // koinus as string (avoids f64 precision loss for large values)
+
+    /// Confirmations, as reported by Blockbook. `0` for a mempool output.
+    ///
+    /// This used to be discarded, so coin selection happily spent unconfirmed
+    /// outputs: `/utxo/<address>` includes them by default. A transaction
+    /// spending an unconfirmed parent is only as good as that parent — if it is
+    /// dropped or replaced, this one becomes unspendable too, and over LoRa the
+    /// sender has no way to find out.
+    #[serde(default)]
+    confirmations: u32,
+
+    /// Set by Blockbook when the output is a coinbase (mining reward).
+    #[serde(default)]
+    coinbase: bool,
 }
 
 fn encode_varint(n: u64) -> Vec<u8> {
@@ -357,10 +378,25 @@ pub async fn build_signed_transaction(
     if raw_utxos.is_empty() {
         anyhow::bail!("No UTXOs found for {}. Balance may be zero.", from_address);
     }
+    let total_utxos = raw_utxos.len();
     let mut utxos: Vec<(String, u32, u64)> = raw_utxos
         .into_iter()
+        // Only spend coins that are actually spendable. An unconfirmed output
+        // may never confirm, and an immature coinbase is rejected outright — in
+        // both cases the transaction this builds is invalid, and a sender who
+        // handed it to a LoRa gateway would never learn why nothing happened.
+        .filter(|u| u.confirmations >= 1)
+        .filter(|u| !u.coinbase || u.confirmations >= COINBASE_MATURITY_BLOCKS)
         .filter_map(|u| u.value.parse::<u64>().ok().map(|v| (u.txid, u.vout, v)))
         .collect();
+    if utxos.is_empty() {
+        anyhow::bail!(
+            "No spendable UTXOs for {}: {} output(s) found, all unconfirmed or immature. \
+             Wait for a confirmation and try again.",
+            from_address,
+            total_utxos
+        );
+    }
     utxos.sort_by_key(|b| std::cmp::Reverse(b.2)); // largest first
 
     let mut selected: Vec<(String, u32)> = Vec::new();
@@ -374,9 +410,12 @@ pub async fn build_signed_transaction(
     }
     if selected_sum < total_needed {
         anyhow::bail!(
-            "Insufficient funds: need {:.8} DOGE, spendable {:.8} DOGE",
+            "Insufficient confirmed funds: need {:.8} DOGE, spendable {:.8} DOGE across {} \
+             confirmed output(s) of {} total. Unconfirmed and immature coins are not spent.",
             total_needed as f64 / 1e8,
-            selected_sum as f64 / 1e8
+            selected_sum as f64 / 1e8,
+            utxos.len(),
+            total_utxos
         );
     }
 
@@ -774,10 +813,27 @@ fn p2pkh_address_from_script(script: &[u8]) -> Option<String> {
     }
 }
 
-/// Verify all input signatures in a raw Dogecoin P2PKH transaction (no network access).
-/// Returns `(sender_address, recipients)` where recipients is a list of `(koinus, address)`.
-/// All inputs are assumed to be P2PKH from the same address; the UTXO scriptPubKey is
-/// reconstructed from the pubkey in each input's scriptSig.
+/// Check that a raw P2PKH transaction's signatures are internally consistent.
+///
+/// Returns `(sender_address, recipients)` where recipients is a list of
+/// `(koinus, address)`.
+///
+/// # What this does not prove
+///
+/// **Nothing about whether the money exists.** The UTXO scriptPubKey each
+/// signature is checked against is *reconstructed from the public key inside
+/// that same input's scriptSig* — there is no network access here, so there is
+/// nothing else to check it against. Consequently:
+///
+/// - The inputs need not exist. Anyone can name a txid that was never mined.
+/// - The inputs need not be unspent, or belong to the signer's own coins.
+/// - The transaction need not be broadcast, valid, or accepted by any node.
+///
+/// A stranger can therefore build a transaction paying you any amount, sign it
+/// with a key they generated a second ago, and it will pass. Over LoRa that
+/// costs them one packet. Treat a pass as "this is a well-formed transaction
+/// someone signed", never as "I have been paid" — that requires
+/// [`crate::spv::fetch_tx_inclusion`], which asks the chain.
 pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     let mut pos = 0usize;
 
@@ -879,17 +935,33 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
 pub fn describe_signed_tx(raw_tx: &[u8]) -> String {
     match verify_signed_tx(raw_tx) {
         Ok((sender, recipients)) => {
+            // Deliberately not a green checkmark.
+            //
+            // What passed is a signature check against a scriptPubKey derived
+            // from the transaction's own public key — see verify_signed_tx. It
+            // says nothing about whether the inputs exist or are unspent, and
+            // anyone within radio range can produce a transaction that passes it
+            // for any amount to any address. Labelling that "✅ verified" turned
+            // one cheap LoRa packet into a convincing payment notification, which
+            // is worth real money to whoever sends it.
             if recipients.is_empty() {
-                format!("✅ DOGE TX (verified) — {} → self/change only", sender)
+                format!(
+                    "📩 DOGE TX (signature valid, NOT confirmed on-chain) — {} → self/change only",
+                    sender
+                )
             } else {
                 let parts: Vec<String> = recipients
                     .iter()
                     .map(|(v, addr)| format!("{:.8} DOGE → {}", *v as f64 / 1e8, addr))
                     .collect();
-                format!("✅ DOGE TX: {} [from {}]", parts.join(", "), sender)
+                format!(
+                    "📩 DOGE TX (signature valid, NOT confirmed on-chain — verify the txid before treating this as payment): {} [claims to be from {}]",
+                    parts.join(", "),
+                    sender
+                )
             }
         }
-        Err(_) => format!("⚠️ DOGE TX (unverified) — {} bytes", raw_tx.len()),
+        Err(_) => format!("⚠️ DOGE TX (unparseable) — {} bytes", raw_tx.len()),
     }
 }
 
@@ -1068,7 +1140,7 @@ mod tests {
         }
 
         // describe_signed_tx is the display path and must survive the same input.
-        assert!(describe_signed_tx(&huge_varint).contains("unverified"));
+        assert!(describe_signed_tx(&huge_varint).contains("unparseable"));
     }
 
     /// The gateway acknowledges a transaction with a txid it computes itself,
@@ -1162,7 +1234,19 @@ mod tests {
 
         // describe_signed_tx should return a verified description
         let desc = describe_signed_tx(&tx);
-        assert!(desc.starts_with("✅"), "should start with verified checkmark");
         assert!(desc.contains("1.00000000"), "should contain the amount");
+        // A signature check is not proof of payment: anyone in radio range can
+        // sign a transaction spending inputs that do not exist. The description
+        // must not imply otherwise.
+        assert!(
+            !desc.contains('✅'),
+            "a signature check must not be presented as a confirmed payment: {}",
+            desc
+        );
+        assert!(
+            desc.contains("NOT confirmed on-chain"),
+            "the description must say what was not checked: {}",
+            desc
+        );
     }
 }

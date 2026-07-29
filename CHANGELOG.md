@@ -124,6 +124,56 @@ dispatched half a transaction as if it were a whole one.
 - `write_file_atomically` uses a per-call temp name; with a shared one, two
   concurrent saves could rename a half-written file into place.
 
+#### A stranger could display a fake incoming payment
+
+`describe_signed_tx` labelled a transaction "✅ DOGE TX (verified)". What it
+actually checks is that the signatures are consistent with the public keys inside
+the transaction — and the UTXO scriptPubKey those signatures are checked against
+is *reconstructed from those same public keys*, because there is no network
+access in that function. It proves nothing about whether the inputs exist, are
+unspent, or belong to the sender.
+
+So anyone within radio range could build a transaction paying you any amount,
+sign it with a key generated a second earlier, transmit one packet, and watch
+your app announce a verified payment. The description now says what was and was
+not checked, and the checkmark is gone. `verify_signed_tx` documents its limits
+where someone reading it will see them.
+
+#### Transactions were built from coins that cannot be spent
+
+Blockbook's `/utxo` endpoint returns unconfirmed outputs by default, and the
+`confirmations` and `coinbase` fields were being discarded. Coin selection
+therefore spent unconfirmed parents — leaving a transaction that dies if the
+parent does — and immature coinbase outputs, which every node rejects outright.
+Over LoRa the sender has no way to find out why nothing happened. Only confirmed,
+mature coins are selected now, and "insufficient funds" says how many outputs
+were skipped for being unspendable.
+
+#### The proof-of-work check accepted forged difficulty
+
+`bits_to_target` read the compact format's sign bit as part of the mantissa and
+let the exponent wrap. `nBits = 0x1d80ffff` produced a target ~128x the real one,
+and `0x20800000` a target of 2^255 — a value nearly every hash is below, so
+`hash_meets_target` accepted anything and `verify_header_chain(check_pow: true)`
+would pass a chain of garbage headers. Invalid encodings now expand to a zero
+target and are rejected outright, which fails closed.
+
+`merkle_root_from_branch` accepted forged proofs two ways: index bits beyond the
+branch depth were shifted away, so one branch could "prove" many positions; and a
+sibling equal to the node it pairs with — the duplicated-node shape of
+CVE-2012-2459 — was hashed happily. Both are rejected, and the function returns
+`Option` so an invalid proof cannot be mistaken for a root.
+
+#### A dropped USB cable made the desktop app take the Android path
+
+`send_transaction` decided it was running on mobile by inferring it: "a port is
+set but the Rust side is not connected". That is exactly the state a desktop
+machine enters when the cable is pulled — `is_connected()` goes false while
+`current_port` stays set until the user presses Disconnect. The app then emitted
+the transaction frames as an event nothing listens to on desktop, and returned
+success. A signed transaction, with real UTXOs selected, dropped on the floor
+under a confetti animation. The platform is now a compile-time fact.
+
 #### A malformed transaction packet could take down the read loop
 
 `verify_signed_tx` runs on every `CMD_DOGE_TX` payload the radio hears, from any
