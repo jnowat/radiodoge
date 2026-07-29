@@ -7,6 +7,131 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — 🕵️ Third Pass: The Web Layer, the Queue & the Wallet File
+
+> **A fan-out audit of everything the first two passes had not read**, with every
+> finding independently checked before it was acted on. Two of them could destroy
+> money outright: overwriting a saved wallet, and a radio packet that could talk
+> the host into a framing the board cannot handle.
+
+### Fixed
+
+#### Saving a wallet could destroy a different one, permanently
+
+There is one `wallet.json`. Dismiss the unlock prompt on launch, generate a new
+wallet, save it — and the encrypted key for the previously saved wallet is gone,
+with no prompt and no undo. If its recovery phrase was not written down, so are
+its coins.
+
+`save_wallet` now refuses to overwrite a *different* address unless the caller
+explicitly opts in, and the refusal names the wallet at risk so the UI can say
+whose key is about to be destroyed. Removing a saved wallet takes two clicks and
+reports a failed delete instead of claiming success. `walletSaved` and the
+displayed balance are reset whenever the in-memory wallet is replaced — the panel
+used to report a freshly generated key as "saved (encrypted)" and show the
+previous wallet's balance under the new address.
+
+#### A radio packet could lift the host's payload ceiling
+
+The board forwards any over-the-air packet addressed to the broadcast address to
+its serial host verbatim. So a node in radio range can transmit a
+`CMD_GET_FIRMWARE_VERSION` packet carrying any version string, and the host reads
+it as its *own* board's version — the value that decides whether a payload too
+large for one packet may be sent. A spoofed `FW11` against an older board means
+transmitting a transaction that board mis-frames and no gateway can reassemble.
+
+A version reply is now believed only inside the window the host opens by asking
+for one, on both the desktop and Android paths. It is not authentication —
+nothing on this link is authenticated — but an attacker has to win a race against
+a query the host chose to send rather than broadcasting at will.
+
+#### The web UI served the WiFi password in cleartext
+
+`GET /` embedded the live AP password as an input's `value`. `type='password'`
+masks it on screen and not at all in the HTML, so a plain GET returned it — and
+in dual-WiFi mode the web server is reachable from the upstream LAN, not only
+from devices that already joined the AP. It also undid the v0.4.1 change that
+stopped `/api/password/status` returning it. Nothing read the field: no script
+referenced it and the change handler never verified a current password. It
+existed only to display the secret.
+
+The password routes also restarted the access point *before* sending their
+response, dropping the client that was waiting for it, so the UI could not tell
+success from failure. They reply first now.
+
+#### The queue re-dispatched the same request until the board crashed
+
+`ProcessNextQueuedRequest` removed a request from the queue *after* its handler
+returned, and a handler for a request needing no confirmation called straight
+back into it — finding the same request still at the head of the queue with the
+state still idle. Every level of that recursion transmitted over LoRa; it ended
+when the stack ran out. It was also re-entrant from the receive path, since a
+confirmation arriving mid-dispatch calls into the same function.
+
+Rewritten to dequeue first and iterate, with a re-entrancy guard. Two related
+defects went with it: `REQUEST_TIMEOUT_MS` was 30 s while a single request can
+hold the queue for 15 s, so only the first two of ten slots were ever reachable
+and the rest expired untried after the API had reported them accepted; and
+confirmations carry no request id, so the gateway's deliberate double-send
+completed the *next* request as well as the one it was for.
+
+#### Mesh relay mislabelled and re-submitted broadcasts
+
+- Broadcast dedup keyed on `(source, payload)`, but a relayed broadcast carries
+  the *relay's* address as its source — so a node never recognised a payload it
+  had already forwarded, and the same transaction reached the gateway once per
+  path through the mesh, being submitted to the network each time. Keyed on the
+  payload now, which is what flood suppression means.
+- A broadcast whose type was not literally `transaction:` kept the hardcoded
+  defaults and was relayed as `transaction:normal:<the entire original payload>`,
+  then POSTed to a Dogecoin node as a raw transaction. The envelope is parsed
+  generically, and only a transaction is forwarded to the network.
+
+#### `gateway_endpoint` was never actually saved
+
+ESP-IDF caps NVS key names at 15 usable characters. `"gateway_endpoint"` is 16,
+so every read and write of it failed with `ESP_ERR_NVS_KEY_TOO_LONG` while
+`/api/gateway/save` reported success — a board configured with a custom endpoint
+forgot it on every reboot and POSTed to the bare gateway URL. Renamed to
+`gw_endpoint`.
+
+#### Bluetooth could not carry anything larger than 20 bytes
+
+`plugin-blec` hands a whole buffer to one GATT write and exposes no MTU
+negotiation, so a 200-byte frame was rejected or truncated on any link still at
+the mandatory 23-byte ATT MTU — which is every link, since nothing raises it.
+Writes are chunked at the guaranteed 20-byte payload and use `withResponse`, so a
+chunk cannot be dropped for want of flow control. The board's BLE quiet-gap
+framing went from 60 ms to 400 ms to match: a gap of more than 60 ms between two
+chunks of the same packet is ordinary on Android, and at 60 ms the board
+dispatched half a transaction as if it were a whole one.
+
+#### Smaller ones
+
+- `/proxy?url=` buffered the entire remote response into heap with no limit — one
+  request for an ordinary web page was enough to exhaust RAM and reset the board.
+  Capped at 32 KB, and gated on the internet bridge being explicitly enabled
+  rather than merely on the board being online, since it will fetch any URL.
+- `/api/address` and `/address` accepted any octet — `toInt()` returns a long and
+  the fields are `uint8_t`, so 999 became 231 — and allowed the board's own
+  address to be set to the reserved broadcast address, after which it matches
+  every packet twice and can never be addressed individually again.
+- Operator-supplied strings (gateway type/IP/port/endpoint/username, WiFi SSID)
+  were concatenated into JSON responses unescaped; one quote in a stored value
+  broke the web UI until NVS was cleared.
+- `build_tx_frames` rejects an empty payload rather than reporting a successful
+  send of nothing.
+- `write_file_atomically` uses a per-call temp name; with a shared one, two
+  concurrent saves could rename a half-written file into place.
+
+### Added
+
+- **Per-frame send progress.** A multipart transaction is several seconds of real
+  airtime, and the button used to just sit there. `send_frames_with_progress`
+  reports each acknowledged frame and the Send tab shows "Beaming part 3 of 8".
+
+---
+
 ## [Unreleased] — 🔬 Second Pass: Memory Safety, Serial Hygiene & a Test Gate
 
 > **A follow-up audit of everything the transaction work did not touch.** The
