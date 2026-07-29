@@ -337,18 +337,38 @@ async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Op
             .context("Failed to encode transaction")?
     };
 
-    // The board mis-frames multipart over serial, so refuse rather than
-    // transmitting a corrupted transaction. See radio::check_host_payload_fits.
-    if let Err(msg) = radio::check_host_payload_fits(payload.len()) {
-        manager.disconnect().await.ok();
-        anyhow::bail!("{}", msg);
-    }
-
+    // Which framing the board can accept depends on its firmware, so ask before
+    // deciding. `build_tx_frames` refuses anything the board would mis-frame
+    // rather than transmitting a transaction no receiver can reconstruct.
+    let firmware = manager.ensure_firmware_version().await;
     let src = manager.get_node_address().await;
     let dst = NodeAddress::broadcast();
 
-    let pkt = radio::build_doge_tx(&src, &dst, &payload);
-    manager.send_raw(pkt).await.context("Failed to send packet")?;
+    let frames = match radio::build_tx_frames(
+        &src,
+        &dst,
+        radio::CMD_DOGE_TX,
+        &payload,
+        firmware.as_deref(),
+    ) {
+        Ok(f) => f,
+        Err(msg) => {
+            manager.disconnect().await.ok();
+            anyhow::bail!("{}", msg);
+        }
+    };
+
+    if frames.len() > 1 {
+        println!(
+            "📦 {} bytes → {} LoRa frames (each acknowledged before the next is sent)…",
+            payload.len(),
+            frames.len()
+        );
+    }
+    if let Err(e) = manager.send_frames(frames).await {
+        manager.disconnect().await.ok();
+        return Err(e).context("Failed to send transaction over LoRa");
+    }
 
     if wif.is_some() {
         println!("✅ Signed tx sent! {:.8} DOGE → {} via LoRa 🐕🌙", amount, to);
@@ -526,17 +546,19 @@ async fn cmd_connect(port: &str) -> Result<()> {
                             match payload {
                                 Err(e) => println!("❌ Encode error: {}", e),
                                 Ok(bytes) => {
-                                    if let Err(e) = radio::check_host_payload_fits(bytes.len()) {
-                                        println!("❌ {}", e);
-                                    } else {
-                                        let src = manager.get_node_address().await;
-                                        let dst = NodeAddress::broadcast();
-                                        let pkt = radio::build_doge_tx(&src, &dst, &bytes);
-                                        if manager.send_raw(pkt).await.is_ok() {
-                                            println!("✅ Sent {:.8} DOGE → {} 🐕🌙", amount, to_addr);
-                                        } else {
-                                            println!("❌ Failed to send packet");
-                                        }
+                                    let fw = manager.ensure_firmware_version().await;
+                                    let src = manager.get_node_address().await;
+                                    let dst = NodeAddress::broadcast();
+                                    match radio::build_tx_frames(
+                                        &src, &dst, radio::CMD_DOGE_TX, &bytes, fw.as_deref(),
+                                    ) {
+                                        Err(e) => println!("❌ {}", e),
+                                        Ok(frames) => match manager.send_frames(frames).await {
+                                            Ok(()) => println!(
+                                                "✅ Sent {:.8} DOGE → {} 🐕🌙", amount, to_addr
+                                            ),
+                                            Err(e) => println!("❌ Failed to send: {}", e),
+                                        },
                                     }
                                 }
                             }
@@ -604,6 +626,19 @@ async fn cmd_daemon(port: &str) -> Result<()> {
     let manager = Arc::new(SerialManager::new());
     let manager_for_ack = Arc::clone(&manager);
 
+    // Transactions already handled this session, keyed by txid.
+    //
+    // A transaction addressed to the broadcast address is forwarded to its host
+    // by *every* board that hears it, and the sender retransmits an
+    // unacknowledged multipart part, so the same signed bytes reach a gateway
+    // more than once as a matter of course. Re-POSTing them is harmless to the
+    // network — the txid is identical — but the second attempt is rejected as a
+    // duplicate, which used to look like a broadcast failure and cost the sender
+    // its acknowledgement. Remembering what has been broadcast turns a repeat
+    // into an immediate re-ACK instead.
+    let seen_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>> =
+        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
     let on_packet = Arc::new(move |pkt: IncomingPacket| {
         log::info!(
             "PACKET  {} → {}  cmd=0x{:02X}  rssi={}{}  payload={}{}",
@@ -624,15 +659,18 @@ async fn cmd_daemon(port: &str) -> Result<()> {
             let payload_bytes = hex::decode(&pkt.payload_hex).unwrap_or_default();
             if wallet::is_signed_tx_payload(&payload_bytes) {
                 let raw_hex = pkt.payload_hex.clone();
+                let txid = wallet::compute_txid(&payload_bytes);
                 let mgr = Arc::clone(&manager_for_ack);
+                let seen = Arc::clone(&seen_txs);
                 let source = pkt.source.clone();
                 log::info!(
-                    "GATEWAY  signed tx detected ({} bytes) from {} — broadcasting to Dogecoin network",
+                    "GATEWAY  signed tx detected ({} bytes, txid {}) from {} — broadcasting to Dogecoin network",
                     payload_bytes.len(),
+                    txid,
                     source.to_display_string()
                 );
                 tokio::spawn(async move {
-                    daemon_broadcast_and_ack(raw_hex, mgr, source).await;
+                    daemon_broadcast_and_ack(raw_hex, txid, mgr, source, seen).await;
                 });
             }
         }
@@ -661,6 +699,31 @@ async fn cmd_daemon(port: &str) -> Result<()> {
 
     let addr = manager.get_node_address().await;
     log::info!("Connected — node address: {}", addr.to_display_string());
+
+    if let Some(fw) = manager.ensure_firmware_version().await {
+        log::info!("Board firmware: {}", fw);
+        if !radio::firmware_supports_multipart(Some(&fw)) {
+            log::warn!(
+                "This board predates firmware v0.4.2 (FW{}). It cannot relay a transaction \
+                 larger than one {}-byte packet, so senders will be limited to the smallest \
+                 possible transactions. Flash heltec-firmware-v3/ to lift the limit.",
+                radio::MIN_MULTIPART_FIRMWARE,
+                radio::MAX_SINGLE_PAYLOAD_LEN
+            );
+        }
+    }
+
+    // Put the board into gateway mode. The board only relays a host MESSAGE over
+    // LoRa when this is set, and TX_ACK is a host MESSAGE — so without it a
+    // gateway broadcasts transactions perfectly and the sender never hears back.
+    // Asking for it here means running the daemon is enough; there is no
+    // separate step in the GUI to remember.
+    if let Err(e) = manager.send_raw(radio::build_set_gateway(&addr, true)).await {
+        log::warn!("Could not enable gateway mode on the board: {}", e);
+    } else {
+        log::info!("Gateway mode enabled on the board (needed to radio TX_ACK back to senders)");
+    }
+
     log::info!("Gateway ready — monitoring for signed Dogecoin transactions");
 
     // Run until Ctrl-C
@@ -672,13 +735,45 @@ async fn cmd_daemon(port: &str) -> Result<()> {
     Ok(())
 }
 
+/// `true` if a broadcast error means the network already has this transaction.
+///
+/// Every node worth talking to rejects a duplicate, and each phrases it
+/// differently. A duplicate is a *success* from the sender's point of view — the
+/// transaction is on the network — so it must produce an acknowledgement rather
+/// than a retry loop that ends in "broadcast failed".
+fn is_duplicate_broadcast_error(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("already in block chain")
+        || e.contains("already in the mempool")
+        || e.contains("already in mempool")
+        || e.contains("already known")
+        || e.contains("txn-already-known")
+        || e.contains("txn-already-in-mempool")
+        || e.contains("transaction already exists")
+        || e.contains("duplicate transaction")
+}
+
 /// Broadcast a signed transaction to the Dogecoin network with exponential-backoff
 /// retry (up to 3 attempts), then radio an ACK back to the originating node.
+///
+/// `txid` is computed locally from the raw bytes, so the acknowledgement carries
+/// the right id even when the network answers "already known" instead of
+/// returning one.
 async fn daemon_broadcast_and_ack(
     raw_hex: String,
+    txid: String,
     mgr: Arc<SerialManager>,
     source: NodeAddress,
+    seen: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
 ) {
+    // A transaction this gateway already put on the network only needs its
+    // acknowledgement re-sent — the sender may simply not have heard the first.
+    if let Some(known) = seen.lock().await.get(&txid).cloned() {
+        log::info!("GATEWAY  txid={} already broadcast this session — re-sending ACK", known);
+        daemon_send_tx_ack(&known, &mgr, &source).await;
+        return;
+    }
+
     let mut delay_secs = 2u64;
     for attempt in 0..3u32 {
         if attempt > 0 {
@@ -686,33 +781,50 @@ async fn daemon_broadcast_and_ack(
             delay_secs *= 2;
         }
         match wallet::broadcast_raw_tx(&raw_hex).await {
-            Ok(txid) => {
-                log::info!("GATEWAY  broadcast OK  txid={}", txid);
-                // Send ACK back to the originating node via radio. Include the
-                // full 64-hex-char txid — "TX_ACK:" + txid is 71 bytes, well under
-                // MAX_SINGLE_PAYLOAD_LEN (192) — so the recipient can actually look
-                // it up / verify inclusion. (Earlier code truncated it to 40 chars,
-                // which made the ACK'd txid useless.)
-                let gateway_addr = mgr.get_node_address().await;
-                let ack_msg = format!("TX_ACK:{}", txid);
-                let ack_pkt = radio::build_message(&gateway_addr, &source, &ack_msg);
-                if let Err(e) = mgr.send_raw(ack_pkt).await {
-                    log::warn!("GATEWAY  ACK send failed: {}", e);
+            Ok(network_txid) => {
+                if network_txid != txid {
+                    // Not fatal — the network's answer wins — but it means the
+                    // bytes were interpreted differently than expected, which is
+                    // worth seeing in a gateway log.
+                    log::warn!(
+                        "GATEWAY  network returned txid={} but the payload hashes to {}",
+                        network_txid, txid
+                    );
                 }
+                log::info!("GATEWAY  broadcast OK  txid={}", network_txid);
+                seen.lock().await.insert(txid.clone(), network_txid.clone());
+                daemon_send_tx_ack(&network_txid, &mgr, &source).await;
                 return;
             }
             Err(e) => {
-                log::warn!(
-                    "GATEWAY  broadcast attempt {}/3 failed: {}",
-                    attempt + 1, e
-                );
+                let msg = e.to_string();
+                if is_duplicate_broadcast_error(&msg) {
+                    log::info!(
+                        "GATEWAY  network already has txid={} — acknowledging as broadcast",
+                        txid
+                    );
+                    seen.lock().await.insert(txid.clone(), txid.clone());
+                    daemon_send_tx_ack(&txid, &mgr, &source).await;
+                    return;
+                }
+                log::warn!("GATEWAY  broadcast attempt {}/3 failed: {}", attempt + 1, msg);
             }
         }
     }
-    log::error!(
-        "GATEWAY  broadcast failed after 3 attempts for tx {}…",
-        &raw_hex[..raw_hex.len().min(16)]
-    );
+    log::error!("GATEWAY  broadcast failed after 3 attempts for txid={}", txid);
+}
+
+/// Radio a `TX_ACK:<txid>` back to the node that sent the transaction.
+///
+/// The full 64-hex-character txid is included — `"TX_ACK:"` + txid is 71 bytes,
+/// well inside a single packet — so the sender can actually look it up and
+/// verify inclusion.
+async fn daemon_send_tx_ack(txid: &str, mgr: &Arc<SerialManager>, source: &NodeAddress) {
+    let gateway_addr = mgr.get_node_address().await;
+    let ack_pkt = radio::build_message(&gateway_addr, source, &format!("TX_ACK:{}", txid));
+    if let Err(e) = mgr.send_raw(ack_pkt).await {
+        log::warn!("GATEWAY  ACK send failed: {}", e);
+    }
 }
 
 /// Fetch the balance for `address` from Blockbook and send it back to `source` via radio.
@@ -799,4 +911,45 @@ async fn cmd_broadcast(wif: &str, to: &str, amount: f64) -> Result<()> {
     println!("✅ Broadcast! txid = {}", txid);
     println!("   Track: https://dogechain.info/tx/{}", txid);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A duplicate broadcast is the normal outcome of a transaction addressed to
+    /// the broadcast address — every board in range hands it to its host — so it
+    /// has to be recognised as success. Treating it as failure cost the sender
+    /// its acknowledgement even though the transaction was on the network.
+    #[test]
+    fn duplicate_broadcast_errors_are_recognised() {
+        for msg in [
+            "Network rejected transaction: transaction already in block chain",
+            "Network rejected transaction: txn-already-in-mempool",
+            "Network rejected transaction: txn-already-known",
+            "-27: Transaction already in block chain",
+            "Duplicate transaction",
+            "TX ALREADY IN THE MEMPOOL",
+        ] {
+            assert!(
+                is_duplicate_broadcast_error(msg),
+                "should be treated as already-broadcast: {}",
+                msg
+            );
+        }
+
+        // Real failures must still retry and, eventually, report failure.
+        for msg in [
+            "Network rejected transaction: bad-txns-inputs-missingorspent",
+            "Broadcast request failed: connection timed out",
+            "Network rejected transaction: dust",
+            "insufficient fee",
+        ] {
+            assert!(
+                !is_duplicate_broadcast_error(msg),
+                "should NOT be treated as already-broadcast: {}",
+                msg
+            );
+        }
+    }
 }

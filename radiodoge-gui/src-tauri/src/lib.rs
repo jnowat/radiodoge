@@ -174,6 +174,21 @@ async fn list_ports_detailed() -> Result<Vec<PortInfo>, String> {
 /// Open a serial connection to the Heltec device.
 /// v0.3.6: After connecting, queries CMD_GET_SETTINGS (0x22) to sync board state.
 /// Board is source of truth — node address and gateway_mode update from board reply.
+/// `true` when a `CMD_DOGE_TX` packet is an actual incoming transaction rather
+/// than the board's own acknowledgement of one we just sent.
+///
+/// The board answers every `0x10` the host writes with an 8-byte reply carrying
+/// the same command byte and no payload. Treating that as an arrival popped a
+/// "DOGE Transaction Received!" notification on the *sender* after every send —
+/// and once per frame, so a multipart transaction produced a burst of them.
+/// A real transaction always decodes to something; the bare acknowledgement
+/// cannot.
+fn is_incoming_doge_tx(packet: &IncomingPacket) -> bool {
+    packet.command == radio::CMD_DOGE_TX
+        && !packet.payload_hex.is_empty()
+        && packet.decoded.is_some()
+}
+
 #[tauri::command]
 async fn connect_port(
     port: String,
@@ -197,7 +212,7 @@ async fn connect_port(
         let parsed = packet.decoded.clone().unwrap_or_default();
         emit_debug_traffic(&app_for_packets, "RX", &packet.payload_hex, &parsed);
 
-        if packet.command == radio::CMD_DOGE_TX {
+        if is_incoming_doge_tx(&packet) {
             let body = packet
                 .decoded
                 .clone()
@@ -345,7 +360,7 @@ async fn connect_port(
                 let _ = app_inner.emit("radio-packet", &packet);
                 let parsed = packet.decoded.clone().unwrap_or_default();
                 emit_debug_traffic(&app_inner, "RX", &packet.payload_hex, &parsed);
-                if packet.command == radio::CMD_DOGE_TX {
+                if is_incoming_doge_tx(&packet) {
                     let body = packet.decoded.clone().unwrap_or_else(|| "Incoming Dogecoin transaction".to_string());
                     let _ = app_inner.notification().builder().title("🐕 DOGE Transaction Received!").body(&body).show();
                 }
@@ -591,18 +606,20 @@ async fn send_transaction(
         .map_err(|e| e.to_string())?
     };
 
-    // The board cannot receive multipart over serial (see check_host_payload_fits).
-    // Reject here rather than transmitting packets the firmware will mis-frame.
-    radio::check_host_payload_fits(payload.len())?;
-
+    // How the payload is framed depends on what the board's firmware can
+    // receive: one packet on older builds, a multipart sequence on v0.4.2+.
+    // `build_tx_frames` refuses anything the board would mis-frame rather than
+    // transmitting a transaction no receiver can reconstruct.
     let src = state.serial.get_node_address().await;
     let dst = NodeAddress::broadcast();
+    let signed_label = tx.from_private_key_wif.is_some();
 
     if is_mobile {
         // Mobile path: the JS bridge owns the port; emit packet bytes via a
         // Tauri event so the connection-bridge session listener can write them.
-        let signed_label = tx.from_private_key_wif.is_some();
-        let packets = vec![radio::build_doge_tx(&src, &dst, &payload)];
+        let fw = state.mobile_fw_version.lock().await.clone();
+        let packets =
+            radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &payload, fw.as_deref())?;
         for (i, pkt) in packets.iter().enumerate() {
             let label = if signed_label {
                 format!("CMD_DOGE_TX signed (mobile {}/{})", i + 1, packets.len())
@@ -613,11 +630,25 @@ async fn send_transaction(
         }
         let _ = app.emit("mobile-tx-packets", &packets);
     } else {
-        let pkt = radio::build_doge_tx(&src, &dst, &payload);
-        let pkt_hex = hex::encode(&pkt);
-        let label = if tx.from_private_key_wif.is_some() { "CMD_DOGE_TX signed (single)" } else { "CMD_DOGE_TX (single packet)" };
-        emit_debug_traffic(&app, "TX", &pkt_hex, label);
-        state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+        let fw = state.serial.ensure_firmware_version().await;
+        let frames =
+            radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &payload, fw.as_deref())?;
+        for (i, pkt) in frames.iter().enumerate() {
+            let label = match (signed_label, frames.len()) {
+                (true, 1) => "CMD_DOGE_TX signed (single)".to_string(),
+                (false, 1) => "CMD_DOGE_TX (single packet)".to_string(),
+                (signed, n) => format!(
+                    "CMD_DOGE_TX{} (multipart {}/{})",
+                    if signed { " signed" } else { "" },
+                    i + 1,
+                    n
+                ),
+            };
+            emit_debug_traffic(&app, "TX", &hex::encode(pkt), &label);
+        }
+        // Frames go out one at a time, each acknowledged by the board before the
+        // next is written — see SerialManager::send_frames.
+        state.serial.send_frames(frames).await.map_err(|e| e.to_string())?;
     }
 
     let msg = if tx.from_private_key_wif.is_some() {
@@ -1347,7 +1378,9 @@ async fn mobile_push_bytes(
                 }
             }
 
-            radio::CMD_DOGE_TX => {
+            // Skip the board's own bare acknowledgement of a send — see
+            // is_incoming_doge_tx.
+            radio::CMD_DOGE_TX if is_incoming_doge_tx(&packet) => {
                 // No system-tray notification on Android; emit an in-app event instead
                 let body = packet.decoded.clone()
                     .unwrap_or_else(|| "Incoming Dogecoin transaction over LoRa".to_string());
@@ -1510,6 +1543,11 @@ async fn mobile_build_connect_queries(state: State<'_, AppState>) -> Result<Vec<
 /// Returns a `Vec<Vec<u8>>` — each inner Vec is one complete packet to write
 /// in order. Payloads ≤ 192 bytes produce a single packet; larger payloads
 /// are split into a multipart sequence (identical to the desktop send path).
+///
+/// The JS bridge must write these **one at a time with a gap between them** —
+/// see `MULTIPART_FRAME_GAP_MS` in `connection-bridge.ts`. The board's serial
+/// receive buffer holds only a few hundred bytes and it does not read while the
+/// radio is transmitting, so a burst is lost silently.
 #[tauri::command]
 async fn mobile_build_tx_packets(
     tx: TransactionRequest,
@@ -1536,8 +1574,11 @@ async fn mobile_build_tx_packets(
         .map_err(|e| e.to_string())?
     };
 
-    radio::check_host_payload_fits(payload.len())?;
-    Ok(vec![radio::build_doge_tx(&src, &dst, &payload)])
+    // Whether a multipart sequence can be handed to the board depends on its
+    // firmware. On Android the version is cached by mobile_push_bytes when the
+    // board answers CMD_GET_FIRMWARE_VERSION during the connect handshake.
+    let fw = state.mobile_fw_version.lock().await.clone();
+    radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &payload, fw.as_deref())
 }
 
 /// Build a SET_LORA_PARAMS packet (CMD 0x21) for the Android USB bridge.

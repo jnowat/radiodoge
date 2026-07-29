@@ -88,6 +88,35 @@ export type MobileConnectionStatus =
 const BLE_WRITE_CHAR_UUID  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // NUS RX — host writes
 const BLE_NOTIFY_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // NUS TX — board notifies
 
+// ─── Host → board pacing ─────────────────────────────────────────────────────
+
+/**
+ * Gap between the frames of one multipart transaction.
+ *
+ * Each frame becomes its own LoRa transmission, and the board does not read the
+ * serial port while the radio is busy: a 200-byte packet is roughly 330 ms of
+ * airtime at the default SF7, and considerably more if the radio has been
+ * retuned to a higher spreading factor. Writing the next frame before the board
+ * comes back overruns its receive buffer, and the bytes are dropped with no
+ * error on either side — the receiving gateway simply never completes the
+ * sequence and the transaction disappears.
+ *
+ * The desktop path does better than a fixed delay: it waits for the board to
+ * acknowledge each frame, which paces the host to real airtime (see
+ * `SerialManager::send_frames`). This bridge has no acknowledgement plumbed
+ * through to JS, so it uses a delay sized for the slow case instead.
+ */
+const MULTIPART_FRAME_GAP_MS = 900;
+
+/**
+ * Gap between the two connect-handshake queries.
+ *
+ * Both are fixed-length commands the board now frames exactly, so this only has
+ * to be long enough for it to finish answering the first before the second
+ * arrives.
+ */
+const CONNECT_QUERY_GAP_MS = 150;
+
 // ─── USB VID/PID recognition ─────────────────────────────────────────────────
 
 const HELTEC_USB_VIDS = new Set([
@@ -413,7 +442,7 @@ async function _connectAndroid(devicePath: string): Promise<void> {
   const initPackets = await invoke<number[][]>('mobile_build_connect_queries');
   for (let i = 0; i < initPackets.length; i++) {
     await _usbWrite(new Uint8Array(initPackets[i]));
-    if (i < initPackets.length - 1) await _sleep(80);
+    if (i < initPackets.length - 1) await _sleep(CONNECT_QUERY_GAP_MS);
   }
 }
 
@@ -492,7 +521,7 @@ async function _connectBluetoothAndroid(address: string): Promise<void> {
   const initPackets = await invoke<number[][]>('mobile_build_connect_queries');
   for (let i = 0; i < initPackets.length; i++) {
     await _bleWrite(new Uint8Array(initPackets[i]));
-    if (i < initPackets.length - 1) await _sleep(80);
+    if (i < initPackets.length - 1) await _sleep(CONNECT_QUERY_GAP_MS);
   }
 }
 
@@ -650,7 +679,7 @@ async function _registerSessionListeners(): Promise<void> {
       } else {
         await _usbWrite(chunk);
       }
-      if (packets.length > 1 && i < packets.length - 1) await _sleep(120);
+      if (packets.length > 1 && i < packets.length - 1) await _sleep(MULTIPART_FRAME_GAP_MS);
     }
   });
   sessionUnlistens.push(unlistenMobileTx);
@@ -823,7 +852,7 @@ export async function mobileSendTransaction(tx: TransactionRequest): Promise<voi
     } else {
       await _usbWrite(chunk);
     }
-    if (packets.length > 1 && i < packets.length - 1) await _sleep(120);
+    if (packets.length > 1 && i < packets.length - 1) await _sleep(MULTIPART_FRAME_GAP_MS);
   }
 }
 

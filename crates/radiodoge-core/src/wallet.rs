@@ -225,6 +225,19 @@ fn sha256d(data: &[u8]) -> [u8; 32] {
     Sha256::digest(first).into()
 }
 
+/// The txid of a raw serialized transaction, in the big-endian display form
+/// block explorers use.
+///
+/// A gateway needs this to acknowledge a transaction it did not get a txid back
+/// for — when the network answers "already in the mempool", the broadcast has in
+/// fact succeeded and the sender is still waiting to be told which txid it got.
+/// The txid is a property of the bytes, so it can always be computed locally.
+pub fn compute_txid(raw_tx: &[u8]) -> String {
+    let mut h = sha256d(raw_tx);
+    h.reverse(); // wire order is little-endian; explorers display big-endian
+    hex::encode(h)
+}
+
 /// P2PKH scriptPubKey for a Dogecoin address (25 bytes).
 /// Layout: OP_DUP OP_HASH160 <20-byte pubkey hash> OP_EQUALVERIFY OP_CHECKSIG
 fn p2pkh_script(address: &str) -> Result<Vec<u8>> {
@@ -989,6 +1002,37 @@ mod tests {
         // Decryption with wrong passphrase should fail
         let bad = decrypt_wallet(&encrypted, "wrong-passphrase");
         assert!(bad.is_err(), "wrong passphrase should fail");
+    }
+
+    /// The gateway acknowledges a transaction with a txid it computes itself,
+    /// so that value has to be the real one — a wrong txid is worse than none,
+    /// because the sender would look up a transaction that does not exist.
+    ///
+    /// Checked against the Bitcoin genesis coinbase, the most widely published
+    /// (raw transaction, txid) pair there is. Dogecoin uses the identical
+    /// double-SHA256-and-reverse construction.
+    #[test]
+    fn test_compute_txid_known_vector() {
+        let raw = hex::decode(concat!(
+            "01000000010000000000000000000000000000000000000000000000000000",
+            "000000000000ffffffff4d04ffff001d0104455468652054696d6573203033",
+            "2f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f",
+            "66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff01",
+            "00f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828",
+            "e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384d",
+            "f7ba0b8d578a4c702b6bf11d5fac00000000",
+        ))
+        .expect("valid hex");
+        assert_eq!(
+            compute_txid(&raw),
+            "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+        );
+
+        // Any change to the bytes changes the txid — no accidental collisions
+        // between a transaction and a retransmission of a different one.
+        let mut altered = raw.clone();
+        *altered.last_mut().unwrap() ^= 0x01;
+        assert_ne!(compute_txid(&altered), compute_txid(&raw));
     }
 
     #[test]
