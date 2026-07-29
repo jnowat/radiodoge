@@ -882,10 +882,37 @@
         🔌 Disconnect
       </button>
     {:else if connection.isReconnecting}
-      <button disabled class="btn-doge" style="width: 100%; padding: 14px; font-size: 1rem; opacity: 0.85;">
-        <DogeSpinner size="sm" message="" />
-        <span style="margin-left: 8px;">🔄 Reconnecting... such retry 🐕</span>
-      </button>
+      <!--
+        The auto-reconnect watchdog retries with backoff for as long as the
+        connection is enabled, and only `disconnect_port` stops it. This state
+        used to render a single *disabled* button, so a board that had been
+        unplugged (or whose port a gateway daemon had taken) left the UI
+        retrying forever with no control the user could reach — restarting the
+        app was the only way out. Give them the stop button.
+      -->
+      <div style="display: flex; gap: 8px; width: 100%;">
+        <button disabled class="btn-doge" style="flex: 1; padding: 14px; font-size: 1rem; opacity: 0.85;">
+          <DogeSpinner size="sm" message="" />
+          <span style="margin-left: 8px;">🔄 Reconnecting... such retry 🐕</span>
+        </button>
+        <button
+          onclick={disconnect}
+          title="Stop trying to reconnect and release the port"
+          style="
+            padding: 14px 18px;
+            border: 1px solid rgba(255,96,96,0.5);
+            background: rgba(255,96,96,0.08);
+            color: #ff8080;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 600;
+            white-space: nowrap;
+          "
+        >
+          ✕ Stop
+        </button>
+      </div>
     {:else if connection.isConnecting}
       <button disabled class="btn-doge" style="width: 100%; padding: 14px; font-size: 1rem;">
         <DogeSpinner size="sm" message="" />

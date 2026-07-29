@@ -124,6 +124,33 @@ dispatched half a transaction as if it were a whole one.
 - `write_file_atomically` uses a per-call temp name; with a shared one, two
   concurrent saves could rename a half-written file into place.
 
+#### A malformed transaction packet could take down the read loop
+
+`verify_signed_tx` runs on every `CMD_DOGE_TX` payload the radio hears, from any
+node in range, with nothing authenticated anywhere on the link. The lengths
+inside a transaction are varints that can declare up to `u64::MAX`, and adding
+one to the read offset overflowed `usize` — a panic in a debug build, which takes
+the serial read loop down with it, and a silent wrap in a release one. All offset
+arithmetic in the decoder is checked now, and a test drives it with hostile
+varints and every truncation of a well-formed transaction.
+
+#### Smaller UI ones
+
+- The packet log and the debug console keyed their `{#each}` blocks on the array
+  index. Packets are prepended and debug entries are sliced from the front, so
+  every surviving row's index changes on every event — Svelte destroyed and
+  rebuilt the whole list (up to 100 and 500 rows) per packet, several times a
+  second during a multipart send. Both carry a stable id now.
+- While auto-reconnecting, the only control rendered was a *disabled* button.
+  A board that had been unplugged, or whose port a gateway daemon had taken, left
+  the app retrying forever with no way out but restarting it. There is a Stop
+  button.
+- The board reports an address conflict for *every* packet it hears from a node
+  using its address, and the handler switched tabs each time — dragging the user
+  out of whatever they were typing, repeatedly. It switches on the first one now.
+- The address book swallowed every write error, reporting a failed save as
+  success and silently reverting on next launch.
+
 ### Added
 
 - **Per-frame send progress.** A multipart transaction is several seconds of real

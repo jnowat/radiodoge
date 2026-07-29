@@ -31,9 +31,12 @@
     direction: 'TX' | 'RX';
     rawHex: string;
     parsed: string;
+    /** Stable identity for the keyed {#each} — see where it is assigned. */
+    seq: number;
   }
 
   let entries = $state<DebugEntry[]>([]);
+  let debugSeq = 0;
   let autoScroll = $state(true);
   let copiedIdx = $state<number | null>(null);
   let scrollContainer: HTMLDivElement | undefined = $state();
@@ -57,7 +60,10 @@
   // ── Listen for debug traffic events ─────────────────────────────────────
   onMount(() => {
     const unlisten = listen<DebugEntry>('debug-serial-traffic', (event) => {
-      entries = [...entries, event.payload].slice(-MAX_ENTRIES);
+      // A stable id per entry: entries are appended and then sliced from the
+      // front once the ring fills, so every surviving entry's index shifts and an
+      // index-based {#each} key rebuilt all 500 rows on every serial event.
+      entries = [...entries, { ...event.payload, seq: debugSeq++ }].slice(-MAX_ENTRIES);
     });
 
     return () => { unlisten.then(fn => fn()); };
@@ -238,7 +244,7 @@
           🐕 Waiting for serial traffic... such debug. very console. wow.
         </div>
       {:else}
-        {#each entries as entry, i (entry.timestamp + '_' + entry.direction + '_' + i)}
+        {#each entries as entry, i (entry.seq)}
           {@const isTx = entry.direction === 'TX'}
           <div
             style="

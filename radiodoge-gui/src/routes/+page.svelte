@@ -164,11 +164,19 @@
     }).then(fn => unlisteners.push(fn));
 
     // v0.3.7 — Address conflict notification from board (0x25)
+    //
+    // The board emits this for *every* packet it hears from a node using its own
+    // address, not once per conflict. Switching tabs unconditionally therefore
+    // dragged the user to the Mesh tab on every such packet — repeatedly, and
+    // out of whatever they were typing. Switch only on the transition into the
+    // conflicted state; the warning itself stays visible via the flag.
     listen<{ detected: boolean }>('addr-conflict', (event) => {
       if (event.payload.detected) {
+        const wasAlreadyConflicted = connection.addrConflict;
         setAddrConflict(true);
-        // Auto-switch to Mesh tab so user sees the warning
-        activeTab = 'mesh';
+        if (!wasAlreadyConflicted) {
+          activeTab = 'mesh';
+        }
       }
     }).then(fn => unlisteners.push(fn));
 

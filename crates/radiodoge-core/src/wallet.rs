@@ -674,25 +674,38 @@ pub fn is_signed_tx_payload(payload: &[u8]) -> bool {
 
 // ─── Incoming transaction verification ────────────────────────────────────────
 
+/// Take `n` bytes from `buf` at `pos`, advancing `pos`.
+///
+/// Every length in a transaction is attacker-controlled — a varint can declare
+/// up to `u64::MAX` — so the end offset is computed with `checked_add`. Written
+/// as `pos + n` it overflows `usize`, which panics in a debug build and wraps in
+/// a release one. This decoder runs on every `CMD_DOGE_TX` packet the radio
+/// hears, from any node in range, so neither outcome is acceptable: the panic
+/// takes down the read loop, and relying on wrapping for memory safety is not a
+/// property worth depending on.
+fn take<'a>(buf: &'a [u8], pos: &mut usize, n: usize) -> Option<&'a [u8]> {
+    let end = pos.checked_add(n)?;
+    let out = buf.get(*pos..end)?;
+    *pos = end;
+    Some(out)
+}
+
 /// Parse a varint from `buf` at position `pos`, advancing `pos`.
 fn parse_varint_at(buf: &[u8], pos: &mut usize) -> Option<u64> {
     let first = *buf.get(*pos)?;
-    *pos += 1;
+    *pos = pos.checked_add(1)?;
     match first {
         0..=0xfc => Some(first as u64),
         0xfd => {
-            let bytes: [u8; 2] = buf.get(*pos..*pos + 2)?.try_into().ok()?;
-            *pos += 2;
+            let bytes: [u8; 2] = take(buf, pos, 2)?.try_into().ok()?;
             Some(u16::from_le_bytes(bytes) as u64)
         }
         0xfe => {
-            let bytes: [u8; 4] = buf.get(*pos..*pos + 4)?.try_into().ok()?;
-            *pos += 4;
+            let bytes: [u8; 4] = take(buf, pos, 4)?.try_into().ok()?;
             Some(u32::from_le_bytes(bytes) as u64)
         }
         _ => {
-            let bytes: [u8; 8] = buf.get(*pos..*pos + 8)?.try_into().ok()?;
-            *pos += 8;
+            let bytes: [u8; 8] = take(buf, pos, 8)?.try_into().ok()?;
             Some(u64::from_le_bytes(bytes))
         }
     }
@@ -769,10 +782,7 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     let mut pos = 0usize;
 
     // Version (4 bytes)
-    if raw_tx.len() < 4 {
-        anyhow::bail!("transaction too short");
-    }
-    pos += 4;
+    take(raw_tx, &mut pos, 4).ok_or_else(|| anyhow::anyhow!("transaction too short"))?;
 
     // Inputs
     let input_count = parse_varint_at(raw_tx, &mut pos)
@@ -782,24 +792,23 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     }
     let mut inputs: Vec<([u8; 32], u32, Vec<u8>)> = Vec::with_capacity(input_count);
     for _ in 0..input_count {
-        let txid: [u8; 32] = raw_tx
-            .get(pos..pos + 32)
+        let txid: [u8; 32] = take(raw_tx, &mut pos, 32)
             .and_then(|s| s.try_into().ok())
             .ok_or_else(|| anyhow::anyhow!("truncated txid"))?;
-        pos += 32;
         let vout = u32::from_le_bytes(
-            raw_tx.get(pos..pos + 4)
+            take(raw_tx, &mut pos, 4)
                 .and_then(|s| s.try_into().ok())
                 .ok_or_else(|| anyhow::anyhow!("truncated vout"))?,
         );
-        pos += 4;
         let ss_len = parse_varint_at(raw_tx, &mut pos)
-            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptSig length"))? as usize;
-        let ss = raw_tx.get(pos..pos + ss_len)
+            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptSig length"))?;
+        let ss_len = usize::try_from(ss_len)
+            .map_err(|_| anyhow::anyhow!("scriptSig length out of range"))?;
+        let ss = take(raw_tx, &mut pos, ss_len)
             .ok_or_else(|| anyhow::anyhow!("truncated scriptSig"))?
             .to_vec();
-        pos += ss_len;
-        pos += 4; // sequence
+        // sequence
+        take(raw_tx, &mut pos, 4).ok_or_else(|| anyhow::anyhow!("truncated sequence"))?;
         inputs.push((txid, vout, ss));
     }
 
@@ -812,17 +821,17 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     let mut outputs: Vec<(u64, Vec<u8>)> = Vec::with_capacity(output_count);
     for _ in 0..output_count {
         let value = u64::from_le_bytes(
-            raw_tx.get(pos..pos + 8)
+            take(raw_tx, &mut pos, 8)
                 .and_then(|s| s.try_into().ok())
                 .ok_or_else(|| anyhow::anyhow!("truncated output value"))?,
         );
-        pos += 8;
         let spk_len = parse_varint_at(raw_tx, &mut pos)
-            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptPubKey length"))? as usize;
-        let spk = raw_tx.get(pos..pos + spk_len)
+            .ok_or_else(|| anyhow::anyhow!("failed to parse scriptPubKey length"))?;
+        let spk_len = usize::try_from(spk_len)
+            .map_err(|_| anyhow::anyhow!("scriptPubKey length out of range"))?;
+        let spk = take(raw_tx, &mut pos, spk_len)
             .ok_or_else(|| anyhow::anyhow!("truncated scriptPubKey"))?
             .to_vec();
-        pos += spk_len;
         outputs.push((value, spk));
     }
 
@@ -1002,6 +1011,64 @@ mod tests {
         // Decryption with wrong passphrase should fail
         let bad = decrypt_wallet(&encrypted, "wrong-passphrase");
         assert!(bad.is_err(), "wrong passphrase should fail");
+    }
+
+    /// A malformed transaction must be an error, never a panic.
+    ///
+    /// `verify_signed_tx` runs on every `CMD_DOGE_TX` payload the radio hears —
+    /// from any node in range, with no authentication anywhere on the link. The
+    /// lengths inside a transaction are varints that can declare up to
+    /// `u64::MAX`, and adding one to the read offset overflowed `usize`: a panic
+    /// in a debug build (which takes the serial read loop down with it) and a
+    /// wrap in a release one. Neither is a property to rely on.
+    #[test]
+    fn test_verify_signed_tx_rejects_malformed_input_without_panicking() {
+        // A varint declaring a scriptSig of 2^64-1 bytes, immediately after a
+        // well-formed version and input count.
+        let mut huge_varint = vec![0x01, 0x00, 0x00, 0x00]; // version
+        huge_varint.push(0x01); // 1 input
+        huge_varint.extend_from_slice(&[0xAB; 32]); // txid
+        huge_varint.extend_from_slice(&[0x00; 4]); // vout
+        huge_varint.push(0xFF); // varint: next 8 bytes are the length
+        huge_varint.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(verify_signed_tx(&huge_varint).is_err());
+
+        // The same shape in the outputs.
+        let mut huge_output = vec![0x01, 0x00, 0x00, 0x00];
+        huge_output.push(0x00); // 0 inputs — rejected before the outputs, but the
+        assert!(verify_signed_tx(&huge_output).is_err());
+
+        // Truncation at every possible offset of a real transaction, plus a few
+        // hostile shapes. None may panic.
+        let mut real = vec![0x01, 0x00, 0x00, 0x00];
+        real.push(0x01);
+        real.extend_from_slice(&[0xCD; 32]);
+        real.extend_from_slice(&[0x00; 4]);
+        real.push(0x06);
+        real.extend_from_slice(&[0x51; 6]);
+        real.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        real.push(0x01);
+        real.extend_from_slice(&100_000u64.to_le_bytes());
+        real.push(0x19);
+        real.extend_from_slice(&[0x76; 25]);
+        real.extend_from_slice(&0u32.to_le_bytes());
+        for n in 0..real.len() {
+            // Signature verification will fail; the point is that it *returns*.
+            let _ = verify_signed_tx(&real[..n]);
+        }
+
+        for hostile in [
+            vec![],
+            vec![0xFF; 8],
+            vec![0xFF; 64],
+            vec![0x01, 0x00, 0x00, 0x00, 0xFF],
+            vec![0x01, 0x00, 0x00, 0x00, 0xFD, 0xFF, 0xFF],
+        ] {
+            let _ = verify_signed_tx(&hostile);
+        }
+
+        // describe_signed_tx is the display path and must survive the same input.
+        assert!(describe_signed_tx(&huge_varint).contains("unverified"));
     }
 
     /// The gateway acknowledges a transaction with a txid it computes itself,

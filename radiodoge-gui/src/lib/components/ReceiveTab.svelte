@@ -244,7 +244,7 @@
   {:else}
     <!-- ── Packet list ────────────────────────────────────────────────── -->
     <div style="display: flex; flex-direction: column; gap: 6px;" role="log" aria-label="Packet log" aria-live="polite">
-      {#each filteredPackets() as packet, i (packet.timestamp + '_' + i + '_' + packet.direction)}
+      {#each filteredPackets() as packet, i (packet.seq)}
         {@const isTx = packet.direction === 'TX'}
         <div
           class="slide-up card-doge"
