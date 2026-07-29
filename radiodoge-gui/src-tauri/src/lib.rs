@@ -66,6 +66,15 @@ pub struct AppState {
     /// daemon was started, so `stop_gateway` knows whether reconnecting is
     /// taking back something of ours or stealing a port the user never gave us.
     pub gateway_owned_port: Arc<Mutex<Option<String>>>,
+
+    /// Unix-epoch milliseconds until which a firmware-version reply is believed
+    /// on the Android path.
+    ///
+    /// Same reasoning as `SerialManager::firmware_query_until_ms`: the board
+    /// forwards over-the-air broadcasts to its host verbatim, so a node in radio
+    /// range can send a `0x20` packet claiming any version — and the version is
+    /// what decides whether a payload too large for one packet may be sent.
+    pub mobile_fw_query_until_ms: Arc<AtomicU64>,
     /// v0.3.6 — Connection type: "usb", "ble", or "usb-android"
     pub connection_type: Arc<Mutex<String>>,
     /// v0.3.10 — Raw byte accumulator for the Android USB bridge.
@@ -107,6 +116,7 @@ impl AppState {
             tx_history: Arc::new(Mutex::new(Vec::new())),
             gateway_process: Arc::new(Mutex::new(None)),
             gateway_owned_port: Arc::new(Mutex::new(None)),
+            mobile_fw_query_until_ms: Arc::new(AtomicU64::new(0)),
             connection_type: Arc::new(Mutex::new("usb".to_string())),
             mobile_accumulator: Arc::new(Mutex::new(Vec::new())),
             mobile_reassembler: Arc::new(Mutex::new(radio::MultipartReassembler::new())),
@@ -134,6 +144,19 @@ fn emit_debug_traffic(app: &AppHandle, direction: &str, raw_hex: &str, parsed: &
     }));
 }
 
+/// Milliseconds since the Unix epoch.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// How long a firmware-version reply is believed on the Android path after the
+/// connect handshake is built. Longer than the desktop window because BLE round
+/// trips are slower.
+const MOBILE_FIRMWARE_REPLY_WINDOW_MS: u64 = 6_000;
+
 // ─── Persistence helpers ─────────────────────────────────────────────────────
 
 /// Write `contents` to `path` so that a crash can never leave a partial file.
@@ -147,7 +170,14 @@ fn emit_debug_traffic(app: &AppHandle, direction: &str, raw_hex: &str, parsed: &
 ///
 /// The temp file is removed on failure so a full disk cannot accumulate debris.
 async fn write_file_atomically(path: &std::path::Path, contents: &str) -> Result<(), String> {
-    let tmp = path.with_extension("tmp");
+    // A per-call temp name, not a fixed one. Tauri commands run concurrently, and
+    // with a shared `wallet.tmp` two overlapping saves interleave: the slower
+    // writer can rename a file the faster one had only half written.
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "tmp{}",
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     if let Err(e) = tokio::fs::write(&tmp, contents).await {
         let _ = tokio::fs::remove_file(&tmp).await;
         return Err(format!("could not write {}: {}", tmp.display(), e));
@@ -312,10 +342,15 @@ async fn connect_port(
     // ── Query firmware version (up to 3 attempts) ────────────────────────────
     let mut firmware_version: Option<String> = None;
     for attempt in 1..=3 {
-        let fw_query = radio::build_get_firmware_version(&NodeAddress::default_local());
-        let fw_hex = hex::encode(&fw_query);
-        emit_debug_traffic(&app, "TX", &fw_hex, &format!("CMD_GET_FIRMWARE_VERSION (attempt {})", attempt));
-        state.serial.send_raw(fw_query).await.ok();
+        emit_debug_traffic(
+            &app,
+            "TX",
+            &hex::encode(radio::build_get_firmware_version(&NodeAddress::default_local())),
+            &format!("CMD_GET_FIRMWARE_VERSION (attempt {})", attempt),
+        );
+        // request_firmware_version, not send_raw: it opens the window in which a
+        // reply is believed. See SerialManager::firmware_query_until_ms.
+        state.serial.request_firmware_version().await.ok();
         tokio::time::sleep(Duration::from_millis(400)).await;
         firmware_version = state.serial.get_firmware_version().await;
         if firmware_version.is_some() {
@@ -486,10 +521,13 @@ async fn query_firmware_version(
     app: AppHandle,
 ) -> Result<Option<String>, String> {
     if !state.serial.is_connected() { return Ok(None); }
-    let fw_query = radio::build_get_firmware_version(&NodeAddress::default_local());
-    let fw_hex = hex::encode(&fw_query);
-    emit_debug_traffic(&app, "TX", &fw_hex, "CMD_GET_FIRMWARE_VERSION (manual re-query)");
-    state.serial.send_raw(fw_query).await.map_err(|e| e.to_string())?;
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &hex::encode(radio::build_get_firmware_version(&NodeAddress::default_local())),
+        "CMD_GET_FIRMWARE_VERSION (manual re-query)",
+    );
+    state.serial.request_firmware_version().await.map_err(|e| e.to_string())?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_firmware_version().await)
 }
@@ -682,8 +720,26 @@ async fn send_transaction(
             emit_debug_traffic(&app, "TX", &hex::encode(pkt), &label);
         }
         // Frames go out one at a time, each acknowledged by the board before the
-        // next is written — see SerialManager::send_frames.
-        state.serial.send_frames(frames).await.map_err(|e| e.to_string())?;
+        // next is written — see SerialManager::send_frames. A multipart send is
+        // several seconds of real airtime, so report progress rather than
+        // leaving the UI to guess whether anything is happening.
+        let total_frames = frames.len();
+        let app_for_progress = app.clone();
+        state
+            .serial
+            .send_frames_with_progress(frames, move |sent, total| {
+                if total > 1 {
+                    let _ = app_for_progress.emit(
+                        "transaction-progress",
+                        serde_json::json!({ "sent": sent, "total": total }),
+                    );
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        if total_frames > 1 {
+            log::info!("Transaction sent as {} LoRa frames", total_frames);
+        }
     }
 
     let msg = if tx.from_private_key_wif.is_some() {
@@ -955,8 +1011,10 @@ async fn start_gateway(
         let mut gp = state.gateway_process.lock().await;
         if let Some(ref mut child) = *gp {
             let _ = child.kill().await;
+            let _ = child.wait().await;
         }
         *gp = None;
+        *state.gateway_owned_port.lock().await = None;
     }
 
     // Hand the port over if we are the one holding it. The auto-reconnect
@@ -1013,7 +1071,6 @@ async fn start_gateway(
     tokio::time::sleep(Duration::from_millis(700)).await;
     match child.try_wait() {
         Ok(Some(status)) => {
-            let released = state.gateway_owned_port.lock().await.take();
             let mut msg = format!(
                 "The gateway daemon exited immediately ({}). The most common cause is that \
                  {} could not be opened — check the board is attached and that nothing else \
@@ -1022,7 +1079,7 @@ async fn start_gateway(
             );
             // We took the port away for it; give it back rather than leaving the
             // app disconnected after a failure it did not cause.
-            if released.is_some() || holding_this_port {
+            if holding_this_port {
                 match connect_port(port.clone(), state, app).await {
                     Ok(()) => msg.push_str(" Reconnected the app to the board."),
                     Err(e) => msg.push_str(&format!(" Reconnecting the app also failed: {}", e)),
@@ -1192,10 +1249,49 @@ async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
 
 /// v0.3.16 — Encrypt and persist the wallet to app-local storage.
 /// The WIF private key is encrypted with ChaCha20-Poly1305 (argon2id KDF, 64 MiB).
+/// Marker the frontend matches on to offer "replace it anyway".
+///
+/// A distinguishable prefix rather than prose, so the UI can react to this one
+/// case without pattern-matching an English sentence.
+pub const ERR_DIFFERENT_WALLET_SAVED: &str = "different_wallet_saved:";
+
+/// The address of the wallet currently saved on disk, if there is one.
+///
+/// Read from the plaintext `address` field of the encrypted file, so it needs no
+/// passphrase — the point is to know *which* wallet is stored without being able
+/// to open it.
+async fn saved_wallet_address(app: &AppHandle) -> Option<String> {
+    let path = app.path().app_data_dir().ok()?.join("wallet.json");
+    let json = tokio::fs::read_to_string(&path).await.ok()?;
+    if let Ok(enc) = serde_json::from_str::<wallet::EncryptedWalletFile>(&json) {
+        return Some(enc.address);
+    }
+    // Legacy plaintext format (pre-v0.3.16).
+    serde_json::from_str::<WalletInfo>(&json).ok().map(|w| w.address)
+}
+
 #[tauri::command]
-async fn save_wallet(wallet_info: WalletInfo, passphrase: String, app: AppHandle) -> Result<(), String> {
+async fn save_wallet(
+    wallet_info: WalletInfo,
+    passphrase: String,
+    allow_replace: Option<bool>,
+    app: AppHandle,
+) -> Result<(), String> {
     if passphrase.len() < 8 {
         return Err("Passphrase must be at least 8 characters.".to_string());
+    }
+
+    // Never silently replace a *different* wallet. There is one wallet file, and
+    // overwriting it destroys the only copy of the previous key — which is
+    // trivially reachable: dismiss the unlock prompt on launch, generate a new
+    // wallet, save it. The UI cannot be the only thing standing between a user
+    // and that, so the refusal lives here and has to be overridden explicitly.
+    if !allow_replace.unwrap_or(false) {
+        if let Some(existing) = saved_wallet_address(&app).await {
+            if existing != wallet_info.address {
+                return Err(format!("{}{}", ERR_DIFFERENT_WALLET_SAVED, existing));
+            }
+        }
     }
     let encrypted = wallet::encrypt_wallet(&wallet_info, &passphrase)
         .map_err(|e| e.to_string())?;
@@ -1492,7 +1588,11 @@ async fn mobile_push_bytes(
 
         // Handle specific packet types
         match cmd {
-            radio::CMD_GET_FIRMWARE_VERSION => {
+            // Only inside the window opened by mobile_build_connect_queries — a
+            // relayed over-the-air packet must not be able to set this.
+            radio::CMD_GET_FIRMWARE_VERSION
+                if now_millis() < state.mobile_fw_query_until_ms.load(Ordering::Relaxed) =>
+            {
                 if let Ok(raw) = hex::decode(&packet.payload_hex) {
                     if let Ok(ver) = String::from_utf8(raw) {
                         let ver = ver.trim_matches('\0').trim().to_string();
@@ -1699,6 +1799,12 @@ async fn set_ble_enabled(
 #[tauri::command]
 async fn mobile_build_connect_queries(state: State<'_, AppState>) -> Result<Vec<Vec<u8>>, String> {
     let src = state.serial.get_node_address().await;
+    // Opening the window here rather than when the bytes are written: the JS
+    // layer writes these immediately, and a few seconds covers BLE's slower
+    // round trip. Outside it, a "version reply" is somebody else's LoRa packet.
+    state
+        .mobile_fw_query_until_ms
+        .store(now_millis() + MOBILE_FIRMWARE_REPLY_WINDOW_MS, Ordering::Relaxed);
     Ok(vec![
         radio::build_get_firmware_version(&src),
         radio::build_get_settings(&src),

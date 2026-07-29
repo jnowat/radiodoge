@@ -702,13 +702,38 @@ function _clearSessionListeners(): void {
  * Logs the bytes to the debug traffic stream via `mobile_ble_write_characteristic`
  * (visible in the Debug Console tab), then performs the GATT write via blec.
  */
+/**
+ * Largest payload that fits in one GATT write on any connection.
+ *
+ * A BLE link starts at the mandatory 23-byte ATT MTU, of which 3 bytes are the
+ * write header — so 20 bytes is what every device is guaranteed to accept.
+ * Larger writes only work once both ends have negotiated a bigger MTU, which
+ * `plugin-blec` neither performs nor exposes: `send()` hands the whole buffer to
+ * a single platform GATT write.
+ *
+ * That matters now that a transaction can be a 200-byte frame. Without chunking
+ * such a write is rejected or silently truncated depending on the platform, and
+ * a truncated frame is a transaction the gateway can never reassemble. 20 bytes
+ * is slower than necessary on a link that did negotiate more, but it is the only
+ * size that is correct without being able to ask.
+ */
+const BLE_MAX_WRITE_CHUNK = 20;
+
 async function _bleWrite(data: Uint8Array): Promise<void> {
   if (!activeBleAddress) throw new Error('No active BLE connection');
   // Debug logging (non-blocking — fire-and-forget is fine here)
   invoke('mobile_ble_write_characteristic', { data: Array.from(data) }).catch(() => {});
   const blec = await _blec();
-  // plugin-blec v0.5+ uses send(char, data) instead of sendData(svc, char, data)
-  await blec.send(BLE_WRITE_CHAR_UUID, data, 'withoutResponse');
+
+  // Chunked, and 'withResponse' rather than 'withoutResponse': a write without
+  // response has no flow control, so the controller may drop chunks when its
+  // buffer fills and neither end finds out. For a signed transaction that is a
+  // silent loss, and the round trip per chunk is worth it.
+  for (let offset = 0; offset < data.length; offset += BLE_MAX_WRITE_CHUNK) {
+    const chunk = data.subarray(offset, Math.min(offset + BLE_MAX_WRITE_CHUNK, data.length));
+    // plugin-blec v0.5+ uses send(char, data) instead of sendData(svc, char, data)
+    await blec.send(BLE_WRITE_CHAR_UUID, chunk, 'withResponse');
+  }
 }
 
 // ─── Port helpers ─────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@
 //!   ever accessed from async contexts.
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -67,6 +67,17 @@ const READ_TIMEOUT_MS: u64 = 50;
 /// Maximum bytes per read call
 const READ_BUFFER_SIZE: usize = 1024;
 
+/// Milliseconds since the Unix epoch.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// How long a firmware-version reply is believed after the host asks for one.
+const FIRMWARE_REPLY_WINDOW_MS: u64 = 3_000;
+
 /// How long to wait for the board to acknowledge one host→board frame.
 ///
 /// Firmware v0.4.2 answers only once the LoRa transmission has finished, and a
@@ -114,6 +125,24 @@ pub struct SerialManager {
     /// Firmware version string, populated after CMD_GET_FIRMWARE_VERSION response.
     firmware_version: Arc<TokioMutex<Option<String>>>,
 
+    /// Unix-epoch milliseconds until which a `CMD_GET_FIRMWARE_VERSION` reply
+    /// will be believed; `0` means none is expected.
+    ///
+    /// The board forwards any over-the-air packet addressed to the broadcast
+    /// address straight to its serial host, so a node in radio range can put a
+    /// `0x20` packet on the air carrying whatever version string it likes. The
+    /// host reads that as its *own* board's firmware version — and that version
+    /// decides whether a payload larger than one packet may be sent
+    /// ([`crate::radio::check_host_payload_fits`]). A spoofed `FW11` against an
+    /// older board means transmitting a transaction the board mis-frames and no
+    /// gateway can reassemble.
+    ///
+    /// So a version is only accepted inside the window opened by actually asking
+    /// for one. It is not authentication — nothing on this link is authenticated
+    /// — but it means an attacker has to win a race against a query the host
+    /// chose to send, rather than simply broadcasting whenever they like.
+    firmware_query_until_ms: Arc<AtomicU64>,
+
     /// v0.3.6 — Board settings, populated after CMD_GET_SETTINGS (0x22) response.
     /// Board is source of truth — app queries on connect and syncs UI.
     board_settings: Arc<TokioMutex<Option<BoardSettings>>>,
@@ -142,6 +171,7 @@ impl SerialManager {
             stats: Arc::new(TokioMutex::new(RadioStats::default())),
             node_address: Arc::new(TokioMutex::new(NodeAddress::default_local())),
             firmware_version: Arc::new(TokioMutex::new(None)),
+            firmware_query_until_ms: Arc::new(AtomicU64::new(0)),
             board_settings: Arc::new(TokioMutex::new(None)),
             neighbors: Arc::new(TokioMutex::new(Vec::new())),
             addr_conflict: Arc::new(AtomicBool::new(false)),
@@ -288,6 +318,7 @@ impl SerialManager {
         let stats_clone = Arc::clone(&self.stats);
         let node_address_clone = Arc::clone(&self.node_address);
         let firmware_version_clone = Arc::clone(&self.firmware_version);
+        let firmware_query_until_clone = Arc::clone(&self.firmware_query_until_ms);
         let board_settings_clone = Arc::clone(&self.board_settings);
         let neighbors_clone = Arc::clone(&self.neighbors);
         let addr_conflict_clone = Arc::clone(&self.addr_conflict);
@@ -421,8 +452,11 @@ impl SerialManager {
                                     *node_address_clone.lock().await = packet.source.clone();
                                 }
 
-                                // Parse firmware version from CMD_GET_FIRMWARE_VERSION responses
-                                if packet.command == radio::CMD_GET_FIRMWARE_VERSION {
+                                // Parse firmware version from CMD_GET_FIRMWARE_VERSION responses.
+                                // Only while one was asked for — see firmware_query_until_ms.
+                                if packet.command == radio::CMD_GET_FIRMWARE_VERSION
+                                    && now_millis() < firmware_query_until_clone.load(Ordering::Relaxed)
+                                {
                                     if let Ok(bytes) = hex::decode(&packet.payload_hex) {
                                         if let Ok(ver) = String::from_utf8(bytes) {
                                             let ver = ver.trim_matches('\0').trim().to_string();
@@ -683,6 +717,25 @@ impl SerialManager {
     /// cannot reassemble, and reporting success for a transaction that never
     /// left is the one outcome worth failing loudly for.
     pub async fn send_frames(&self, frames: Vec<Vec<u8>>) -> Result<()> {
+        self.send_frames_with_progress(frames, |_, _| {}).await
+    }
+
+    /// [`send_frames`](Self::send_frames), reporting progress as it goes.
+    ///
+    /// `on_progress(sent, total)` is called after each frame is acknowledged.
+    /// A multipart send is genuinely slow — every frame is a separate LoRa
+    /// transmission, so a large transaction at a high spreading factor can take
+    /// a minute — and a caller that returns nothing for that long is
+    /// indistinguishable from one that has hung. The callback runs on this task,
+    /// so it must not block.
+    pub async fn send_frames_with_progress<F>(
+        &self,
+        frames: Vec<Vec<u8>>,
+        on_progress: F,
+    ) -> Result<()>
+    where
+        F: Fn(usize, usize) + Send,
+    {
         if frames.is_empty() {
             anyhow::bail!("nothing to send: no frames were built");
         }
@@ -732,6 +785,7 @@ impl SerialManager {
                     FRAME_ACK_TIMEOUT_MS
                 );
             }
+            on_progress(idx + 1, total);
         }
         Ok(())
     }
@@ -811,10 +865,8 @@ impl SerialManager {
         if !self.is_connected() {
             return None;
         }
-        let local = self.node_address.lock().await.clone();
         for _ in 0..3 {
-            let query = radio::build_get_firmware_version(&local);
-            if self.send_raw(query).await.is_err() {
+            if self.request_firmware_version().await.is_err() {
                 return None;
             }
             tokio::time::sleep(Duration::from_millis(600)).await;
@@ -824,6 +876,20 @@ impl SerialManager {
         }
         log::warn!("Board did not report a firmware version — assuming single-packet only");
         None
+    }
+
+    /// Ask the board for its firmware version, opening the window in which a
+    /// reply will be believed.
+    ///
+    /// Every caller that wants the version must go through this rather than
+    /// writing the query itself: a reply arriving outside the window is ignored,
+    /// because the board forwards over-the-air packets to its host and one of
+    /// them can claim to be a version reply. See `firmware_query_until_ms`.
+    pub async fn request_firmware_version(&self) -> Result<()> {
+        let local = self.node_address.lock().await.clone();
+        self.firmware_query_until_ms
+            .store(now_millis() + FIRMWARE_REPLY_WINDOW_MS, Ordering::Relaxed);
+        self.send_raw(radio::build_get_firmware_version(&local)).await
     }
 
     /// v0.3.6 — Board settings (node address + gateway_mode) as last reported by the device.

@@ -68,6 +68,7 @@
     showQR = false;
     try {
       const info = await invoke<{ address: string; publicKeyHex: string; privateKeyWif: string }>('import_wif', { wif: importWif.trim() });
+      onWalletReplaced();
       loadWallet(info);
       importWif = '';
       showImport = false;
@@ -91,6 +92,7 @@
       const info = await invoke<{ address: string; publicKeyHex: string; privateKeyWif: string }>(
         'import_mnemonic_wallet', { phrase: importMnemonicPhrase.trim() }
       );
+      onWalletReplaced();
       loadWallet(info);
       importMnemonicPhrase = '';
       showMnemonicImport = false;
@@ -101,6 +103,22 @@
     }
   }
 
+  /**
+   * Called whenever the in-memory wallet is replaced.
+   *
+   * `walletSaved` / `walletIsLegacy` describe the file on disk, and `balance`
+   * describes the previous address. Leaving them set after a generate or import
+   * told the user their brand-new key was "saved (encrypted)" when nothing had
+   * been written, and showed the old wallet's balance under the new address.
+   */
+  function onWalletReplaced() {
+    walletSaved = false;
+    walletIsLegacy = false;
+    balance = null;
+    balanceSource = null;
+    balanceError = null;
+  }
+
   async function generateWallet() {
     isGenerating = true;
     wallet.error = null;
@@ -109,6 +127,7 @@
       const result = await invoke<{ mnemonic: string; address: string; publicKeyHex: string; privateKeyWif: string }>(
         'generate_mnemonic_wallet'
       );
+      onWalletReplaced();
       loadWallet({ address: result.address, publicKeyHex: result.publicKeyHex, privateKeyWif: result.privateKeyWif });
       generatedMnemonic = result.mnemonic;
       showMnemonicBackup = true;
@@ -170,10 +189,18 @@
     savePassphrase = '';
     savePassphraseConfirm = '';
     saveWalletError = null;
+    replaceWarningAddress = null;
     showSaveModal = true;
   }
 
-  async function confirmSaveWallet() {
+  /**
+   * Address of the wallet already on disk, when saving would replace a
+   * *different* one. Non-null puts the save modal into a confirmation state
+   * rather than silently destroying the stored key.
+   */
+  let replaceWarningAddress = $state<string | null>(null);
+
+  async function confirmSaveWallet(allowReplace = false) {
     if (savePassphrase.length < 8) {
       saveWalletError = 'Passphrase must be at least 8 characters.';
       return;
@@ -193,21 +220,53 @@
           privateKeyWif: wallet.privateKeyWif,
         },
         passphrase: savePassphrase,
+        allowReplace,
       });
       walletSaved = true;
       walletIsLegacy = false;
+      replaceWarningAddress = null;
       showSaveModal = false;
     } catch (e: unknown) {
+      // The backend refuses to overwrite a different wallet unless told to.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith('different_wallet_saved:')) {
+        replaceWarningAddress = msg.slice('different_wallet_saved:'.length);
+        isSavingWallet = false;
+        return;
+      }
       saveWalletError = e instanceof Error ? e.message : String(e);
     } finally {
       isSavingWallet = false;
     }
   }
 
+  /**
+   * Two-step delete.
+   *
+   * This removes the only copy of an encrypted private key, and the button sits
+   * next to "Change passphrase". A single misclick used to be enough, with no
+   * dialog and no undo — and the in-memory wallet is not persisted, so closing
+   * the app afterwards loses the key for good.
+   */
+  let confirmingDelete = $state(false);
+  let deleteError = $state<string | null>(null);
+
   async function deleteSavedWallet() {
-    await invoke('delete_saved_wallet').catch(() => {});
-    walletSaved = false;
-    walletIsLegacy = false;
+    if (!confirmingDelete) {
+      confirmingDelete = true;
+      deleteError = null;
+      return;
+    }
+    try {
+      await invoke('delete_saved_wallet');
+      walletSaved = false;
+      walletIsLegacy = false;
+      confirmingDelete = false;
+    } catch (e: unknown) {
+      // Reporting success for a file that is still there is worse than the
+      // failure itself: the user would believe the key was gone.
+      deleteError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   async function unlockWallet() {
@@ -222,8 +281,9 @@
         'load_saved_wallet', { passphrase: unlockPassphrase }
       );
       if (w) {
+        onWalletReplaced();
         loadWallet(w);
-        walletSaved = true;
+        walletSaved = true;   // this wallet *is* the one on disk
         showUnlockModal = false;
         unlockPassphrase = '';
       }
@@ -249,8 +309,9 @@
         );
         if (!mounted) return;
         if (w) {
+          onWalletReplaced();
           loadWallet(w);
-          walletSaved = true;
+          walletSaved = true;    // this wallet *is* the one on disk
           walletIsLegacy = true; // legacy plaintext — nudge user to re-encrypt
         }
       } catch (e: unknown) {
@@ -770,10 +831,24 @@
             </button>
             <button
               onclick={deleteSavedWallet}
-              style="padding: 6px 12px; border: 1px solid rgba(255,60,60,0.4); background: rgba(255,60,60,0.08); color: #ff8080; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"
+              title={confirmingDelete
+                ? 'This permanently deletes the encrypted key file. There is no undo.'
+                : 'Delete the encrypted wallet file from this device'}
+              style="padding: 6px 12px; border: 1px solid rgba(255,60,60,{confirmingDelete ? '0.9' : '0.4'}); background: rgba(255,60,60,{confirmingDelete ? '0.18' : '0.08'}); color: #ff8080; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"
             >
-              🗑️ Remove saved wallet
+              {confirmingDelete ? '⚠️ Click again to delete permanently' : '🗑️ Remove saved wallet'}
             </button>
+            {#if confirmingDelete}
+              <button
+                onclick={() => { confirmingDelete = false; deleteError = null; }}
+                style="padding: 6px 12px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 6px; cursor: pointer; font-size: 0.78rem;"
+              >
+                Cancel
+              </button>
+            {/if}
+            {#if deleteError}
+              <span style="font-size: 0.75rem; color: #ff6060;" role="alert">Delete failed: {deleteError}</span>
+            {/if}
           {:else}
             <button
               onclick={openSaveModal}
@@ -843,21 +918,52 @@
         {#if saveWalletError}
           <p style="margin: 0 0 10px 0; font-size: 0.78rem; color: #ff6060;">{saveWalletError}</p>
         {/if}
+        {#if replaceWarningAddress}
+          <!--
+            There is one wallet file. Saving this wallet would destroy the only
+            copy of the key for the one already stored, so say whose key it is
+            and make replacing it a separate, deliberate click.
+          -->
+          <div
+            style="
+              margin: 0 0 12px 0; padding: 12px 14px; border-radius: 8px;
+              border: 1px solid rgba(255,96,96,0.5); background: rgba(255,96,96,0.08);
+              font-size: 0.8rem; line-height: 1.55; color: var(--doge-text);
+            "
+            role="alert"
+          >
+            <strong style="color:#ff8080;">A different wallet is already saved.</strong><br />
+            Saving this one <strong>permanently destroys</strong> the stored key for
+            <code style="word-break: break-all;">{replaceWarningAddress}</code>.
+            If you have not written down that wallet's recovery phrase, its coins become
+            unspendable. Cancel and unlock it first if you are not sure.
+          </div>
+        {/if}
         <div style="display: flex; gap: 8px; justify-content: flex-end;">
           <button
-            onclick={() => { showSaveModal = false; savePassphrase = ''; savePassphraseConfirm = ''; saveWalletError = null; }}
+            onclick={() => { showSaveModal = false; savePassphrase = ''; savePassphraseConfirm = ''; saveWalletError = null; replaceWarningAddress = null; }}
             style="padding: 8px 18px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 8px; cursor: pointer; font-size: 0.85rem;"
           >
             Cancel
           </button>
-          <button
-            onclick={confirmSaveWallet}
-            disabled={isSavingWallet}
-            class="btn-doge"
-            style="padding: 8px 18px; font-size: 0.85rem; opacity: {isSavingWallet ? 0.6 : 1};"
-          >
-            {isSavingWallet ? '⏳ Encrypting…' : '🔐 Save Encrypted'}
-          </button>
+          {#if replaceWarningAddress}
+            <button
+              onclick={() => confirmSaveWallet(true)}
+              disabled={isSavingWallet}
+              style="padding: 8px 18px; font-size: 0.85rem; border: 1px solid #ff6060; background: rgba(255,96,96,0.12); color: #ff8080; border-radius: 8px; cursor: pointer; opacity: {isSavingWallet ? 0.6 : 1};"
+            >
+              {isSavingWallet ? '⏳ Encrypting…' : '⚠️ Replace saved wallet'}
+            </button>
+          {:else}
+            <button
+              onclick={() => confirmSaveWallet(false)}
+              disabled={isSavingWallet}
+              class="btn-doge"
+              style="padding: 8px 18px; font-size: 0.85rem; opacity: {isSavingWallet ? 0.6 : 1};"
+            >
+              {isSavingWallet ? '⏳ Encrypting…' : '🔐 Save Encrypted'}
+            </button>
+          {/if}
         </div>
       </div>
     </div>

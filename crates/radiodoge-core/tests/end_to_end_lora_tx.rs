@@ -410,3 +410,45 @@ fn every_frame_fits_the_radio_and_the_board_buffer() {
         }
     }
 }
+
+/// A node in radio range must not be able to raise the host's payload ceiling.
+///
+/// The board forwards any over-the-air packet addressed to the broadcast address
+/// to its serial host verbatim, so an attacker can put a `CMD_GET_FIRMWARE_VERSION`
+/// packet on the air claiming any version string. If the host believed it, an
+/// older board would be handed a multipart sequence it mis-frames, and the
+/// transaction would be lost.
+///
+/// The host defends by only believing a version reply inside the window it opens
+/// when it asks (`SerialManager::request_firmware_version`). This test pins the
+/// consequence that makes that matter: the *decision* the version drives.
+#[test]
+fn a_spoofed_firmware_version_would_lift_the_payload_ceiling() {
+    let (src, dst) = (NodeAddress::new(10, 0, 1), NodeAddress::broadcast());
+    let tx = tx_like(400);
+
+    // What an attacker would want the host to believe.
+    let spoofed = "RadioDoge NV3FW11";
+    assert!(radio::firmware_supports_multipart(Some(spoofed)));
+    assert!(radio::build_tx_frames(&src, &dst, CMD_DOGE_TX, &tx, Some(spoofed)).is_ok());
+
+    // What the board actually is. The gate must hold for anything below FW11,
+    // and for a board that never answered at all.
+    for real in [None, Some("RadioDoge NV3FW10"), Some("RadioDoge NV2FW01")] {
+        assert!(
+            radio::build_tx_frames(&src, &dst, CMD_DOGE_TX, &tx, real).is_err(),
+            "a board reporting {:?} must never be handed a multipart sequence",
+            real
+        );
+    }
+
+    // The spoof packet is a well-formed, forwardable broadcast — this is not a
+    // malformed frame the framer would reject, which is exactly why the host has
+    // to correlate replies with requests rather than filter on shape.
+    let mut spoof = vec![radio::CMD_GET_FIRMWARE_VERSION, 0x00, 9, 9, 9, 0xFF, 0xFF, 0xFF];
+    spoof.extend_from_slice(spoofed.as_bytes());
+    spoof.push(0);
+    let seen = host_read_stream(&spoof);
+    assert_eq!(seen.len(), 1, "it frames cleanly — the defence cannot be in the framer");
+    assert_eq!(seen[0].command, radio::CMD_GET_FIRMWARE_VERSION);
+}

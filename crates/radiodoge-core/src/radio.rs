@@ -452,6 +452,12 @@ pub fn build_tx_frames(
     payload: &[u8],
     firmware_version: Option<&str>,
 ) -> Result<Vec<Vec<u8>>, String> {
+    if payload.is_empty() {
+        // The board skips the radio entirely for a zero-length payload but still
+        // acknowledges the frame, so an empty send would be reported as
+        // successful having transmitted nothing at all.
+        return Err("nothing to send: the payload is empty".to_string());
+    }
     check_host_payload_fits(payload.len(), firmware_version)?;
     if payload.len() <= MAX_SINGLE_PAYLOAD_LEN {
         let mut pkt = build_header(cmd, FLAG_STANDARD, src, dst);
