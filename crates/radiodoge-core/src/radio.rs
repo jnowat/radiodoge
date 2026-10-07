@@ -247,7 +247,14 @@ pub fn build_ble_toggle(src: &NodeAddress, enable: bool) -> Vec<u8> {
 /// The gateway that receives this will query Blockbook for `doge_address` and reply with
 /// a CMD_MESSAGE containing `"BAL:{koinus}"` addressed back to `src`.
 pub fn build_request_balance(src: &NodeAddress, doge_address: &str) -> Vec<u8> {
-    let mut packet = build_header(CMD_REQUEST_BALANCE, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    build_request_balance_to(src, &NodeAddress::broadcast(), doge_address)
+}
+
+/// [`build_request_balance`] addressed to one gateway. Firmware up to FW11 only
+/// hands a received 0x10/0x11 to its daemon when the packet is addressed to that
+/// board, so a broadcast request is heard but never answered.
+pub fn build_request_balance_to(src: &NodeAddress, dst: &NodeAddress, doge_address: &str) -> Vec<u8> {
+    let mut packet = build_header(CMD_REQUEST_BALANCE, FLAG_STANDARD, src, dst);
     let addr_bytes = doge_address.as_bytes();
     packet.extend_from_slice(&addr_bytes[..addr_bytes.len().min(MAX_SINGLE_PAYLOAD_LEN)]);
     packet
@@ -575,6 +582,20 @@ pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
     }
 
     Some(SINGLE_HDR_LEN + after_hdr.len().min(MAX_SINGLE_PAYLOAD_LEN))
+}
+
+/// `true` if the frame at the head of `buf` has no length anywhere in the
+/// protocol, so [`frame_packet_len`] can only take "whatever has arrived so
+/// far". A receiver must wait for a quiet gap on the line before framing such a
+/// packet: a LoRa MESSAGE relayed by the board arrives over several USB reads,
+/// and cutting it at the first read boundary emitted the first few characters
+/// as one packet and misparsed the rest (a text byte such as `h` = 0x68 looks
+/// like a packet start).
+pub fn is_unbounded_frame(cmd: u8, buf: &[u8]) -> bool {
+    if buf.len() >= 2 && is_multipart_flags(buf[1]) {
+        return false;
+    }
+    exact_packet_len(cmd).is_none() && cmd != CMD_GET_FIRMWARE_VERSION
 }
 
 /// Build a SET_LORA_PARAMS packet (CMD 0x21).
@@ -2088,5 +2109,21 @@ mod tests {
             ver_string,
             "Firmware version payload must end at the null terminator"
         );
+    }
+}
+
+#[cfg(test)]
+mod unbounded_frame_tests {
+    use super::*;
+
+    #[test]
+    fn message_is_unbounded_fixed_and_multipart_are_not() {
+        let m = build_message(&NodeAddress::new(10, 0, 1), &NodeAddress::new(10, 0, 2), "much hello");
+        assert!(is_unbounded_frame(CMD_MESSAGE, &m));
+        let p = build_ping(&NodeAddress::new(10, 0, 1), &NodeAddress::new(10, 0, 2));
+        assert!(!is_unbounded_frame(CMD_PING, &p));
+        let mp = try_build_multipart_packets(&NodeAddress::new(10, 0, 1), &NodeAddress::new(10, 0, 2), CMD_MESSAGE, &[b'x'; 400]).unwrap();
+        assert!(!is_unbounded_frame(CMD_MESSAGE, &mp[0]));
+        assert!(!is_unbounded_frame(CMD_GET_FIRMWARE_VERSION, &build_get_firmware_version(&NodeAddress::new(10, 0, 1))));
     }
 }

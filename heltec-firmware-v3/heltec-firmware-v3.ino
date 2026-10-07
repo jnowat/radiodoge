@@ -4409,6 +4409,10 @@ void ParseReceivedMessage() {
       return; // Exit after processing multipart broadcast
     } else {
       // Regular broadcast
+      // v0.4.3 — hand broadcast DOGE_TX / REQUEST_BALANCE (and messages) to the
+      // host too. The app and CLI address these to 255.255.255 ("any gateway"),
+      // but only unicast packets were forwarded, so no gateway ever answered.
+      ForwardReceivedPacketToHost();
       SetSenderAddress();
       DisplayBroadcastMessage("Broadcast Received!", senderAddress);
       // Check broadcast type
