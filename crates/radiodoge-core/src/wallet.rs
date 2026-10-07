@@ -190,8 +190,6 @@ pub fn encode_transaction_payload(
 
 // ─── Real P2PKH transaction signing + broadcast ───────────────────────────────
 
-pub(crate) const BLOCKBOOK_BASE: &str = "https://doge1.trezor.io/api/v2";
-
 /// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
 pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
 
@@ -201,27 +199,6 @@ pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
 /// costs nothing and covers a reorg near the boundary. Spending an immature
 /// coinbase produces a transaction every node rejects.
 const COINBASE_MATURITY_BLOCKS: u32 = 100;
-
-#[derive(serde::Deserialize)]
-struct UtxoEntry {
-    txid: String,
-    vout: u32,
-    value: String, // koinus as string (avoids f64 precision loss for large values)
-
-    /// Confirmations, as reported by Blockbook. `0` for a mempool output.
-    ///
-    /// This used to be discarded, so coin selection happily spent unconfirmed
-    /// outputs: `/utxo/<address>` includes them by default. A transaction
-    /// spending an unconfirmed parent is only as good as that parent — if it is
-    /// dropped or replaced, this one becomes unspendable too, and over LoRa the
-    /// sender has no way to find out.
-    #[serde(default)]
-    confirmations: u32,
-
-    /// Set by Blockbook when the output is a coinbase (mining reward).
-    #[serde(default)]
-    coinbase: bool,
-}
 
 fn encode_varint(n: u64) -> Vec<u8> {
     if n < 0xfd {
@@ -312,28 +289,9 @@ fn sighash_preimage(
     pre
 }
 
-async fn fetch_utxos_blockbook(address: &str) -> Result<Vec<UtxoEntry>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| anyhow::anyhow!("HTTP client init failed: {}", e))?;
-    let url = format!("{}/utxo/{}", BLOCKBOOK_BASE, address);
-    let utxos: Vec<UtxoEntry> = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("UTXO fetch failed: {}", e))?
-        .error_for_status()
-        .map_err(|e| anyhow::anyhow!("UTXO fetch failed: HTTP {}", e.status().map(|s| s.as_u16()).unwrap_or(0)))?
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("UTXO response parse failed: {}", e))?;
-    Ok(utxos)
-}
-
 /// Build and sign a Dogecoin P2PKH transaction, returning the raw serialized bytes.
 ///
-/// Fetches UTXOs from Trezor Blockbook, selects coins with a greedy algorithm
+/// Fetches UTXOs from the configured chain backends (see [`crate::backend`]), selects coins with a greedy algorithm
 /// (largest first), builds inputs and outputs (including change), signs each
 /// input with SIGHASH_ALL.
 ///
@@ -374,7 +332,7 @@ pub async fn build_signed_transaction(
         .ok_or_else(|| anyhow::anyhow!("Amount + fee overflow"))?;
 
     // Fetch UTXOs and greedily select coins (largest first)
-    let raw_utxos = fetch_utxos_blockbook(&from_address).await?;
+    let raw_utxos = crate::backend::fetch_utxos(&from_address).await?;
     if raw_utxos.is_empty() {
         anyhow::bail!("No UTXOs found for {}. Balance may be zero.", from_address);
     }
@@ -387,7 +345,7 @@ pub async fn build_signed_transaction(
         // handed it to a LoRa gateway would never learn why nothing happened.
         .filter(|u| u.confirmations >= 1)
         .filter(|u| !u.coinbase || u.confirmations >= COINBASE_MATURITY_BLOCKS)
-        .filter_map(|u| u.value.parse::<u64>().ok().map(|v| (u.txid, u.vout, v)))
+        .map(|u| (u.txid, u.vout, u.value))
         .collect();
     if utxos.is_empty() {
         anyhow::bail!(
@@ -491,62 +449,23 @@ pub async fn build_signed_transaction(
     Ok(tx)
 }
 
-/// Fetch the confirmed balance for a Dogecoin address from Trezor Blockbook.
-/// Returns the balance in koinus (1 DOGE = 1e8 koinus).
-pub async fn fetch_balance_blockbook(address: &str) -> Result<u64> {
-    #[derive(serde::Deserialize)]
-    struct AddressInfo {
-        balance: String,
-    }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| anyhow::anyhow!("HTTP client init failed: {}", e))?;
-    let url = format!("{}/address/{}", BLOCKBOOK_BASE, address);
-    let info: AddressInfo = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Balance fetch failed: {}", e))?
-        .error_for_status()
-        .map_err(|e| anyhow::anyhow!("Balance fetch failed: HTTP {}", e.status().map(|s| s.as_u16()).unwrap_or(0)))?
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("Balance response parse failed: {}", e))?;
-    info.balance.parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("Invalid balance value in Blockbook response"))
+/// Fetch the confirmed balance (koinus) for a Dogecoin address from the
+/// configured chain backends — Dogecoin Core RPC first, then the public
+/// fallback (see [`crate::backend`]).
+pub async fn fetch_balance(address: &str) -> Result<u64> {
+    crate::backend::fetch_balance(address).await
 }
 
-/// Broadcast a raw signed Dogecoin transaction to the network via Trezor Blockbook.
-/// `raw_hex` is the hex-encoded serialized transaction (output of
-/// `hex::encode(build_signed_transaction(...))`).
-/// Returns the txid string on success.
-pub async fn broadcast_raw_tx(raw_hex: &str) -> Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| anyhow::anyhow!("HTTP client init failed: {}", e))?;
-    let url = format!("{}/sendtx/", BLOCKBOOK_BASE);
-    let resp: serde_json::Value = client
-        .post(&url)
-        .header("Content-Type", "text/plain")
-        .body(raw_hex.to_string())
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Broadcast request failed: {}", e))?
-        .error_for_status()
-        .map_err(|e| anyhow::anyhow!("Broadcast request failed: HTTP {}", e.status().map(|s| s.as_u16()).unwrap_or(0)))?
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("Broadcast response parse failed: {}", e))?;
+/// Deprecated name kept for source compatibility; no longer uses Trezor.
+#[deprecated(note = "use fetch_balance; Blockbook is now one optional backend")]
+pub async fn fetch_balance_blockbook(address: &str) -> Result<u64> {
+    fetch_balance(address).await
+}
 
-    if let Some(txid) = resp.get("result").and_then(|v| v.as_str()) {
-        Ok(txid.to_string())
-    } else if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-        anyhow::bail!("Network rejected transaction: {}", err)
-    } else {
-        anyhow::bail!("Unexpected broadcast response: {}", resp)
-    }
+/// Broadcast a raw signed Dogecoin transaction (hex) through the configured
+/// backends. Returns the txid on success.
+pub async fn broadcast_raw_tx(raw_hex: &str) -> Result<String> {
+    crate::backend::broadcast(raw_hex).await
 }
 
 // ─── Wallet encryption at rest ────────────────────────────────────────────────

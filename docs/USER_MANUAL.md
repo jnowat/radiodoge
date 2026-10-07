@@ -186,8 +186,8 @@ app nudges you: *"Your saved wallet uses an old unencrypted format — click Sav
 
 - **Address** — monospace, with **📋 Copy** and a **📷 Show Address QR** toggle (independent of the private-key
   reveal). The QR is a scannable PNG for sharing your receive address.
-- **Balance** — click **🔄 Check Balance** to fetch your confirmed balance from Trezor Blockbook (shown to 8
-  decimals, labelled *"🌐 Confirmed balance from Trezor Blockbook"*). If a gateway relays a balance to you over
+- **Balance** — click **🔄 Check Balance** to fetch your confirmed balance from your Dogecoin node or the public fallback (shown to 8
+  decimals, labelled *"🌐 Confirmed balance from your Dogecoin node (or public fallback)"*). If a gateway relays a balance to you over
   LoRa, the card updates and re-labels the source *"📡 Relayed by gateway over LoRa."*
 - **Public key** — compressed hex, with copy.
 - **Private key** — hidden as dots by default; **👁️ Reveal** / **🙈 Hide** toggles it, with copy and a security
@@ -387,7 +387,7 @@ Your **recovery phrase is never written to disk** — back it up yourself.
 | `send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa; `-w` signs a real tx first |
 | `receive -p <PORT> [-T <SECS>]` | Listen for packets (`-T 0` = forever; default 30 s; note capital **-T**) |
 | `connect <PORT>` | Interactive REPL (positional port) |
-| `balance -a <ADDRESS>` | Confirmed balance via Blockbook (no board needed) |
+| `balance -a <ADDRESS>` | Confirmed balance via Core RPC → BlockCypher (no board needed) |
 | `broadcast -w <WIF> -t <ADDR> -a <DOGE>` | Sign + push straight to the network over the internet |
 | `daemon -p <PORT>` | Run as a gateway daemon |
 
@@ -413,9 +413,9 @@ quit | exit | q              Leave
 
 `radiodoge-cli daemon -p /dev/ttyUSB0` turns a host + Heltec into a two-way gateway:
 
-- On an incoming **signed transaction**, it broadcasts to the Dogecoin network via Blockbook (3 attempts,
+- On an incoming **signed transaction**, it broadcasts to the Dogecoin network via the chain backends (3 attempts,
   exponential backoff) and radios back `TX_ACK:<txid>`.
-- On an incoming **balance request**, it queries Blockbook and radios back the balance.
+- On an incoming **balance request**, it queries the chain backends and radios back the balance.
 - It logs every packet and runs until you press Ctrl-C.
 
 > Tip: run the daemon on a Raspberry Pi with a Heltec attached for an always-on gateway.
@@ -457,7 +457,7 @@ quit | exit | q              Leave
 - **RSSI / SNR** — received signal strength (dBm) and signal-to-noise ratio (dB); higher is better.
 - **Multipart** — how payloads over 192 bytes are split into several LoRa frames and reassembled. Each frame
   declares its own chunk length, which is what lets a receiver find the frame boundaries on a serial link.
-- **Blockbook** — the Trezor block explorer API RadioDoge uses to fetch UTXOs/balances and broadcast transactions.
+- **Chain backends** — where RadioDoge gets UTXOs/balances and broadcasts: your Dogecoin Core node first, BlockCypher as fallback, any Blockbook server opt-in. See [BACKENDS.md](BACKENDS.md).
 
 ---
 

@@ -33,7 +33,7 @@ relays it — hop by hop — until it reaches a gateway node that pushes it to t
 > **What's real today (v0.3.16):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
 > `m/44'/3'/0'/0/0`. It builds, signs (secp256k1, `SIGHASH_ALL`), and broadcasts genuine P2PKH transactions.
 > Private keys are encrypted at rest with ChaCha20-Poly1305 + argon2id. Incoming signed transactions are
-> verified in-process. Balances are fetched directly from Trezor Blockbook, or relayed over LoRa by a gateway.
+> verified in-process. Balances, UTXOs and broadcasts go through your own Dogecoin Core node (JSON-RPC) with a public-API fallback ([chain backends](docs/BACKENDS.md)), or are relayed over LoRa by a gateway.
 > Desktop (Windows) and Android over **USB-C** are the fully-supported transports; Android **Bluetooth LE** is
 > a working preview. *Much real. Very encrypted. Wow.*
 
@@ -110,7 +110,7 @@ Every push also builds a debug APK, signed with the Gradle debug key so it insta
    rebroadcast exist for the firmware's own broadcast format only; see
    [Known Limitations](ROADMAP.md#-known-limitations--in-progress).)*
 4. A **gateway** — either a host running `radiodoge-cli daemon`, or a Heltec with the firmware WiFi gateway
-   configured — receives the packet and **POSTs the raw transaction to Trezor Blockbook** for broadcast.
+   configured — receives the packet and **broadcasts the raw transaction via its Dogecoin Core node (or the public fallback)**.
 5. The gateway radios a `TX_ACK:<txid>` message back to the sender.
 6. 🎉 Your transaction lands on-chain.
 
@@ -258,11 +258,11 @@ BIN=./target/release/radiodoge-cli
 | `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub. Payloads over 192 bytes are split into multipart frames on firmware v0.4.2+; on older firmware the send is refused — [see the size gate](docs/PROTOCOL.md#host--board-multipart) |
 | `radiodoge-cli receive -p <PORT> [-T <SECS>]` | Listen for incoming packets (`-T 0` = forever; default 30 s) |
 | `radiodoge-cli connect <PORT>` | Interactive REPL (`port` is positional, no `-p`) |
-| `radiodoge-cli balance -a <ADDRESS>` | Query a confirmed balance via Blockbook (internet, no board) |
+| `radiodoge-cli balance -a <ADDRESS>` | Query a confirmed balance via your Core node, falling back to BlockCypher ([backends](docs/BACKENDS.md)) |
 | `radiodoge-cli broadcast -w <WIF> -t <ADDR> -a <DOGE>` | Sign **and** broadcast straight to the network over the internet |
 | `radiodoge-cli daemon -p <PORT>` | Run as a headless gateway (replaces `serdog`) |
 
-Add `-v`/`--verbose` to any command for debug logging (or set `RUST_LOG=debug`). A fixed network fee of
+Add `--backends`, `--rpc-url`, `--rpc-user`, `--rpc-cookie` to choose where chain data comes from (see [docs/BACKENDS.md](docs/BACKENDS.md)). Add `-v`/`--verbose` to any command for debug logging (or set `RUST_LOG=debug`). A fixed network fee of
 **1 DOGE** is added on top of the amount for `send --wif` and `broadcast`, so the total debit is `amount + 1`.
 
 ```bash
@@ -412,7 +412,7 @@ implementation.
 | Async runtime | Tokio |
 | Serial | `serialport` (desktop) · `tauri-plugin-serialplugin` (Android USB) · `tauri-plugin-blec` (Android BLE) |
 | Crypto | `secp256k1` · `sha2` · `ripemd` · `bs58` · `bip39` · `argon2` · `chacha20poly1305` |
-| Network | `reqwest` (rustls) → Trezor Blockbook |
+| Network | `reqwest` (rustls) → Dogecoin Core JSON-RPC, BlockCypher fallback ([backends](docs/BACKENDS.md)) |
 | CI/CD | GitHub Actions → Windows MSI + Android APK on every push, weekly cargo-audit |
 
 ---

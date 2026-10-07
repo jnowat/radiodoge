@@ -11,6 +11,21 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.
 
+### Changed — chain backends (Trezor Blockbook removed as default)
+- **Balance, UTXO fetch, broadcast and `verify-tx` failed with HTTP 403**: Trezor's public Blockbook
+  (`doge1.trezor.io`) now blocks API clients behind Cloudflare. New `radiodoge_core::backend` module with an
+  ordered, configurable backend list and automatic fallback:
+  **Dogecoin Core JSON-RPC** (default, first — `listunspent`/`sendrawtransaction`, user/pass or cookie auth),
+  **BlockCypher** (default fallback), and **Blockbook** (opt-in with an explicit URL). Configure with
+  `RADIODOGE_BACKENDS`, `RADIODOGE_RPC_*`, `RADIODOGE_BLOCKCYPHER_*` or the CLI's `--backends`, `--rpc-url`,
+  `--rpc-user`, `--rpc-cookie` flags; the GUI gains a `set_chain_backends` command. See `docs/BACKENDS.md`.
+- `wallet::fetch_balance_blockbook` is deprecated in favour of `wallet::fetch_balance`.
+- The core backend refuses to report a balance for an address that is not in Core's wallet (it would read as 0)
+  and says how to `importaddress` it as watch-only.
+- GUI CSP no longer allows `doge1.trezor.io` (all chain traffic goes through the Rust backend).
+- Unit tests with a local mock HTTP server cover Core RPC, BlockCypher, Blockbook parsing, error text
+  propagation ("already in block chain" / "already exists") and fallback ordering.
+
 ### Fixed
 - **Firmware sketch could not be opened by arduino-cli**: renamed `heltec-firmware-v3/heltec-firmware.ino` →
   `heltec-firmware-v3/heltec-firmware-v3.ino` so the sketch name matches its folder.

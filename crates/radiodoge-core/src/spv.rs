@@ -30,7 +30,6 @@
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 
-use crate::wallet::BLOCKBOOK_BASE;
 
 /// Length of a serialized block header in bytes.
 pub const BLOCK_HEADER_LEN: usize = 80;
@@ -368,7 +367,7 @@ pub struct TxInclusion {
     pub block_hash: Option<String>,
 }
 
-/// Query a Blockbook server for a transaction's confirmation status.
+/// Query the configured chain backends for a transaction's confirmation status.
 ///
 /// Requires an internet connection. Returns [`TxInclusion`] describing whether
 /// the tx is mined, how deep, and in which block.
@@ -378,49 +377,13 @@ pub async fn fetch_tx_inclusion(txid: &str) -> Result<TxInclusion> {
         bail!("'{}' is not a valid 64-hex-character transaction id", txid);
     }
 
-    #[derive(serde::Deserialize)]
-    struct TxInfo {
-        #[serde(default)]
-        #[serde(rename = "blockHeight")]
-        block_height: i64,
-        #[serde(default)]
-        #[serde(rename = "blockHash")]
-        block_hash: Option<String>,
-        #[serde(default)]
-        confirmations: u32,
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| anyhow::anyhow!("HTTP client init failed: {}", e))?;
-    let url = format!("{}/tx/{}", BLOCKBOOK_BASE, txid);
-    let info: TxInfo = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Transaction lookup failed: {}", e))?
-        .error_for_status()
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Transaction lookup failed: HTTP {}",
-                e.status().map(|s| s.as_u16()).unwrap_or(0)
-            )
-        })?
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("Transaction response parse failed: {}", e))?;
-
-    let confirmed = info.confirmations >= 1 && info.block_height >= 0;
+    let info = crate::backend::fetch_tx_status(txid).await?;
+    let confirmed = info.confirmations >= 1 && info.block_height.is_some();
     Ok(TxInclusion {
         txid: txid.to_string(),
         confirmed,
         confirmations: info.confirmations,
-        block_height: if info.block_height >= 0 {
-            Some(info.block_height as u64)
-        } else {
-            None
-        },
+        block_height: info.block_height,
         block_hash: if confirmed { info.block_hash } else { None },
     })
 }

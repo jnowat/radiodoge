@@ -103,7 +103,7 @@
   <div class="card-doge" style="padding: 14px 16px; margin-bottom: 20px;">
     <div style="font-size: 0.9rem; font-weight: 700; margin-bottom: 4px;">🔎 Verify a transaction on-chain</div>
     <p style="margin: 0 0 10px 0; color: var(--doge-muted); font-size: 0.78rem;">
-      Lightweight SPV check via Blockbook — confirm a txid is mined and how deep, no full node needed.
+      Lightweight SPV check via your node or a public API — confirm a txid is mined and how deep, no full node needed.
     </p>
     <div style="display: flex; gap: 8px; flex-wrap: wrap;">
       <input

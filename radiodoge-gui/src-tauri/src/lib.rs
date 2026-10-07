@@ -586,20 +586,36 @@ async fn import_mnemonic_wallet(phrase: String) -> Result<WalletInfo, String> {
     wallet::wallet_from_mnemonic(&phrase).map_err(|e| e.to_string())
 }
 
-/// v0.3.16 — Query the confirmed Dogecoin balance for an address via Trezor Blockbook.
+/// v0.3.16 — Query the confirmed Dogecoin balance for an address via the configured chain backends (Core RPC, then BlockCypher).
 /// Returns the balance as a floating-point DOGE amount.
 #[tauri::command]
 async fn get_balance(address: String) -> Result<f64, String> {
     if !wallet::is_valid_address(&address) {
         return Err("Invalid Dogecoin address".to_string());
     }
-    let koinus = wallet::fetch_balance_blockbook(&address)
+    let koinus = wallet::fetch_balance(&address)
         .await
         .map_err(|e| e.to_string())?;
     Ok(koinus as f64 / 1e8)
 }
 
-/// Lightweight SPV inclusion check for a txid (confirmations + block) via Blockbook.
+/// v0.4.3 — Override the chain backend list for this session, e.g.
+/// `"core=http://127.0.0.1:22555,blockcypher"`. An empty string reverts to
+/// `RADIODOGE_BACKENDS` / the default (`core,blockcypher`). RPC credentials come
+/// from `RADIODOGE_RPC_USER`/`RADIODOGE_RPC_PASSWORD` or Core's `.cookie`.
+#[tauri::command]
+async fn set_chain_backends(spec: String) -> Result<(), String> {
+    if spec.trim().is_empty() {
+        radiodoge_core::backend::set_backends(None);
+        return Ok(());
+    }
+    let list = radiodoge_core::backend::parse_backends(&spec, &|k| std::env::var(k).ok())
+        .map_err(|e| e.to_string())?;
+    radiodoge_core::backend::set_backends(Some(list));
+    Ok(())
+}
+
+/// Lightweight SPV inclusion check for a txid (confirmations + block) via the configured chain backends.
 #[tauri::command]
 async fn verify_tx_inclusion(txid: String) -> Result<radiodoge_core::spv::TxInclusion, String> {
     radiodoge_core::spv::fetch_tx_inclusion(&txid)
@@ -2096,6 +2112,7 @@ pub fn run() {
             import_mnemonic_wallet,
             get_balance,
             verify_tx_inclusion,
+            set_chain_backends,
             scan_qr_from_image,
             send_transaction,
             update_lora_settings,

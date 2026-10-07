@@ -31,6 +31,24 @@ struct Cli {
     /// Enable verbose debug logging
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Chain backends to try in order (default: core,blockcypher).
+    /// Items: core[=URL], blockcypher[=URL], blockbook=URL. Env: RADIODOGE_BACKENDS
+    #[arg(long, global = true, value_name = "LIST")]
+    backends: Option<String>,
+
+    /// Dogecoin Core JSON-RPC URL (default http://127.0.0.1:22555). Env: RADIODOGE_RPC_URL
+    #[arg(long, global = true, value_name = "URL")]
+    rpc_url: Option<String>,
+
+    /// Dogecoin Core rpcuser; the password is read from RADIODOGE_RPC_PASSWORD
+    /// (never pass secrets on the command line). Env: RADIODOGE_RPC_USER
+    #[arg(long, global = true, value_name = "USER")]
+    rpc_user: Option<String>,
+
+    /// Path to Dogecoin Core's .cookie file (default: the platform datadir). Env: RADIODOGE_RPC_COOKIE
+    #[arg(long, global = true, value_name = "PATH")]
+    rpc_cookie: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -51,7 +69,7 @@ enum Commands {
     /// Without --wif: sends a legacy payload (amount + address) for gateways
     /// that handle signing server-side.
     /// With --wif: builds and signs a real P2PKH transaction (fetches UTXOs
-    /// from Blockbook, signs with secp256k1) before broadcasting over LoRa.
+    /// from chain backends, signs with secp256k1) before broadcasting over LoRa.
     ///
     /// Example: radiodoge-cli send -p COM3 -t DH5yaieq... -a 4.20 --wif Q...
     Send {
@@ -120,7 +138,7 @@ enum Commands {
         port: String,
     },
 
-    /// Query the confirmed Dogecoin balance for an address via Trezor Blockbook
+    /// Query the confirmed Dogecoin balance for an address via the configured chain backends (Core RPC, then BlockCypher)
     ///
     /// Requires an internet connection.
     ///
@@ -133,7 +151,7 @@ enum Commands {
 
     /// Verify a transaction's inclusion in the Dogecoin chain (lightweight SPV)
     ///
-    /// Performs a lightweight, no-full-node inclusion check via Trezor Blockbook:
+    /// Performs a lightweight, no-full-node inclusion check via the configured chain backends (Core RPC, then BlockCypher):
     /// reports whether the txid is mined, its confirmation depth, and the block
     /// it landed in. Requires an internet connection.
     ///
@@ -146,8 +164,8 @@ enum Commands {
 
     /// Build, sign, and broadcast a real P2PKH Dogecoin transaction to the network
     ///
-    /// Fetches UTXOs from Trezor Blockbook, builds the transaction, signs each
-    /// input with SIGHASH_ALL (secp256k1), and broadcasts via Blockbook.
+    /// Fetches UTXOs from the configured chain backends, builds the transaction, signs each
+    /// input with SIGHASH_ALL (secp256k1), and broadcasts via the configured backends.
     /// Requires an internet connection. No LoRa device needed.
     ///
     /// Example: radiodoge-cli broadcast --wif QWif... --to DH5yaie... --amount 4.20
@@ -222,6 +240,20 @@ async fn main() -> Result<()> {
     let log_level = if cli.verbose { "debug" } else { "info" };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
         .init();
+
+    if cli.backends.is_some() || cli.rpc_url.is_some() || cli.rpc_user.is_some() || cli.rpc_cookie.is_some() {
+        let spec = cli.backends.clone()
+            .or_else(|| std::env::var("RADIODOGE_BACKENDS").ok())
+            .unwrap_or_else(|| "core,blockcypher".to_string());
+        let (url, user, cookie) = (cli.rpc_url.clone(), cli.rpc_user.clone(), cli.rpc_cookie.clone());
+        let env = move |k: &str| match k {
+            "RADIODOGE_RPC_URL" if url.is_some() => url.clone(),
+            "RADIODOGE_RPC_USER" if user.is_some() => user.clone(),
+            "RADIODOGE_RPC_COOKIE" if cookie.is_some() => cookie.clone(),
+            _ => std::env::var(k).ok(),
+        };
+        radiodoge_core::backend::set_backends(Some(radiodoge_core::backend::parse_backends(&spec, &env)?));
+    }
 
     match cli.command {
         Commands::Ports => cmd_ports(),
@@ -327,7 +359,7 @@ async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Op
 
     // Build payload: real signed P2PKH tx when --wif supplied, legacy stub otherwise.
     let payload = if let Some(key) = wif {
-        println!("🔑 Signing P2PKH transaction (fetching UTXOs from Blockbook)...");
+        println!("🔑 Signing P2PKH transaction (fetching UTXOs from chain backends)...");
         wallet::build_signed_transaction(key, to, amount, wallet::DEFAULT_TX_FEE_DOGE)
             .await
             .context("Transaction signing failed")?
@@ -570,8 +602,8 @@ async fn cmd_connect(port: &str) -> Result<()> {
                 if !wallet::is_valid_address(addr) {
                     println!("❌ '{}' is not a valid Dogecoin address", addr);
                 } else {
-                    print!("🌐 Querying Blockbook... ");
-                    match wallet::fetch_balance_blockbook(addr).await {
+                    print!("🌐 Querying chain backends... ");
+                    match wallet::fetch_balance(addr).await {
                         Ok(k) => println!("💰 {:.8} DOGE", k as f64 / 1e8),
                         Err(e) => println!("❌ {}", e),
                     }
@@ -588,7 +620,7 @@ async fn cmd_connect(port: &str) -> Result<()> {
                 println!("  ping                         — ping the device");
                 println!("  wallet                       — generate new Dogecoin keypair");
                 println!("  wallet-mnemonic              — generate wallet with 12-word BIP39 phrase");
-                println!("  balance <addr>               — query confirmed balance via Blockbook");
+                println!("  balance <addr>               — query confirmed balance (Core RPC → BlockCypher)");
                 println!("  send <addr> <amount> [memo]  — send DOGE over LoRa");
                 println!("  stats                        — show radio statistics");
                 println!("  quit / exit / q              — disconnect and exit");
@@ -607,8 +639,8 @@ async fn cmd_connect(port: &str) -> Result<()> {
 ///
 /// Connects to the device, logs all received packets indefinitely.
 /// When a signed Dogecoin transaction is received (CMD_DOGE_TX with a raw
-/// transaction payload), broadcasts it to the Dogecoin network via Trezor
-/// Blockbook and sends a TX_ACK message back to the originator.
+/// transaction payload), broadcasts it to the Dogecoin network via the
+/// configured chain backends and sends a TX_ACK message back to the originator.
 ///
 /// Multipart sequences are reassembled by the serial read loop before this
 /// callback runs, so a transaction that arrived split across several frames is
@@ -675,7 +707,7 @@ async fn cmd_daemon(port: &str) -> Result<()> {
             }
         }
 
-        // When a balance request arrives, query Blockbook and send the result back.
+        // When a balance request arrives, query the chain backends and send the result back.
         if pkt.command == radio::CMD_REQUEST_BALANCE {
             let payload_bytes = hex::decode(&pkt.payload_hex).unwrap_or_default();
             let addr = String::from_utf8_lossy(&payload_bytes)
@@ -750,6 +782,7 @@ fn is_duplicate_broadcast_error(err: &str) -> bool {
         || e.contains("txn-already-known")
         || e.contains("txn-already-in-mempool")
         || e.contains("transaction already exists")
+        || e.contains("already exists")
         || e.contains("duplicate transaction")
 }
 
@@ -827,14 +860,14 @@ async fn daemon_send_tx_ack(txid: &str, mgr: &Arc<SerialManager>, source: &NodeA
     }
 }
 
-/// Fetch the balance for `address` from Blockbook and send it back to `source` via radio.
+/// Fetch the balance for `address` from the chain backends and send it back to `source` via radio.
 /// The response is a CMD_MESSAGE with text `"BAL:{koinus}"` so the GUI can parse it.
 async fn daemon_fetch_and_send_balance(
     address: String,
     mgr: Arc<SerialManager>,
     source: NodeAddress,
 ) {
-    match wallet::fetch_balance_blockbook(&address).await {
+    match wallet::fetch_balance(&address).await {
         Ok(koinus) => {
             log::info!(
                 "GATEWAY  balance for {}: {} koinus ({:.8} DOGE)",
@@ -853,20 +886,20 @@ async fn daemon_fetch_and_send_balance(
     }
 }
 
-/// Query the confirmed balance for a Dogecoin address from Trezor Blockbook.
+/// Query the confirmed balance for a Dogecoin address from the configured chain backends.
 async fn cmd_balance(address: &str) -> Result<()> {
     if !wallet::is_valid_address(address) {
         anyhow::bail!("'{}' is not a valid Dogecoin address (must start with 'D')", address);
     }
-    println!("🌐 Querying Blockbook for {}...", address);
-    let koinus = wallet::fetch_balance_blockbook(address).await?;
+    println!("🌐 Querying chain backends for {}...", address);
+    let koinus = wallet::fetch_balance(address).await?;
     println!("💰 Balance: {:.8} DOGE  ({} koinus)", koinus as f64 / 1e8, koinus);
     Ok(())
 }
 
 /// Lightweight SPV inclusion check: report whether a txid is mined and how deep.
 async fn cmd_verify_tx(txid: &str) -> Result<()> {
-    println!("🔎 Verifying transaction inclusion (lightweight SPV via Blockbook)...");
+    println!("🔎 Verifying transaction inclusion (lightweight SPV via chain backends)...");
     let status = spv::fetch_tx_inclusion(txid).await?;
     if status.confirmed {
         println!("✅ Confirmed! {} confirmation(s).", status.confirmations);
@@ -903,7 +936,7 @@ async fn cmd_broadcast(wif: &str, to: &str, amount: f64) -> Result<()> {
     let raw_hex = hex::encode(&raw_tx);
     println!("   Signed: {} bytes", raw_tx.len());
 
-    println!("🌐 Broadcasting via Trezor Blockbook...");
+    println!("🌐 Broadcasting via the configured chain backends (Core RPC, then BlockCypher)...");
     let txid = wallet::broadcast_raw_tx(&raw_hex)
         .await
         .context("Broadcast failed")?;
