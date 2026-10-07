@@ -154,11 +154,26 @@ enum Commands {
         port: String,
         #[arg(short, long)]
         address: String,
-        /// Gateway node to ask (default: broadcast; FW11 gateways only answer
-        /// requests addressed to them, so pass e.g. -g 10.0.1)
+        /// Gateway node to ask (default: broadcast to any gateway)
         #[arg(short, long)]
         gateway: Option<String>,
         #[arg(short = 'T', long, default_value = "30")]
+        timeout: u64,
+    },
+
+    /// Radio an already-signed transaction (hex file) to a gateway and wait for TX_ACK
+    ///
+    /// Example: radiodoge-cli send-tx-hex -p COM3 -f tx.hex -g 10.0.1
+    SendTxHex {
+        #[arg(short, long)]
+        port: String,
+        /// File containing the raw signed transaction as hex
+        #[arg(short, long)]
+        file: String,
+        /// Gateway node (default: broadcast to any gateway)
+        #[arg(short, long)]
+        gateway: Option<String>,
+        #[arg(short = 'T', long, default_value = "90")]
         timeout: u64,
     },
 
@@ -175,6 +190,9 @@ enum Commands {
         amount: f64,
         #[arg(short, long)]
         out: String,
+        /// Fee in DOGE (default: 0.01 DOGE per started kB, Dogecoin Core's recommended rate)
+        #[arg(long)]
+        fee: Option<f64>,
     },
 
     /// Ping the Heltec device and report round-trip success/failure
@@ -337,7 +355,8 @@ async fn main() -> Result<()> {
         Commands::Message { port, to, text, listen } => cmd_message(&port, &to, &text, listen).await,
         Commands::LoraPing { port, to, timeout } => cmd_lora_ping(&port, &to, timeout).await,
         Commands::LoraBalance { port, address, gateway, timeout } => cmd_lora_balance(&port, &address, gateway.as_deref(), timeout).await,
-        Commands::SignTx { to_address, amount, out } => cmd_sign_tx(&to_address, amount, &out).await,
+        Commands::SendTxHex { port, file, gateway, timeout } => cmd_send_tx_hex(&port, &file, gateway.as_deref(), timeout).await,
+        Commands::SignTx { to_address, amount, out, fee } => cmd_sign_tx(&to_address, amount, &out, fee).await,
         Commands::Connect { port } => cmd_connect(&port).await,
         Commands::Daemon { port } => cmd_daemon(&port).await,
         Commands::Balance { address } => cmd_balance(&address).await,
@@ -681,7 +700,7 @@ async fn cmd_lora_balance(port: &str, address: &str, gateway: Option<&str>, time
 }
 
 /// Sign without broadcasting.
-async fn cmd_sign_tx(to: &str, amount: f64, out: &str) -> Result<()> {
+async fn cmd_sign_tx(to: &str, amount: f64, out: &str, fee: Option<f64>) -> Result<()> {
     if !wallet::is_valid_address(to) {
         anyhow::bail!("'{}' is not a valid Dogecoin address", to);
     }
@@ -701,14 +720,57 @@ async fn cmd_sign_tx(to: &str, amount: f64, out: &str) -> Result<()> {
             w.private_key_wif
         }
     };
-    let raw = wallet::build_signed_transaction(wif.trim(), to, amount, wallet::DEFAULT_TX_FEE_DOGE).await?;
+    let (raw, fee) = match fee {
+        Some(f) => (wallet::build_signed_transaction(wif.trim(), to, amount, f).await?, f),
+        None => wallet::build_signed_transaction_auto_fee(wif.trim(), to, amount).await?,
+    };
     let hex_tx = hex::encode(&raw);
     std::fs::write(out, &hex_tx).with_context(|| format!("writing {}", out))?;
-    println!("✅ Signed (NOT broadcast): {:.8} DOGE → {} + {:.8} fee", amount, to, wallet::DEFAULT_TX_FEE_DOGE);
+    println!("✅ Signed (NOT broadcast): {:.8} DOGE → {} + {:.8} fee", amount, to, fee);
     println!("   txid:  {}", wallet::compute_txid(&raw));
     println!("   size:  {} bytes ({} LoRa frame(s))", raw.len(), raw.len().div_ceil(radio::MULTIPART_CHUNK_LEN).max(1));
     println!("   saved: {}", out);
     Ok(())
+}
+
+/// Radio a pre-signed transaction to a gateway and wait for its TX_ACK.
+async fn cmd_send_tx_hex(port: &str, file: &str, gateway: Option<&str>, timeout: u64) -> Result<()> {
+    let hex_tx = std::fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
+    let raw = hex::decode(hex_tx.trim()).context("file is not valid hex")?;
+    let (_from, outs) = wallet::verify_signed_tx(&raw).context("not a valid signed transaction")?;
+    let txid = wallet::compute_txid(&raw);
+    println!("🔎 txid {} ({} bytes)", txid, raw.len());
+    for (v, a) in &outs { println!("   out {:.8} DOGE → {}", *v as f64 / 1e8, a); }
+    let dst = match gateway { Some(g) => parse_node_addr(g)?, None => NodeAddress::broadcast() };
+    let manager = open_board(port).await?;
+    let mut rx = manager.subscribe_packets();
+    let firmware = manager.ensure_firmware_version().await;
+    let src = manager.get_node_address().await;
+    let frames = radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &raw, firmware.as_deref())
+        .map_err(|m| anyhow::anyhow!("{}", m))?;
+    let n = frames.len();
+    let t0 = std::time::Instant::now();
+    manager.send_frames(frames).await.context("sending over LoRa")?;
+    println!("📡 {} frame(s) on air {} → {} in {} ms; waiting for TX_ACK…",
+        n, src.to_display_string(), dst.to_display_string(), t0.elapsed().as_millis());
+    let ack = tokio::time::timeout(Duration::from_secs(timeout), async {
+        while let Ok(pkt) = rx.recv().await {
+            let raw = String::from_utf8_lossy(&hex::decode(&pkt.payload_hex).unwrap_or_default()).to_string();
+            if let Some(i) = raw.find("TX_ACK:") {
+                return Some((pkt.source.clone(), raw[i + 7..].trim_end_matches('\0').trim().to_string()));
+            }
+        }
+        None
+    }).await.ok().flatten();
+    manager.disconnect().await.ok();
+    match ack {
+        Some((gw, id)) => {
+            println!("✅ TX_ACK from {} after {} ms: {}", gw.to_display_string(), t0.elapsed().as_millis(), id);
+            if id != txid { println!("⚠️  ACK txid differs from the local txid {}", txid); }
+            Ok(())
+        }
+        None => anyhow::bail!("No TX_ACK within {} s — check the mempool for {} before any retry", timeout, txid),
+    }
 }
 
 /// Ping the Heltec device.

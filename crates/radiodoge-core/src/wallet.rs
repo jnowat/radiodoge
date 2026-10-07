@@ -193,6 +193,39 @@ pub fn encode_transaction_payload(
 /// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
 pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
 
+/// Dogecoin Core's recommended relay/wallet fee rate: 0.01 DOGE per kB
+/// (1.14.4+ policy; the hard minimum relay fee is 0.001 DOGE/kB).
+pub const RECOMMENDED_FEE_PER_KB_KOINUS: u64 = 1_000_000;
+
+/// Fee for a transaction of `size_bytes` at [`RECOMMENDED_FEE_PER_KB_KOINUS`],
+/// charged per started kilobyte (so never less than 0.01 DOGE), in DOGE.
+pub fn recommended_fee_doge(size_bytes: usize) -> f64 {
+    let kb = size_bytes.div_ceil(1000).max(1) as u64;
+    (kb * RECOMMENDED_FEE_PER_KB_KOINUS) as f64 / 1e8
+}
+
+/// Sign a transaction paying [`recommended_fee_doge`] for its actual size.
+///
+/// Signs once at the one-kilobyte fee, then re-signs with a larger fee if the
+/// result is bigger than that fee covers (more inputs → more bytes). Returns
+/// the raw transaction and the fee paid, in DOGE.
+pub async fn build_signed_transaction_auto_fee(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+) -> Result<(Vec<u8>, f64)> {
+    let mut fee = recommended_fee_doge(0);
+    for _ in 0..4 {
+        let raw = build_signed_transaction(from_wif, to_address, amount_doge, fee).await?;
+        let needed = recommended_fee_doge(raw.len());
+        if needed <= fee + 1e-9 {
+            return Ok((raw, fee));
+        }
+        fee = needed;
+    }
+    anyhow::bail!("fee did not converge for {} DOGE", amount_doge)
+}
+
 /// Blocks a coinbase output must age before it can be spent.
 ///
 /// Dogecoin's maturity is 60 blocks (`COINBASE_MATURITY`); the extra margin
@@ -1167,5 +1200,17 @@ mod tests {
             "the description must say what was not checked: {}",
             desc
         );
+    }
+}
+
+#[cfg(test)]
+mod fee_tests {
+    use super::recommended_fee_doge;
+    #[test]
+    fn per_started_kb_with_minimum() {
+        assert_eq!(recommended_fee_doge(0), 0.01);
+        assert_eq!(recommended_fee_doge(226), 0.01);
+        assert_eq!(recommended_fee_doge(1000), 0.01);
+        assert_eq!(recommended_fee_doge(1001), 0.02);
     }
 }
