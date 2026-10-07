@@ -45,6 +45,8 @@ export interface TransactionRequest {
   amountDoge: number;
   memo?: string;
   fromPrivateKeyWif?: string;
+  /** Network fee in DOGE; omit for the recommended 0.01 DOGE per started kB. */
+  feeDoge?: number;
 }
 
 /** Rich information about a serial port, including USB device details. */

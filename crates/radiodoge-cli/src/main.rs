@@ -92,6 +92,10 @@ enum Commands {
         /// WIF private key for signing a real P2PKH transaction before LoRa broadcast
         #[arg(short, long)]
         wif: Option<String>,
+
+        /// Network fee in DOGE when signing with --wif (default: 0.01 DOGE per started kB)
+        #[arg(long)]
+        fee: Option<f64>,
     },
 
     /// Listen for incoming LoRa packets and print them
@@ -266,9 +270,13 @@ enum Commands {
         #[arg(short = 't', long = "to")]
         to_address: String,
 
-        /// Amount to send in DOGE (network fee of 1 DOGE is added automatically)
+        /// Amount to send in DOGE (the network fee is added on top)
         #[arg(short, long)]
         amount: f64,
+
+        /// Network fee in DOGE (default: 0.01 DOGE per started kB)
+        #[arg(long)]
+        fee: Option<f64>,
     },
 }
 
@@ -346,8 +354,8 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Ports => cmd_ports(),
         Commands::Wallet { cmd } => cmd_wallet(cmd),
-        Commands::Send { port, to_address, amount, memo, wif } => {
-            cmd_send(&port, &to_address, amount, memo.as_deref(), wif.as_deref()).await
+        Commands::Send { port, to_address, amount, memo, wif, fee } => {
+            cmd_send(&port, &to_address, amount, memo.as_deref(), wif.as_deref(), fee).await
         }
         Commands::Receive { port, timeout } => cmd_receive(&port, timeout).await,
         Commands::Ping { port } => cmd_ping(&port).await,
@@ -361,7 +369,7 @@ async fn main() -> Result<()> {
         Commands::Daemon { port } => cmd_daemon(&port).await,
         Commands::Balance { address } => cmd_balance(&address).await,
         Commands::VerifyTx { txid } => cmd_verify_tx(&txid).await,
-        Commands::Broadcast { wif, to_address, amount } => cmd_broadcast(&wif, &to_address, amount).await,
+        Commands::Broadcast { wif, to_address, amount, fee } => cmd_broadcast(&wif, &to_address, amount, fee).await,
     }
 }
 
@@ -437,7 +445,7 @@ fn cmd_wallet(cmd: WalletCommands) -> Result<()> {
 }
 
 /// Send a Dogecoin transaction over LoRa.
-async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Option<&str>) -> Result<()> {
+async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Option<&str>, fee: Option<f64>) -> Result<()> {
     if !wallet::is_valid_address(to) {
         anyhow::bail!("'{}' is not a valid Dogecoin address (must start with 'D')", to);
     }
@@ -454,9 +462,11 @@ async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Op
     // Build payload: real signed P2PKH tx when --wif supplied, legacy stub otherwise.
     let payload = if let Some(key) = wif {
         println!("🔑 Signing P2PKH transaction (fetching UTXOs from chain backends)...");
-        wallet::build_signed_transaction(key, to, amount, wallet::DEFAULT_TX_FEE_DOGE)
+        let (raw, paid) = wallet::build_signed_transaction_with_fee(key, to, amount, fee)
             .await
-            .context("Transaction signing failed")?
+            .context("Transaction signing failed")?;
+        println!("   Fee: {:.8} DOGE ({} bytes)", paid, raw.len());
+        raw
     } else {
         println!("✅ Connected! Encoding stub transaction...");
         wallet::encode_transaction_payload(to, amount, memo)
@@ -731,6 +741,10 @@ async fn cmd_sign_tx(to: &str, amount: f64, out: &str, fee: Option<f64>) -> Resu
     println!("   size:  {} bytes ({} LoRa frame(s))", raw.len(), raw.len().div_ceil(radio::MULTIPART_CHUNK_LEN).max(1));
     println!("   saved: {}", out);
     Ok(())
+}
+
+fn wallet_mnemonic_ok(line: &str) -> bool {
+    wallet::wallet_from_mnemonic(line).is_ok()
 }
 
 /// Radio a pre-signed transaction to a gateway and wait for its TX_ACK.
@@ -1231,7 +1245,7 @@ async fn cmd_verify_tx(txid: &str) -> Result<()> {
 }
 
 /// Build, sign, and broadcast a real P2PKH Dogecoin transaction directly to the network.
-async fn cmd_broadcast(wif: &str, to: &str, amount: f64) -> Result<()> {
+async fn cmd_broadcast(wif: &str, to: &str, amount: f64, fee: Option<f64>) -> Result<()> {
     if !wallet::is_valid_address(to) {
         anyhow::bail!("'{}' is not a valid Dogecoin address (must start with 'D')", to);
     }
@@ -1241,11 +1255,10 @@ async fn cmd_broadcast(wif: &str, to: &str, amount: f64) -> Result<()> {
 
     println!("🐕 Building signed P2PKH transaction...");
     println!("   To:     {}", to);
-    println!("   Amount: {:.8} DOGE  (+{:.8} DOGE fee)", amount, wallet::DEFAULT_TX_FEE_DOGE);
-
-    let raw_tx = wallet::build_signed_transaction(wif, to, amount, wallet::DEFAULT_TX_FEE_DOGE)
+    let (raw_tx, paid) = wallet::build_signed_transaction_with_fee(wif, to, amount, fee)
         .await
         .context("Failed to build/sign transaction")?;
+    println!("   Amount: {:.8} DOGE  (+{:.8} DOGE fee)", amount, paid);
 
     let raw_hex = hex::encode(&raw_tx);
     println!("   Signed: {} bytes", raw_tx.len());
@@ -1299,8 +1312,4 @@ mod tests {
             );
         }
     }
-}
-
-fn wallet_mnemonic_ok(line: &str) -> bool {
-    wallet::wallet_from_mnemonic(line).is_ok()
 }
