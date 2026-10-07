@@ -126,7 +126,7 @@ extern nodeAddress local;
 
 // WiFi Configuration
 const char* ap_ssid = "RadioDoge";  // Access Point name
-String ap_password = "radiodoge";  // AP password (now configurable)
+String ap_password = "";  // AP password: unique per board, generated on first boot (v0.4.3)
 WebServer server(80);  // Web server on port 80
 
 // Internet WiFi Configuration (configurable via web interface)
@@ -501,10 +501,16 @@ void setup() {
   }
   
   // Load stored AP password
+  // v0.4.3 — no shared default password. On first boot (or after a reset)
+  // each board generates its own random AP password, stores it in NVS and
+  // prints it on the USB serial console. Physical USB access is required to
+  // read it; change it later via POST /api/password/change.
   if (loadAPPassword()) {
     Serial.println("AP password restored from storage");
   } else {
-    Serial.println("Using default AP password");
+    ap_password = generateAPPassword();
+    saveAPPassword(ap_password);
+    Serial.println("Generated unique AP password: " + ap_password);
   }
   
   // Load stored LoRa configuration
@@ -1309,8 +1315,24 @@ void clearAPPassword() {
   
   nvs_close(nvs_handle);
   
-  // Reset to default
-  ap_password = "radiodoge";
+  // v0.4.3 — reset generates a fresh random password instead of a shared default
+  ap_password = generateAPPassword();
+  saveAPPassword(ap_password);
+  Serial.println("Generated unique AP password: " + ap_password);
+}
+
+// Random 16-char alphanumeric password from the hardware RNG (esp_random is a
+// true RNG while the radio is enabled). Retries until it has a letter and a
+// digit, so it always passes validatePassword().
+String generateAPPassword() {
+  static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const size_t n = sizeof(alphabet) - 1;
+  String pw;
+  do {
+    pw = "";
+    for (int i = 0; i < 16; i++) pw += alphabet[esp_random() % n];
+  } while (!validatePassword(pw));
+  return pw;
 }
 
 // Gateway Credential Management Functions
@@ -6195,11 +6217,11 @@ void handleApiPasswordReset() {
   response += "\"success\":true,";
   response += "\"timestamp\":" + String(millis()) + ",";
   
-  // Clear stored password and reset to default
+  // Clear stored password and generate a new random one
   clearAPPassword();
 
   response += "\"action\":\"password_reset\",";
-  response += "\"message\":\"Password reset to the default. The access point is restarting — rejoin it to continue.\"";
+  response += "\"message\":\"Password reset to a new random password (printed on the USB serial console). The access point is restarting — rejoin it to continue.\"";
   response += "}";
   server.send(200, "application/json", response);
 

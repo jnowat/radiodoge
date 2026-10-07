@@ -70,7 +70,7 @@ export type MobileConnectionStatus =
 
 // ─── BLE GATT UUIDs — Nordic UART Service (NUS) ──────────────────────────────
 //
-// The firmware in heltec-firmware-v3/heltec-firmware.ino implements a Nordic
+// The firmware in heltec-firmware-v3/heltec-firmware-v3.ino implements a Nordic
 // UART Service (NUS).  These UUIDs are registered with the Bluetooth SIG and
 // must match exactly what the board advertises:
 //

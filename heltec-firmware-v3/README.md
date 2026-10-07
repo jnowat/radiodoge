@@ -170,21 +170,39 @@ See the project [Roadmap](../ROADMAP.md#-known-limitations--in-progress) for sta
 ### 1. Install Arduino IDE
 Download and install Arduino IDE from: https://www.arduino.cc/en/software
 
-### 2. Install ESP32 Board Package
+### 2. Install the Heltec ESP32 Board Package
+`LoRaWan_APP.h` is **not** in Espressif's stock ESP32 core or the Arduino library index — it ships with
+Heltec's own board package plus Heltec's library.
 1. Open Arduino IDE
 2. Go to **File > Preferences**
 3. Add this URL to **Additional Board Manager URLs**:
    ```
-   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+   https://resource.heltec.cn/download/package_heltec_esp32_index.json
    ```
-4. Go to **Tools > Board > Boards Manager**
-5. Search for "ESP32" and install **ESP32 by Espressif Systems**
+4. Go to **Tools > Board > Boards Manager**, search "Heltec" and install **Heltec ESP32 Series Dev-Boards**
+   (tested with 3.3.8)
 
 ### 3. Install Required Libraries
 Install these libraries via **Tools > Manage Libraries**:
+- **Heltec ESP32 Dev-Boards** (by Heltec Automation) — provides `LoRaWan_APP.h`
 - **Adafruit GFX Library** (by Adafruit)
 - **Adafruit SSD1306** (by Adafruit)
-- **LoRaWan_APP** (by Heltec)
+
+### Command-line build (arduino-cli)
+```bash
+arduino-cli config add board_manager.additional_urls \
+  https://resource.heltec.cn/download/package_heltec_esp32_index.json
+arduino-cli core update-index
+arduino-cli core install Heltec-esp32:esp32
+arduino-cli lib install "Heltec ESP32 Dev-Boards" "Adafruit GFX Library" "Adafruit SSD1306"
+arduino-cli compile -b Heltec-esp32:esp32:heltec_wifi_lora_32_V3 --export-binaries heltec-firmware-v3
+# Flash everything (bootloader + partitions + app) in one go:
+esptool --chip esp32s3 --port COM3 --baud 921600 write-flash 0x0 \
+  heltec-firmware-v3/build/Heltec-esp32.esp32.heltec_wifi_lora_32_V3/heltec-firmware-v3.ino.merged.bin
+# ...or update only the app and keep NVS (license, AP password, node address):
+#   esptool ... write-flash 0x10000 .../heltec-firmware-v3.ino.bin
+```
+The merged image is a full 8 MB flash image and **erases NVS**, including the Heltec license (see below).
 
 ### 4. Install USB Drivers (Windows)
 Download and install USB drivers from:
@@ -198,7 +216,7 @@ https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
 ## 🔧 Compilation & Upload
 
 ### 1. Open the Firmware
-1. Open `heltec-firmware.ino` in Arduino IDE
+1. Open `heltec-firmware-v3/heltec-firmware-v3.ino` in Arduino IDE (the sketch file name must match its folder)
 2. Wait for all tabs to load (radioDogeTypes.h, Images/*.h)
 
 ### 2. Compile
@@ -213,11 +231,27 @@ https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
 5. Click **Upload** (→) in Arduino IDE
 6. Wait for upload to complete
 
-### 4. First Boot
-1. Device will start with default settings
-2. Look for "RadioDoge" WiFi network
-3. Connect using password: `radiodoge`
-4. Open browser to: `http://192.168.4.1`
+### 4. Heltec License Activation (if needed)
+Heltec's LoRa library checks a per-chip license at startup. If the serial monitor (115200 baud) repeats
+`Please provide a correct license! ... ESP32ChipID=XXXXXXXXXXXX`, the license in flash was erased
+(e.g. by a full-flash write of other firmware) and the firmware will not start until it is restored:
+1. Look up your chip ID at **https://resource.heltec.cn/search** — it returns four hex words,
+   e.g. `0x11111111,0x22222222,0x33333333,0x44444444`.
+2. In the serial monitor send (with CR/LF): `AT+CDKEY=11111111222222223333333344444444`
+   (the four words concatenated, without `0x` or commas).
+3. The board answers `The board is actived` and continues booting; the license is stored in flash.
+
+The license is tied to your chip — do not commit it to the repository.
+
+### 5. First Boot
+1. Watch the serial monitor (115200 baud). On first boot every board generates its own random
+   16-character AP password and prints it once: `Generated unique AP password: ...`
+2. Look for the "RadioDoge" WiFi network and connect with that password
+3. Open browser to: `http://192.168.4.1`
+4. Optionally change it via `POST /api/password/change` (8-32 chars, letters and numbers)
+
+There is no shared default password (since v0.4.3). `POST /api/password/reset` generates a new random
+password and prints it on the USB serial console.
 
 ## 🌐 Using the Blockchain-Like Broadcast Network
 
@@ -233,7 +267,7 @@ https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
 - **🛡️ Decentralized**: No single point of failure - works like a blockchain
 
 #### How to Use Broadcast:
-1. **Connect to RadioDoge WiFi** (password: `radiodoge`)
+1. **Connect to RadioDoge WiFi** (password: printed on the serial console at first boot)
 2. **Open Web Interface**: `http://192.168.4.1`
 3. **Go to "Broadcast" section**
 4. **Select "Transaction" type**
@@ -244,7 +278,7 @@ https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
 ### 📱 Web Interface Usage
 
 ### Initial Setup
-1. **Connect to RadioDoge WiFi** (password: `radiodoge`)
+1. **Connect to RadioDoge WiFi** (password: printed on the serial console at first boot)
 2. **Open Web Interface**: `http://192.168.4.1`
 3. **Configure Device**:
    - Set LoRa address in "Device Configuration"
@@ -295,7 +329,7 @@ The Internet Bridge allows devices connected to the RadioDoge WiFi network to ac
 ### How to Use Internet Bridge
 
 #### 1. Setup (One-time)
-1. Connect to RadioDoge WiFi (`radiodoge` password)
+1. Connect to RadioDoge WiFi (password printed on the serial console at first boot)
 2. Open `http://192.168.4.1`
 3. Go to **"WiFi Configuration"** section
 4. Enter your internet WiFi credentials
@@ -752,7 +786,7 @@ curl "http://192.168.4.1/proxy?url=https://github.com"
 
 ### WiFi Configuration
 - **AP Name**: RadioDoge (fixed)
-- **AP Password**: Configurable (default: radiodoge)
+- **AP Password**: Unique random per board, generated on first boot (configurable)
 - **Internet WiFi**: Configurable via web interface
 - **Persistence**: Both stored in NVS
 - **Auto-Connect**: Automatically connects to stored internet WiFi on boot
@@ -765,7 +799,7 @@ curl "http://192.168.4.1/proxy?url=https://github.com"
 - **Special Characters**: Allowed but not required
 - **Case Sensitive**: Yes
 - **Storage**: Password stored securely in NVS
-- **Reset Option**: Can reset to default password
+- **Reset Option**: Reset generates a new random password (printed on USB serial)
 - **Validation**: Real-time password strength validation
 
 ### Persistent Storage Features
@@ -919,7 +953,7 @@ Transactions can now be automatically forwarded to the internet:
 #### WiFi Connection Issues
 - Verify password is correct
 - Check if device is in range
-- Try resetting to default password
+- Reset the password (`POST /api/password/reset`) and read the new one from the USB serial console
 
 #### Compilation Errors
 - Ensure all libraries are installed

@@ -29,7 +29,7 @@ RadioDoge moves Dogecoin over LoRa radio. Three Rust crates, one Svelte frontend
 | QR / BIP21 payment URIs | `crates/radiodoge-core/src/qr.rs` |
 | Anything crossing the IPC boundary | `radiodoge-gui/src-tauri/src/lib.rs` |
 | UI | `radiodoge-gui/src/lib/components/*.svelte` |
-| Board behaviour | `heltec-firmware-v3/heltec-firmware.ino` |
+| Board behaviour | `heltec-firmware-v3/heltec-firmware-v3.ino` |
 
 **The one rule that matters:** `radiodoge-core` is the single source of protocol truth. The desktop app, the
 CLI, and the Android bridge all call into it. If you find yourself writing protocol logic anywhere else, you
@@ -124,8 +124,9 @@ part overwrote the one before it.
 ### Firmware changes cannot be built in a container
 
 There is no Arduino toolchain here and the Heltec board-package hosts are blocked by network policy, so
-`heltec-firmware-v3/heltec-firmware.ino` cannot be compiled or flashed from a review environment. Anything you
-change there is unverified until someone builds it.
+`heltec-firmware-v3/heltec-firmware-v3.ino` cannot be compiled or flashed from a review environment. The
+**Build Heltec V3 Firmware** workflow (`.github/workflows/build-firmware.yml`) compiles it with arduino-cli on
+every change, so check that job — but a green compile is still not a hardware test.
 
 What that means in practice:
 

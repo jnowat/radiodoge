@@ -287,11 +287,18 @@ $BIN daemon -p /dev/ttyUSB0                                                # gat
    https://resource.heltec.cn/download/package_heltec_esp32_index.json
    ```
 3. **Tools → Board → Boards Manager** → install **Heltec ESP32 Series Dev-Boards**.
-4. **Sketch → Include Library → Manage Libraries** → install `Adafruit GFX Library` and `Adafruit SSD1306`.
-5. Open `heltec-firmware-v3/heltec-firmware.ino`.
+4. **Sketch → Include Library → Manage Libraries** → install `Heltec ESP32 Dev-Boards` (provides
+   `LoRaWan_APP.h`), `Adafruit GFX Library` and `Adafruit SSD1306`.
+5. Open `heltec-firmware-v3/heltec-firmware-v3.ino`.
 6. **Tools → Board → Heltec WiFi LoRa 32(V3)**, pick the port, and **Upload** (921600 baud works reliably).
    If the upload won't start, hold **BOOT**, tap **RESET**, release **BOOT**, then upload.
 7. On boot the OLED shows a splash, then cycles through node address, signal, and packet-count pages.
+   The USB serial console (115200) prints the board's unique WiFi AP password on first boot.
+8. If the serial console loops on `Please provide a correct license!`, look up your chip ID at
+   <https://resource.heltec.cn/search> and send `AT+CDKEY=<32 hex digits>` over serial — see
+   [license activation](heltec-firmware-v3/README.md#4-heltec-license-activation-if-needed).
+
+Prefer the command line? See the [arduino-cli build](heltec-firmware-v3/README.md#command-line-build-arduino-cli).
 
 > A board that has never been configured boots with address **0.0.0**. Set a real address from the app's
 > **Settings** tab, or POST `/api/lora/clear` on the firmware's web UI to reset it to `10.1.1`. Full firmware

@@ -6,7 +6,7 @@
 //!
 //! The two boards are modelled in `board.rs`-free Rust here rather than run on
 //! hardware, but the model is not a convenience: it implements the *same*
-//! framing rules as `heltec-firmware-v3/heltec-firmware.ino`, byte for byte, so
+//! framing rules as `heltec-firmware-v3/heltec-firmware-v3.ino`, byte for byte, so
 //! a change on either side that breaks the agreement fails this test. What it
 //! proves is the property the firmware fix exists for — that a signed
 //! transaction survives being cut into frames, put on a serial byte stream with
