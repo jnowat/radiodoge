@@ -651,7 +651,7 @@
             disabled={isFetchingBalance}
             class="btn-ghost"
             style="padding: 4px 12px; font-size: 0.78rem;"
-            title="Query confirmed balance from Blockbook (Trezor)"
+            title="Query confirmed balance (Dogecoin Core RPC, then public fallback)"
           >
             {isFetchingBalance ? '⏳ Fetching…' : '🔄 Check Balance'}
           </button>
@@ -666,7 +666,7 @@
             {balance.toFixed(8)} DOGE
           </div>
           <div style="font-size: 0.75rem; color: var(--doge-muted); margin-top: 4px;">
-            {balanceSource === 'gateway' ? '📡 Relayed by gateway over LoRa' : '🌐 Confirmed balance from Trezor Blockbook'}
+            {balanceSource === 'gateway' ? '📡 Relayed by gateway over LoRa' : '🌐 Confirmed balance from your Dogecoin node (or public fallback)'}
           </div>
         {:else if balanceError}
           <div style="font-size: 0.8rem; color: #ff6060;">{balanceError}</div>

@@ -50,7 +50,7 @@ cargo tauri dev
 cargo build -p radiodoge-cli --release
 ```
 
-For firmware, open `heltec-firmware-v3/heltec-firmware.ino` in Arduino IDE 2.x — see the
+For firmware, open `heltec-firmware-v3/heltec-firmware-v3.ino` in Arduino IDE 2.x — see the
 [flashing guide](README.md#-flashing-the-heltec-firmware).
 
 ---

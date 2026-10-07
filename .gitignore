@@ -362,3 +362,6 @@ radiodoge-gui/node_modules/
 # Local Tauri build artifacts (generated at build time)
 radiodoge-gui/src-tauri/binaries/
 radiodoge-gui/src-tauri/gen/schemas/
+
+# arduino-cli --export-binaries output
+heltec-firmware-v3/build/

@@ -7,6 +7,48 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
+
+> Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.
+
+### Changed — chain backends (Trezor Blockbook removed as default)
+- **Balance, UTXO fetch, broadcast and `verify-tx` failed with HTTP 403**: Trezor's public Blockbook
+  (`doge1.trezor.io`) now blocks API clients behind Cloudflare. New `radiodoge_core::backend` module with an
+  ordered, configurable backend list and automatic fallback:
+  **Dogecoin Core JSON-RPC** (default, first — `listunspent`/`sendrawtransaction`, user/pass or cookie auth),
+  **BlockCypher** (default fallback), and **Blockbook** (opt-in with an explicit URL). Configure with
+  `RADIODOGE_BACKENDS`, `RADIODOGE_RPC_*`, `RADIODOGE_BLOCKCYPHER_*` or the CLI's `--backends`, `--rpc-url`,
+  `--rpc-user`, `--rpc-cookie` flags; the GUI gains a `set_chain_backends` command. See `docs/BACKENDS.md`.
+- `wallet::fetch_balance_blockbook` is deprecated in favour of `wallet::fetch_balance`.
+- The core backend refuses to report a balance for an address that is not in Core's wallet (it would read as 0)
+  and says how to `importaddress` it as watch-only.
+- GUI CSP no longer allows `doge1.trezor.io` (all chain traffic goes through the Rust backend).
+- Unit tests with a local mock HTTP server cover Core RPC, BlockCypher, Blockbook parsing, error text
+  propagation ("already in block chain" / "already exists") and fallback ordering.
+
+### Fixed
+- **Firmware sketch could not be opened by arduino-cli**: renamed `heltec-firmware-v3/heltec-firmware.ino` →
+  `heltec-firmware-v3/heltec-firmware-v3.ino` so the sketch name matches its folder.
+- **Install instructions pointed at the wrong toolchain**: `LoRaWan_APP.h` comes from Heltec's board package
+  (`https://resource.heltec.cn/download/package_heltec_esp32_index.json`) plus the **Heltec ESP32 Dev-Boards**
+  library, not Espressif's core / a "LoRaWan_APP" library. Added an arduino-cli build + esptool flash recipe.
+- **Documented Heltec license activation**: boards whose flash was fully overwritten loop on
+  `Please provide a correct license!`; restore via `resource.heltec.cn/search` + `AT+CDKEY=` over serial.
+- **Cargo Audit failing weekly**: `cargo update` pulls patched quick-xml (RUSTSEC-2026-0194/0195),
+  quinn-proto (RUSTSEC-2026-0185) and rustls (RUSTSEC-2026-0285); `fxhash` (unmaintained) is no longer in the
+  dependency tree. `cargo audit` reports 0 vulnerabilities.
+
+### Security
+- **No shared default WiFi AP password.** The firmware used to boot with `radiodoge` for every board. Each board
+  now generates a random 16-character password from the hardware RNG on first boot, stores it in NVS and prints
+  it once on the USB serial console. `POST /api/password/reset` generates a fresh one instead of reverting to a
+  shared default. Boards that already have a stored password keep it.
+
+### Added
+- **CI: Build Heltec V3 Firmware** workflow compiles the sketch with arduino-cli and uploads the binaries.
+
+---
+
 ## [Unreleased] — 🕵️ Third Pass: The Web Layer, the Queue & the Wallet File
 
 > **A fan-out audit of everything the first two passes had not read**, with every

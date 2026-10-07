@@ -1,0 +1,60 @@
+# RadioDoge — compile the Heltec WiFi LoRa 32 V3 firmware with arduino-cli.
+#
+# Catches sketch/library breakage before anyone flashes a board. The exported
+# binaries (merged 8 MB image + app-only .bin) are uploaded as an artifact.
+
+name: Build Heltec V3 Firmware
+
+on:
+  push:
+    paths:
+      - 'heltec-firmware-v3/**'
+      - '.github/workflows/build-firmware.yml'
+  pull_request:
+    paths:
+      - 'heltec-firmware-v3/**'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+jobs:
+  firmware:
+    name: Compile heltec-firmware-v3
+    runs-on: ubuntu-latest
+    env:
+      FQBN: Heltec-esp32:esp32:heltec_wifi_lora_32_V3
+      HELTEC_INDEX: https://resource.heltec.cn/download/package_heltec_esp32_index.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Cache Arduino cores and libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-heltec-${{ hashFiles('.github/workflows/build-firmware.yml') }}
+
+      - name: Install Heltec core and libraries
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls "$HELTEC_INDEX"
+          arduino-cli core update-index
+          arduino-cli core install Heltec-esp32:esp32
+          arduino-cli lib install "Heltec ESP32 Dev-Boards" "Adafruit GFX Library" "Adafruit SSD1306"
+
+      - name: Compile
+        run: arduino-cli compile -b "$FQBN" --export-binaries --warnings default heltec-firmware-v3
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: heltec-firmware-v3-bin
+          path: |
+            heltec-firmware-v3/build/*/*.bin
+            heltec-firmware-v3/build/*/flash_args
+          retention-days: 30
