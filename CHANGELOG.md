@@ -7,14 +7,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
 
+_Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
-
-
-
-
-
-## 0.3.23 — Meshtastic packet encoding
+## [0.3.23] — 2026-10-26 — Meshtastic packet encoding
 
 ### Added
 - **Meshtastic packet encoding** (`radiodoge-core::meshtastic`): builds and parses Meshtastic's on-air frame, including the 16-byte header (to/from/id, hop flags, channel hash, next hop, relay), AES-128/256-CTR channel encryption with Meshtastic's nonce and PSK rules (default "AQ==" key), and the `Data` protobuf (portnum and payload; unknown fields skipped). RadioDoge packets are wrapped as `PRIVATE_APP` (256) broadcasts so standard nodes relay them untouched. Verified against the known LongFast channel hash (8). 5 tests.
@@ -23,7 +20,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Notes
 - Bridge mode (actually sending and receiving these frames) still needs a firmware raw-TX/RX command and the radio on a Meshtastic preset (see Channel scan → Meshtastic LongFast). The ROADMAP keeps it open.
 
-## 0.3.22 — Multi-channel scanning
+## [0.3.22] — 2026-10-26 — Multi-channel scanning
 
 ### Added
 - **Multi-channel scan** (Mesh tab, desktop): hops the board across frequency/SF presets (US915 SF7–12 at 915 MHz plus the Meshtastic LongFast channel, or EU868), listens 5–120 s per channel and lists the packets, nodes and best RSSI heard on each. The best channel is starred. You can stop the scan at any time, and the board always retunes to your saved LoRa settings afterwards.
@@ -33,13 +30,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Each hop uses the existing set-LoRa-params command, which the firmware saves to flash, so frequent long scans add some flash wear.
 - Only RadioDoge packets are decoded; Meshtastic frames on a Meshtastic preset are not.
 
-## 0.3.21 — Multi-gateway dashboard
+## [0.3.21] — 2026-10-26 — Multi-gateway dashboard
 
 ### Added
 - **Multi-gateway dashboard** — new "Gateway Fleet" card in Settings merges this PC's gateway snapshot with other gateways' `--stats-file` snapshots (e.g. a shared folder). Fleet totals, per-gateway online/stale status, a merged node table with the strongest-RSSI gateway per node, and a combined activity feed tagged by gateway.
 - New `radiodoge_core::fleet` aggregation module (5 tests) and `get_fleet_stats` command (32-file, 4 MB-per-file limits).
 
-## 0.3.20 — GPS on Android
+## [0.3.20] — 2026-10-26 — GPS on Android
 
 ### Added
 - **GPS on Android** — "Share my location" now works over the Android USB/BLE bridge (new `mobile_build_position` command; JS writes the bytes).
@@ -48,14 +45,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - Neighbor tracking moved out of the desktop read loop into a shared `serial::record_neighbor`.
 
-## 0.3.19 — GPS position sharing
+## [0.3.19] — 2026-10-26 — GPS position sharing
 
 ### Added
 - **GPS position sharing** — opt-in "Share my location" card on the Mesh tab broadcasts `POS:lat,lon,acc` messages (manual entry or device geolocation, OSM preview, unencrypted-LoRa warning).
 - Received `POS:` messages decode to a readable 📍 position; neighbors table gains a Position column with a map link.
 - New `radiodoge_core::geo` module (validation, encode/decode, distance) with tests.
 
-## 0.3.18 — 📦 Store-and-Forward Gateway
+## [0.3.18] — 2026-10-26 — 📦 Store-and-Forward Gateway
 
 ### Added
 - **Store-and-forward in gateway mode.** A signed transaction whose three broadcast attempts all fail (usually
@@ -74,7 +71,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - "Broadcast failed" on the dashboard now means the transaction expired in the outbox, not that the first three
   attempts failed.
 
-## 0.3.17 — 📊 Gateway Dashboard
+## [0.3.17] — 2026-10-26 — 📊 Gateway Dashboard
 
 ### Added
 - **Gateway dashboard** (Settings → Gateway Mode, shown while the gateway daemon runs): uptime, packets heard
@@ -89,7 +86,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Privacy
 - Balance events record the amount only, never the address that was asked about.
-## [Unreleased] — WebAssembly packet inspector
+## [0.3.17] (earlier work, shipped in 0.3.17) — WebAssembly packet inspector
 
 ### Added
 - **`crates/radiodoge-inspector`** — decode RadioDoge packets from a hex dump in the browser (`www/index.html`,
@@ -99,7 +96,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `radiodoge-core` gains a default `native` feature. With `default-features = false` only `radio` and `types`
   build (no Tokio, serial, crypto or HTTP), which makes the protocol usable from wasm32. `radio::decode_payload`
   is now public. Existing users are unaffected.
-## [Unreleased] — Fee estimation
+## [0.3.17] (earlier work, shipped in 0.3.17) — Fee estimation
 
 ### Added
 - **Network fee estimation.** When no fee is given, signing now pays the chain backends' current rate (Core
@@ -111,7 +108,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CLI: `radiodoge-cli fee [--from D… --amount N]` prints the rate and the fee a send would pay.
 - Core: `backend::fee_rate_from` / `fetch_fee_rate`, `wallet::network_fee_rate`, `estimate_fee`,
   `estimate_fee_for`, `fee_for_size`, `p2pkh_tx_size`, `build_signed_transaction_at_rate`; Tauri `estimate_fee`.
-## [Unreleased] — Windows app overhaul
+## [0.3.17] (earlier work, shipped in 0.3.17) — Windows app overhaul
 
 ### Changed — GUI layout and navigation
 - Navigation is now a grouped left sidebar (Device / Wallet / App) on wide windows, with a live device-status card
@@ -129,12 +126,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed — Windows packaging
 - Window title `RadioDoge`, default 1280×820, minimum 760×560 (the sidebar collapses below 860 px).
 - Installer metadata: publisher, homepage, NSIS installer icon, per-user NSIS install (no admin prompt).
-## [Unreleased] - Dependency security updates
+## [0.3.17] (earlier work, shipped in 0.3.17) — Dependency security updates
 
 ### Security
 - Bumped `rustls` 0.23.45 -> 0.23.46, `rustls-webpki` 0.103.15 -> 0.103.16, `webpki-roots` 1.0.9 -> 1.0.11 and `tokio` 1.53.2 -> 1.54.1 (Cargo.lock only). Clears RUSTSEC-2026-0347/0348/0349 and related rustls advisories, RUSTSEC-2026-0381/0382 and the tokio unsoundness warning RUSTSEC-2026-0386. `cargo audit` now reports 0 vulnerabilities (7 allowed unmaintained/unsound warnings in transitive GTK/zbus/lru deps remain).
 
-## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
+## [0.3.17] (earlier work, shipped in 0.3.17) — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
 > Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.
 
@@ -199,7 +196,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased] — 🕵️ Third Pass: The Web Layer, the Queue & the Wallet File
+## [0.3.17] (earlier work, shipped in 0.3.17) — 🕵️ Third Pass: The Web Layer, the Queue & the Wallet File
 
 > **A fan-out audit of everything the first two passes had not read**, with every
 > finding independently checked before it was acted on. Two of them could destroy
@@ -439,7 +436,7 @@ run-event.
 
 ---
 
-## [Unreleased] — 🔬 Second Pass: Memory Safety, Serial Hygiene & a Test Gate
+## [0.3.17] (earlier work, shipped in 0.3.17) — 🔬 Second Pass: Memory Safety, Serial Hygiene & a Test Gate
 
 > **A follow-up audit of everything the transaction work did not touch.** The
 > headline: the firmware could be made to write past the end of three arrays by
@@ -562,7 +559,7 @@ paths share one frame writer instead of two copies of the pacing loop.
 
 ---
 
-## [Unreleased] — 🐕 Dogecoin Over LoRa, End to End — Much Send. Very Multipart. Wow.
+## [0.3.17] (earlier work, shipped in 0.3.17) — 🐕 Dogecoin Over LoRa, End to End — Much Send. Very Multipart. Wow.
 
 > **A real signed Dogecoin transaction can now travel from an offline device, over LoRa, to a board attached to
 > an internet gateway, and onto the network.** Three independent defects each broke that path on their own; all
@@ -673,7 +670,7 @@ correct even when the network returns no id.
 
 ---
 
-## [Unreleased] — 🔍 Full Review: Build, Framing & Honest Docs — Much Audit. Very Fixed. Wow.
+## [0.3.17] (earlier work, shipped in 0.3.17) — 🔍 Full Review: Build, Framing & Honest Docs — Much Audit. Very Fixed. Wow.
 
 > **A full-repository review pass. The headline: a clean clone could not build at all, both packet-framing
 > loops corrupted split reads, and the LoRa transaction path silently failed for most real transactions.**
@@ -754,7 +751,7 @@ correct even when the network returns no id.
 
 ---
 
-## [Unreleased] — 🕸️ Mesh Reliability + Supply-Chain CI — Much Robust. Very Audited. Wow.
+## [0.3.17] (earlier work, shipped in 0.3.17) — 🕸️ Mesh Reliability + Supply-Chain CI — Much Robust. Very Audited. Wow.
 
 > **Groundwork for v0.4.x mesh reliability: the firmware now tells the host when it hears an over-the-air ACK or
 > Ping, broadcast storms are suppressed by a dedup table, and CI fails on any known CVE in a dependency.**
