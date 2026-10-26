@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.33] - 2026-10-26
+
+### Added
+- Unit tests for serial frame parsing over mock bytes (no hardware): back-to-back frames, split reads, stale partial heads, quiet-line framing of variable-length messages, noise resync, multipart parts, and settings/battery/MAC/firmware payload decoding.
+
+### Changed
+- The serial read loop's framing and reply-payload decoding moved into small pure helpers (`take_frame`, `parse_settings_payload`, …) so they can be tested. No behavior change.
+
 ## [0.3.32] - 2026-10-26
 
 ### Added
