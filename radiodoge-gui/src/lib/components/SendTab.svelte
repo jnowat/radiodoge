@@ -18,6 +18,7 @@
   let toAddress = $state('');
   let amountDoge = $state('');
   let memo = $state('');
+  let feeDoge = $state('');  // empty = recommended (0.01 DOGE per started kB)
   let isSending = $state(false);
   let success = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -75,12 +76,20 @@
     return !isNaN(n) && n > 0;
   });
 
+  /** Empty fee means "recommended"; otherwise a non-negative number. */
+  const isValidFee = $derived(() => {
+    if (!feeDoge.trim()) return true;
+    const n = parseFloat(feeDoge);
+    return !isNaN(n) && n >= 0;
+  });
+
   /** True only when ALL conditions are met — including a loaded wallet. */
   const canSend = $derived(() =>
     connection.isConnected &&
     wallet.isGenerated &&
     isValidAddress() &&
     isValidAmount() &&
+    isValidFee() &&
     !isSending
   );
 
@@ -116,6 +125,7 @@
           amountDoge: parseFloat(amountDoge),
           memo: memo.trim() || undefined,
           fromPrivateKeyWif: wallet.privateKeyWif || undefined,
+          feeDoge: feeDoge.trim() ? parseFloat(feeDoge) : undefined,
         }
       });
 
@@ -364,9 +374,21 @@
         font-size: 0.78rem;
         color: var(--doge-muted);
       ">
-        <span>Network fee</span>
-        <span style="font-family: var(--font-mono); color: var(--doge-text);">1.00000000 DOGE (fixed)</span>
+        <label for="send-fee">Network fee (DOGE)</label>
+        <input
+          id="send-fee"
+          bind:value={feeDoge}
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="0.01 / kB (recommended)"
+          class="input-doge"
+          style="max-width: 190px; font-family: var(--font-mono); text-align: right;"
+        />
       </div>
+      {#if !isValidFee()}
+        <p style="margin: 4px 0 0; font-size: 0.75rem; color: var(--doge-red);">⚠️ Fee must be 0 or more DOGE</p>
+      {/if}
     {/if}
 
     <!-- Send button -->
