@@ -458,9 +458,10 @@ Unsigned builds are fine for development; Windows may show a SmartScreen prompt 
 - **Wallet keys** are encrypted at rest with ChaCha20-Poly1305, keyed by argon2id (64 MiB, 2 iterations) from
   your passphrase. Legacy plaintext wallets are auto-detected and the app nudges you to re-encrypt.
 - **Your recovery phrase is shown once** on generate and never stored — write it down offline.
-- **The firmware web UI has no authentication.** Anyone on the board's WiFi AP can reach every `/api/*` route,
-  and a couple of status endpoints echo stored credentials in plaintext. Treat a firmware gateway as a device
-  on a trusted network only. This is tracked in the [roadmap](ROADMAP.md#-known-limitations--in-progress).
+- **The firmware web UI and REST API require a login** (HTTP Basic): user `radiodoge`, password = the board's
+  WiFi AP password. Only `/ping`, `/status`, `/api/ping` and `/api/status` are open. Basic auth is not
+  encrypted on the wire, so the AP's WPA2 is what protects it; on a shared STA network, treat the board as
+  trusted-network-only.
 - RadioDoge is beta software for the Dogecoin community. Don't send more than you're willing to experiment with.
 
 ---
