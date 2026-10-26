@@ -331,8 +331,8 @@
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
     <div>
-      <h2 style="margin: 0 0 4px 0; font-size: 1.3rem; font-weight: 700;">👛 Dogecoin Wallet</h2>
-      <p style="margin: 0; color: var(--doge-muted); font-size: 0.85rem;">
+      <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">👛 Dogecoin Wallet</h2>
+      <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
         Generate keys, share your address, receive DOGE
       </p>
     </div>
@@ -385,14 +385,14 @@
       aria-label="Import WIF private key"
     >
       <div style="margin-bottom: 12px;">
-        <div style="font-weight: 600; font-size: 0.9rem; margin-bottom: 6px;">📥 Import WIF Private Key</div>
+        <div style="font-weight: 600; font-size: var(--fs-base); margin-bottom: 6px;">📥 Import WIF Private Key</div>
         <!-- Prominent hot-wallet warning -->
         <div style="
           padding: 10px 14px;
           background: rgba(255, 68, 68, 0.12);
           border: 1px solid rgba(255, 68, 68, 0.5);
           border-radius: 8px;
-          font-size: 0.8rem;
+          font-size: var(--fs-sm);
           color: var(--doge-red);
           line-height: 1.6;
           margin-bottom: 12px;
@@ -405,7 +405,7 @@
           placeholder="Paste your Dogecoin WIF private key here (starts with 'Q')..."
           rows="3"
           class="input-doge"
-          style="width: 100%; resize: vertical; font-family: var(--font-mono); font-size: 0.8rem;"
+          style="width: 100%; resize: vertical; font-family: var(--font-mono); font-size: var(--fs-sm);"
           aria-label="WIF private key input"
           spellcheck="false"
           autocomplete="off"
@@ -418,7 +418,7 @@
             border: 1px solid rgba(255, 68, 68, 0.3);
             border-radius: 6px;
             color: var(--doge-red);
-            font-size: 0.78rem;
+            font-size: var(--fs-sm);
           " role="alert">
             ❌ {importError}
           </div>
@@ -462,17 +462,17 @@
       role="region"
       aria-label="Import from mnemonic phrase"
     >
-      <div style="font-weight: 600; font-size: 0.9rem; margin-bottom: 10px;">🌱 Restore from Recovery Phrase</div>
-      <p style="margin: 0 0 12px 0; font-size: 0.8rem; color: var(--doge-muted); line-height: 1.6;">
+      <div style="font-weight: 600; font-size: var(--fs-base); margin-bottom: 10px;">🌱 Restore from Recovery Phrase</div>
+      <p style="margin: 0 0 12px 0; font-size: var(--fs-sm); color: var(--doge-muted); line-height: 1.6;">
         Enter your 12 or 24-word BIP39 recovery phrase (space-separated).
-        Derives key at <span class="mono" style="font-size: 0.75rem;">m/44'/3'/0'/0/0</span> (Dogecoin BIP44).
+        Derives key at <span class="mono" style="font-size: var(--fs-xs);">m/44'/3'/0'/0/0</span> (Dogecoin BIP44).
       </p>
       <textarea
         bind:value={importMnemonicPhrase}
         placeholder="word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12"
         rows="3"
         class="input-doge"
-        style="width: 100%; resize: vertical; font-family: var(--font-mono); font-size: 0.8rem;"
+        style="width: 100%; resize: vertical; font-family: var(--font-mono); font-size: var(--fs-sm);"
         aria-label="BIP39 mnemonic phrase input"
         spellcheck="false"
         autocomplete="off"
@@ -485,7 +485,7 @@
           border: 1px solid rgba(255, 68, 68, 0.3);
           border-radius: 6px;
           color: var(--doge-red);
-          font-size: 0.78rem;
+          font-size: var(--fs-sm);
         " role="alert">
           ❌ {importMnemonicError}
         </div>
@@ -524,7 +524,7 @@
       border: 1px solid rgba(255, 68, 68, 0.3);
       border-radius: 8px;
       color: var(--doge-red);
-      font-size: 0.85rem;
+      font-size: var(--fs-base);
       margin-bottom: 20px;
     " role="alert">
       ❌ {wallet.error}
@@ -544,7 +544,7 @@
     ">
       <div style="font-size: 4rem; margin-bottom: 16px;" aria-hidden="true">👛</div>
       <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">No wallet yet</h3>
-      <p style="margin: 0 0 24px 0; font-size: 0.9rem;">
+      <p style="margin: 0 0 24px 0; font-size: var(--fs-base);">
         Click "Generate Wallet" to create a fresh Dogecoin address.<br/>
         Much security. Very cryptography. Wow.
       </p>
@@ -552,7 +552,7 @@
         onclick={generateWallet}
         class="btn-doge"
         title="Generate a new Dogecoin keypair — pure Rust secp256k1, no network, no cloud. Very private. Much wow."
-        style="font-size: 1.1rem; padding: 14px 32px;"
+        style="font-size: var(--fs-lg); padding: 14px 32px;"
       >
         🎲 Generate Wallet
       </button>
@@ -573,7 +573,7 @@
             title="Show/hide a scannable QR code for this Dogecoin address. Share with senders — safe to show publicly!"
             aria-expanded={showQR}
             aria-controls="address-qr-panel"
-            style="padding: 4px 12px; font-size: 0.78rem; display: flex; align-items: center; gap: 6px;"
+            style="padding: 4px 12px; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px;"
           >
             {showQR ? '🙈 Hide QR' : '📷 Show Address QR'}
           </button>
@@ -590,7 +590,7 @@
         ">
           <span
             class="mono"
-            style="flex: 1; color: var(--doge-yellow); font-size: 0.85rem;"
+            style="flex: 1; color: var(--doge-yellow); font-size: var(--fs-base);"
             data-selectable
             aria-label="Dogecoin address: {wallet.address}"
           >
@@ -601,7 +601,7 @@
             class="btn-ghost"
             title="Copy Dogecoin address to clipboard. Share this freely — it's your public receive address."
             aria-label="Copy address to clipboard"
-            style="padding: 4px 10px; font-size: 0.78rem; flex-shrink: 0;"
+            style="padding: 4px 10px; font-size: var(--fs-sm); flex-shrink: 0;"
           >
             {copyFeedback.addr ? '✅ Copied!' : '📋 Copy'}
           </button>
@@ -625,7 +625,7 @@
             "
           >
             <QRCode value={wallet.address} size={200} />
-            <p style="color: var(--doge-muted); font-size: 0.78rem; text-align: center; margin: 0; max-width: 240px;">
+            <p style="color: var(--doge-muted); font-size: var(--fs-sm); text-align: center; margin: 0; max-width: 240px;">
               📷 Share this QR code to receive DOGE — it is your <strong style="color: var(--doge-yellow);">public address</strong> only.<br/>
               <span style="font-style: italic;">Much scannable. Very safe. Wow.</span>
             </p>
@@ -634,7 +634,7 @@
               class="btn-ghost"
               title="Copy address to clipboard"
               aria-label="Copy address from QR panel"
-              style="font-size: 0.78rem; padding: 5px 16px;"
+              style="font-size: var(--fs-sm); padding: 5px 16px;"
             >
               {copyFeedback.addrQR ? '✅ Copied!' : '📋 Copy Address'}
             </button>
@@ -650,7 +650,7 @@
             onclick={checkBalance}
             disabled={isFetchingBalance}
             class="btn-ghost"
-            style="padding: 4px 12px; font-size: 0.78rem;"
+            style="padding: 4px 12px; font-size: var(--fs-sm);"
             title="Query confirmed balance (Dogecoin Core RPC, then public fallback)"
           >
             {isFetchingBalance ? '⏳ Fetching…' : '🔄 Check Balance'}
@@ -658,20 +658,20 @@
         </div>
         {#if balance !== null}
           <div style="
-            font-size: 1.5rem; font-weight: 700;
+            font-size: var(--fs-xl); font-weight: 700;
             color: var(--doge-yellow);
             font-family: var(--font-mono);
             letter-spacing: -0.02em;
           ">
             {balance.toFixed(8)} DOGE
           </div>
-          <div style="font-size: 0.75rem; color: var(--doge-muted); margin-top: 4px;">
+          <div style="font-size: var(--fs-xs); color: var(--doge-muted); margin-top: 4px;">
             {balanceSource === 'gateway' ? '📡 Relayed by gateway over LoRa' : '🌐 Confirmed balance from your Dogecoin node (or public fallback)'}
           </div>
         {:else if balanceError}
-          <div style="font-size: 0.8rem; color: #ff6060;">{balanceError}</div>
+          <div style="font-size: var(--fs-sm); color: #ff6060;">{balanceError}</div>
         {:else}
-          <div style="font-size: 0.82rem; color: var(--doge-muted);">Click "Check Balance" to query the Dogecoin network.</div>
+          <div style="font-size: var(--fs-sm); color: var(--doge-muted);">Click "Check Balance" to query the Dogecoin network.</div>
         {/if}
       </div>
 
@@ -689,7 +689,7 @@
         ">
           <span
             class="mono"
-            style="flex: 1; color: var(--doge-text); font-size: 0.75rem; word-break: break-all;"
+            style="flex: 1; color: var(--doge-text); font-size: var(--fs-xs); word-break: break-all;"
             data-selectable
           >
             {wallet.publicKeyHex}
@@ -699,7 +699,7 @@
             class="btn-ghost"
             title="Copy the 33-byte compressed secp256k1 public key (66 hex chars). Safe to share — derived from private key but not reversible."
             aria-label="Copy public key to clipboard"
-            style="padding: 4px 10px; font-size: 0.78rem; flex-shrink: 0;"
+            style="padding: 4px 10px; font-size: var(--fs-sm); flex-shrink: 0;"
           >
             {copyFeedback.pubkey ? '✅' : '📋'}
           </button>
@@ -718,7 +718,7 @@
               : 'Reveal private key — make sure nobody is looking over your shoulder! Much secret.'}"
             aria-label="{wallet.privateKeyVisible ? 'Hide private key' : 'Reveal private key'}"
             aria-pressed={wallet.privateKeyVisible}
-            style="padding: 3px 10px; font-size: 0.75rem; border-color: rgba(255,140,0,0.4);"
+            style="padding: 3px 10px; font-size: var(--fs-xs); border-color: rgba(255,140,0,0.4);"
           >
             {wallet.privateKeyVisible ? '🙈 Hide' : '👁️ Reveal'}
           </button>
@@ -736,7 +736,7 @@
           ">
             <span
               class="mono"
-              style="flex: 1; color: var(--doge-orange); font-size: 0.8rem; word-break: break-all;"
+              style="flex: 1; color: var(--doge-orange); font-size: var(--fs-sm); word-break: break-all;"
               data-selectable
               aria-label="Private key in WIF format"
             >
@@ -747,7 +747,7 @@
               class="btn-ghost"
               title="Copy WIF private key to clipboard. ⚠️ NEVER share this with anyone! Very secret. Much danger."
               aria-label="Copy private key to clipboard"
-              style="padding: 4px 10px; font-size: 0.78rem; flex-shrink: 0; border-color: rgba(255,140,0,0.4);"
+              style="padding: 4px 10px; font-size: var(--fs-sm); flex-shrink: 0; border-color: rgba(255,140,0,0.4);"
             >
               {copyFeedback.privkey ? '✅' : '📋'}
             </button>
@@ -759,7 +759,7 @@
             padding: 10px 14px;
             background: rgba(255, 140, 0, 0.08);
             border-radius: 8px;
-            font-size: 0.78rem;
+            font-size: var(--fs-sm);
             color: var(--doge-orange);
             line-height: 1.6;
           " role="alert">
@@ -774,7 +774,7 @@
             border: 1px solid var(--doge-border);
             border-radius: 8px;
             color: var(--doge-subtle);
-            font-size: 0.85rem;
+            font-size: var(--fs-base);
             letter-spacing: 0.3em;
             font-family: var(--font-mono);
             user-select: none;
@@ -790,7 +790,7 @@
         background: rgba(245, 197, 24, 0.05);
         border: 1px solid rgba(245, 197, 24, 0.2);
         border-radius: 8px;
-        font-size: 0.8rem;
+        font-size: var(--fs-sm);
         color: var(--doge-muted);
         line-height: 1.6;
       ">
@@ -805,10 +805,10 @@
         background: rgba(255,196,0,0.04);
         border: 1px solid rgba(255,196,0,0.2);
         border-radius: 8px;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         line-height: 1.6;
       ">
-        <p style="margin: 0 0 8px 0; font-weight: 700; color: var(--doge-yellow); font-size: 0.88rem;">
+        <p style="margin: 0 0 8px 0; font-weight: 700; color: var(--doge-yellow); font-size: var(--fs-base);">
           🔐 Encrypted Wallet Storage
         </p>
         <p style="margin: 0 0 10px 0; color: var(--doge-muted);">
@@ -816,16 +816,16 @@
           The passphrase is never stored — if you forget it, you cannot recover the saved wallet.
         </p>
         {#if walletIsLegacy}
-          <p style="margin: 0 0 10px 0; font-size: 0.78rem; color: #ff8080;">
+          <p style="margin: 0 0 10px 0; font-size: var(--fs-sm); color: #ff8080;">
             ⚠️ Your saved wallet uses an old unencrypted format. Click "Save Encrypted" to upgrade it.
           </p>
         {/if}
         <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
           {#if walletSaved && !walletIsLegacy}
-            <span style="font-size: 0.78rem; color: var(--doge-neon);">🔐 Wallet saved (encrypted)</span>
+            <span style="font-size: var(--fs-sm); color: var(--doge-neon);">🔐 Wallet saved (encrypted)</span>
             <button
               onclick={openSaveModal}
-              style="padding: 6px 12px; border: 1px solid rgba(255,196,0,0.3); background: rgba(255,196,0,0.06); color: var(--doge-yellow); border-radius: 6px; cursor: pointer; font-size: 0.78rem;"
+              style="padding: 6px 12px; border: 1px solid rgba(255,196,0,0.3); background: rgba(255,196,0,0.06); color: var(--doge-yellow); border-radius: 6px; cursor: pointer; font-size: var(--fs-sm);"
             >
               🔑 Change passphrase
             </button>
@@ -834,26 +834,26 @@
               title={confirmingDelete
                 ? 'This permanently deletes the encrypted key file. There is no undo.'
                 : 'Delete the encrypted wallet file from this device'}
-              style="padding: 6px 12px; border: 1px solid rgba(255,60,60,{confirmingDelete ? '0.9' : '0.4'}); background: rgba(255,60,60,{confirmingDelete ? '0.18' : '0.08'}); color: #ff8080; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"
+              style="padding: 6px 12px; border: 1px solid rgba(255,60,60,{confirmingDelete ? '0.9' : '0.4'}); background: rgba(255,60,60,{confirmingDelete ? '0.18' : '0.08'}); color: #ff8080; border-radius: 6px; cursor: pointer; font-size: var(--fs-sm);"
             >
               {confirmingDelete ? '⚠️ Click again to delete permanently' : '🗑️ Remove saved wallet'}
             </button>
             {#if confirmingDelete}
               <button
                 onclick={() => { confirmingDelete = false; deleteError = null; }}
-                style="padding: 6px 12px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 6px; cursor: pointer; font-size: 0.78rem;"
+                style="padding: 6px 12px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 6px; cursor: pointer; font-size: var(--fs-sm);"
               >
                 Cancel
               </button>
             {/if}
             {#if deleteError}
-              <span style="font-size: 0.75rem; color: #ff6060;" role="alert">Delete failed: {deleteError}</span>
+              <span style="font-size: var(--fs-xs); color: #ff6060;" role="alert">Delete failed: {deleteError}</span>
             {/if}
           {:else}
             <button
               onclick={openSaveModal}
               class="btn-doge"
-              style="padding: 6px 14px; font-size: 0.8rem;"
+              style="padding: 6px 14px; font-size: var(--fs-sm);"
             >
               🔐 Save Encrypted
             </button>
@@ -882,12 +882,12 @@
         width: 100%;
         box-shadow: 0 0 40px rgba(255,196,0,0.12);
       ">
-        <h3 style="margin: 0 0 10px 0; color: var(--doge-yellow); font-size: 1.05rem;">🔐 Encrypt &amp; Save Wallet</h3>
-        <p style="margin: 0 0 16px 0; font-size: 0.83rem; color: var(--doge-muted); line-height: 1.6;">
+        <h3 style="margin: 0 0 10px 0; color: var(--doge-yellow); font-size: var(--fs-md);">🔐 Encrypt &amp; Save Wallet</h3>
+        <p style="margin: 0 0 16px 0; font-size: var(--fs-sm); color: var(--doge-muted); line-height: 1.6;">
           Your private key will be encrypted with <strong style="color:var(--doge-text);">ChaCha20-Poly1305</strong> using a passphrase you choose.
           Pick something strong — there is no recovery option if you forget it.
         </p>
-        <label for="save-passphrase" style="display:block; font-size:0.8rem; color:var(--doge-muted); margin-bottom:4px;">Passphrase (min. 8 chars)</label>
+        <label for="save-passphrase" style="display:block; font-size: var(--fs-sm); color:var(--doge-muted); margin-bottom:4px;">Passphrase (min. 8 chars)</label>
         <input
           id="save-passphrase"
           type="password"
@@ -897,11 +897,11 @@
           style="
             width: 100%; padding: 10px 14px; box-sizing: border-box;
             background: var(--doge-dark); border: 1px solid rgba(255,196,0,0.3);
-            border-radius: 8px; color: var(--doge-text); font-size: 0.9rem;
-            margin-bottom: 10px; outline: none;
+            border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base);
+            margin-bottom: 10px;
           "
         />
-        <label for="save-passphrase-confirm" style="display:block; font-size:0.8rem; color:var(--doge-muted); margin-bottom:4px;">Confirm passphrase</label>
+        <label for="save-passphrase-confirm" style="display:block; font-size: var(--fs-sm); color:var(--doge-muted); margin-bottom:4px;">Confirm passphrase</label>
         <input
           id="save-passphrase-confirm"
           type="password"
@@ -911,12 +911,12 @@
           style="
             width: 100%; padding: 10px 14px; box-sizing: border-box;
             background: var(--doge-dark); border: 1px solid rgba(255,196,0,0.3);
-            border-radius: 8px; color: var(--doge-text); font-size: 0.9rem;
-            margin-bottom: 10px; outline: none;
+            border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base);
+            margin-bottom: 10px;
           "
         />
         {#if saveWalletError}
-          <p style="margin: 0 0 10px 0; font-size: 0.78rem; color: #ff6060;">{saveWalletError}</p>
+          <p style="margin: 0 0 10px 0; font-size: var(--fs-sm); color: #ff6060;">{saveWalletError}</p>
         {/if}
         {#if replaceWarningAddress}
           <!--
@@ -928,7 +928,7 @@
             style="
               margin: 0 0 12px 0; padding: 12px 14px; border-radius: 8px;
               border: 1px solid rgba(255,96,96,0.5); background: rgba(255,96,96,0.08);
-              font-size: 0.8rem; line-height: 1.55; color: var(--doge-text);
+              font-size: var(--fs-sm); line-height: 1.55; color: var(--doge-text);
             "
             role="alert"
           >
@@ -942,7 +942,7 @@
         <div style="display: flex; gap: 8px; justify-content: flex-end;">
           <button
             onclick={() => { showSaveModal = false; savePassphrase = ''; savePassphraseConfirm = ''; saveWalletError = null; replaceWarningAddress = null; }}
-            style="padding: 8px 18px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 8px; cursor: pointer; font-size: 0.85rem;"
+            style="padding: 8px 18px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 8px; cursor: pointer; font-size: var(--fs-base);"
           >
             Cancel
           </button>
@@ -950,7 +950,7 @@
             <button
               onclick={() => confirmSaveWallet(true)}
               disabled={isSavingWallet}
-              style="padding: 8px 18px; font-size: 0.85rem; border: 1px solid #ff6060; background: rgba(255,96,96,0.12); color: #ff8080; border-radius: 8px; cursor: pointer; opacity: {isSavingWallet ? 0.6 : 1};"
+              style="padding: 8px 18px; font-size: var(--fs-base); border: 1px solid #ff6060; background: rgba(255,96,96,0.12); color: #ff8080; border-radius: 8px; cursor: pointer; opacity: {isSavingWallet ? 0.6 : 1};"
             >
               {isSavingWallet ? '⏳ Encrypting…' : '⚠️ Replace saved wallet'}
             </button>
@@ -959,7 +959,7 @@
               onclick={() => confirmSaveWallet(false)}
               disabled={isSavingWallet}
               class="btn-doge"
-              style="padding: 8px 18px; font-size: 0.85rem; opacity: {isSavingWallet ? 0.6 : 1};"
+              style="padding: 8px 18px; font-size: var(--fs-base); opacity: {isSavingWallet ? 0.6 : 1};"
             >
               {isSavingWallet ? '⏳ Encrypting…' : '🔐 Save Encrypted'}
             </button>
@@ -989,8 +989,8 @@
         box-shadow: 0 0 48px rgba(0,220,110,0.12);
       ">
         <div style="font-size: 2.2rem; text-align: center; margin-bottom: 10px;">🌱</div>
-        <h3 style="margin: 0 0 6px 0; color: #00dc6e; font-size: 1.05rem; text-align: center;">Save Your Recovery Phrase</h3>
-        <p style="margin: 0 0 18px 0; font-size: 0.82rem; color: var(--doge-muted); text-align: center; line-height: 1.6;">
+        <h3 style="margin: 0 0 6px 0; color: #00dc6e; font-size: var(--fs-md); text-align: center;">Save Your Recovery Phrase</h3>
+        <p style="margin: 0 0 18px 0; font-size: var(--fs-sm); color: var(--doge-muted); text-align: center; line-height: 1.6;">
           Write these 12 words down on paper and store them offline.
           Anyone with this phrase can access your wallet.
           <strong style="color: var(--doge-text);">Never share it.</strong>
@@ -1015,9 +1015,9 @@
               background: rgba(0,220,110,0.06);
               border: 1px solid rgba(0,220,110,0.15);
               border-radius: 6px;
-              font-size: 0.82rem;
+              font-size: var(--fs-sm);
             ">
-              <span style="color: var(--doge-subtle); font-size: 0.7rem; min-width: 18px;">{i + 1}.</span>
+              <span style="color: var(--doge-subtle); font-size: var(--fs-2xs); min-width: 18px;">{i + 1}.</span>
               <span class="mono" style="color: var(--doge-text);">{word}</span>
             </div>
           {/each}
@@ -1025,7 +1025,7 @@
         <button
           onclick={() => copyToClipboard(generatedMnemonic ?? '', 'mnemonic')}
           class="btn-ghost"
-          style="width: 100%; margin-bottom: 14px; font-size: 0.82rem;"
+          style="width: 100%; margin-bottom: 14px; font-size: var(--fs-sm);"
         >
           {copyFeedback.mnemonic ? '✅ Copied!' : '📋 Copy phrase to clipboard'}
         </button>
@@ -1034,7 +1034,7 @@
           background: rgba(255, 140, 0, 0.08);
           border: 1px solid rgba(255, 140, 0, 0.3);
           border-radius: 8px;
-          font-size: 0.78rem;
+          font-size: var(--fs-sm);
           color: var(--doge-orange);
           margin-bottom: 16px;
           line-height: 1.6;
@@ -1044,7 +1044,7 @@
         <button
           onclick={() => { showMnemonicBackup = false; generatedMnemonic = null; }}
           class="btn-doge"
-          style="width: 100%; padding: 12px; font-size: 0.9rem;"
+          style="width: 100%; padding: 12px; font-size: var(--fs-base);"
         >
           ✅ I've saved my recovery phrase
         </button>
@@ -1073,12 +1073,14 @@
         text-align: center;
       ">
         <div style="font-size: 2.5rem; margin-bottom: 10px;">🔐</div>
-        <h3 style="margin: 0 0 8px 0; color: var(--doge-yellow); font-size: 1.05rem;">Unlock Saved Wallet</h3>
-        <p style="margin: 0 0 16px 0; font-size: 0.83rem; color: var(--doge-muted); line-height: 1.5;">
+        <h3 style="margin: 0 0 8px 0; color: var(--doge-yellow); font-size: var(--fs-md);">Unlock Saved Wallet</h3>
+        <p style="margin: 0 0 16px 0; font-size: var(--fs-sm); color: var(--doge-muted); line-height: 1.5;">
           An encrypted wallet was found on disk. Enter your passphrase to load it.
         </p>
         <input
           type="password"
+          aria-label="Wallet passphrase"
+          autocomplete="current-password"
           placeholder="Enter passphrase…"
           bind:value={unlockPassphrase}
           autocomplete="current-password"
@@ -1086,17 +1088,17 @@
           style="
             width: 100%; padding: 10px 14px; box-sizing: border-box;
             background: var(--doge-dark); border: 1px solid rgba(255,196,0,0.35);
-            border-radius: 8px; color: var(--doge-text); font-size: 0.9rem;
-            margin-bottom: 10px; outline: none; text-align: left;
+            border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base);
+            margin-bottom: 10px; text-align: left;
           "
         />
         {#if unlockError}
-          <p style="margin: 0 0 10px 0; font-size: 0.78rem; color: #ff6060;">{unlockError}</p>
+          <p style="margin: 0 0 10px 0; font-size: var(--fs-sm); color: #ff6060;">{unlockError}</p>
         {/if}
         <div style="display: flex; gap: 8px; justify-content: center;">
           <button
             onclick={() => { showUnlockModal = false; unlockPassphrase = ''; unlockError = null; }}
-            style="padding: 8px 18px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 8px; cursor: pointer; font-size: 0.85rem;"
+            style="padding: 8px 18px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 8px; cursor: pointer; font-size: var(--fs-base);"
           >
             Skip
           </button>
@@ -1104,7 +1106,7 @@
             onclick={unlockWallet}
             disabled={isUnlocking}
             class="btn-doge"
-            style="padding: 8px 18px; font-size: 0.85rem; opacity: {isUnlocking ? 0.6 : 1};"
+            style="padding: 8px 18px; font-size: var(--fs-base); opacity: {isUnlocking ? 0.6 : 1};"
           >
             {isUnlocking ? '⏳ Unlocking…' : '🔓 Unlock'}
           </button>

@@ -48,7 +48,7 @@
 
 <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
   {#if error}
-    <div style="color: var(--doge-red); font-size: 0.8rem;">{error}</div>
+    <div style="color: var(--doge-red); font-size: var(--fs-sm);">{error}</div>
   {:else if dataUrl}
     <div
       style="
@@ -61,7 +61,7 @@
       <img src={dataUrl} alt="QR Code for {value}" width={size} height={size} />
     </div>
     {#if label}
-      <p style="color: var(--doge-muted); font-size: 0.75rem; text-align: center; margin: 0;">
+      <p style="color: var(--doge-muted); font-size: var(--fs-xs); text-align: center; margin: 0;">
         {label}
       </p>
     {/if}
@@ -75,7 +75,7 @@
       align-items: center;
       justify-content: center;
       color: var(--doge-muted);
-      font-size: 0.8rem;
+      font-size: var(--fs-sm);
     ">
       Generating QR...
     </div>

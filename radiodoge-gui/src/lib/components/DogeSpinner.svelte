@@ -31,6 +31,6 @@
     aria-label="Loading"
   >🐕</span>
   {#if message}
-    <span style="color: var(--doge-muted); font-size: 0.8rem;">{message}</span>
+    <span style="color: var(--doge-muted); font-size: var(--fs-sm);">{message}</span>
   {/if}
 </div>

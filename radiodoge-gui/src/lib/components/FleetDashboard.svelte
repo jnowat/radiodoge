@@ -77,7 +77,7 @@
   </div>
 
   <div class="add">
-    <input bind:value={draft} placeholder="Path to another gateway's gateway-stats.json"
+    <input bind:value={draft} aria-label="Gateway stats file path" placeholder="Path to another gateway's gateway-stats.json"
       onkeydown={(e) => e.key === 'Enter' && add()} aria-label="Stats file path" />
     <button class="ghost" onclick={add} disabled={!draft.trim()}>Add</button>
   </div>
@@ -151,17 +151,17 @@
   .fleet { display: flex; flex-direction: column; gap: 12px; }
   .head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
   .title { font-weight: 700; color: var(--doge-yellow); }
-  .sub { font-size: 0.75rem; color: var(--doge-muted); margin-top: 2px; }
-  .pill { font-size: 0.72rem; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+  .sub { font-size: var(--fs-xs); color: var(--doge-muted); margin-top: 2px; }
+  .pill { font-size: var(--fs-xs); padding: 3px 10px; border-radius: 999px; white-space: nowrap;
     background: rgba(0, 255, 136, 0.1); color: var(--doge-neon); border: 1px solid rgba(0, 255, 136, 0.35); }
   .pill.off { background: rgba(100, 100, 100, 0.1); color: var(--doge-subtle); border-color: var(--doge-border); }
   .add { display: flex; gap: 8px; }
   .add input { flex: 1; min-width: 0; }
-  .err, .bad { color: var(--doge-red); font-size: 0.75rem; }
+  .err, .bad { color: var(--doge-red); font-size: var(--fs-xs); }
   .warn { color: var(--doge-yellow); }
   .muted { color: var(--doge-subtle); }
-  .empty { margin: 0; color: var(--doge-subtle); font-size: 0.78rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+  .empty { margin: 0; color: var(--doge-subtle); font-size: var(--fs-sm); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
   th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--doge-border); }
   th { color: var(--doge-subtle); font-weight: 600; }
   .mono { font-family: ui-monospace, Consolas, monospace; }
@@ -169,13 +169,13 @@
   .x:hover { color: var(--doge-red); }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
   .tile { border: 1px solid var(--doge-border); border-radius: 10px; padding: 10px 12px; background: rgba(255, 255, 255, 0.02); }
-  .v { font-size: 1.3rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-  .k { font-size: 0.72rem; color: var(--doge-muted); margin-top: 2px; }
-  .h { font-size: 0.68rem; color: var(--doge-subtle); margin-top: 4px; }
+  .v { font-size: var(--fs-xl); font-weight: 800; font-variant-numeric: tabular-nums; }
+  .k { font-size: var(--fs-xs); color: var(--doge-muted); margin-top: 2px; }
+  .h { font-size: var(--fs-2xs); color: var(--doge-subtle); margin-top: 4px; }
   .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
-  h4 { margin: 0 0 6px; font-size: 0.78rem; color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  h4 { margin: 0 0 6px; font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-  .feed li { display: flex; gap: 8px; font-size: 0.75rem; padding: 4px 0; border-bottom: 1px dashed var(--doge-border); }
+  .feed li { display: flex; gap: 8px; font-size: var(--fs-xs); padding: 4px 0; border-bottom: 1px dashed var(--doge-border); }
   .gw { color: var(--doge-blue); font-weight: 600; }
   .lbl { font-weight: 600; }
   .when { margin-left: auto; color: var(--doge-subtle); }

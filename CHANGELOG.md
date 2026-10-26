@@ -11,6 +11,17 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.24] — 2026-10-26 — UI polish: design tokens, light-theme contrast, accessibility
+
+### Changed
+- **Design tokens:** added a type scale (`--fs-2xs` … `--fs-xl`), spacing (`--sp-1` … `--sp-6`), radius and `--focus-ring` tokens. Replaced 360 ad-hoc `font-size` values (25 distinct sizes) across all components with the 7-step scale.
+- **Light theme parity:** accents (yellow, orange, neon, red, blue) now use darker light-mode variants so status text and icons stay legible on white; `--doge-subtle` raised to meet 4.5:1 contrast in both themes.
+
+### Accessibility
+- Keyboard focus ring now shows on every interactive element (textarea, links, `[tabindex]`, `role="button"`, summary). Removed inline `outline: none` overrides that hid it on wallet, address-book and connection inputs.
+- Added accessible labels to the wallet passphrase, address-book fields, fleet gateway path, refresh-ports and debug-console buttons.
+- Honour the OS "reduce motion" setting; disabled buttons show a not-allowed cursor.
+
 ## [0.3.23] — 2026-10-26 — Meshtastic packet encoding
 
 ### Added

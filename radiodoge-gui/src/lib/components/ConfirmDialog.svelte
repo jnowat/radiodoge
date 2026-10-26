@@ -60,7 +60,7 @@
   }
   .dlg::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(2px); }
   .body { padding: 22px; }
-  h2 { margin: 0 0 14px; font-size: 1.1rem; }
+  h2 { margin: 0 0 14px; font-size: var(--fs-lg); }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
   .danger { background: var(--doge-red); }
 </style>

@@ -156,7 +156,7 @@
       display: flex;
       flex-direction: column;
       font-family: var(--font-mono);
-      font-size: 0.74rem;
+      font-size: var(--fs-xs);
       animation: slide-up 0.2s ease;
     "
     role="log"
@@ -172,10 +172,10 @@
       border-bottom: 1px solid #2a2a2a;
       flex-shrink: 0;
     ">
-      <span style="color: var(--doge-yellow); font-weight: 700; font-size: 0.78rem;">
+      <span style="color: var(--doge-yellow); font-weight: 700; font-size: var(--fs-sm);">
         🐛 Debug Console
       </span>
-      <span style="color: var(--doge-subtle); font-size: 0.68rem;">
+      <span style="color: var(--doge-subtle); font-size: var(--fs-2xs);">
         {entries.length} entries
       </span>
 
@@ -183,7 +183,7 @@
 
       <!-- Auto-scroll toggle -->
       <label
-        style="display: flex; align-items: center; gap: 4px; color: var(--doge-muted); cursor: pointer; font-size: 0.7rem;"
+        style="display: flex; align-items: center; gap: 4px; color: var(--doge-muted); cursor: pointer; font-size: var(--fs-2xs);"
         title="Auto-scroll to newest entry"
       >
         <input type="checkbox" bind:checked={autoScroll} style="accent-color: var(--doge-yellow);" />
@@ -195,7 +195,7 @@
         onclick={exportToTxt}
         class="btn-ghost"
         title="Export debug log to .txt file"
-        style="padding: 2px 8px; font-size: 0.68rem; border-color: var(--doge-border);"
+        style="padding: 2px 8px; font-size: var(--fs-2xs); border-color: var(--doge-border);"
         disabled={entries.length === 0}
       >
         💾 Export
@@ -206,7 +206,7 @@
         onclick={clearConsole}
         class="btn-ghost"
         title="Clear all debug entries"
-        style="padding: 2px 8px; font-size: 0.68rem; border-color: var(--doge-border);"
+        style="padding: 2px 8px; font-size: var(--fs-2xs); border-color: var(--doge-border);"
       >
         🗑️ Clear
       </button>
@@ -216,7 +216,7 @@
         onclick={() => visible = false}
         class="btn-ghost"
         title="Close debug console (Ctrl+Shift+D)"
-        style="padding: 2px 8px; font-size: 0.72rem; border-color: var(--doge-border); color: var(--doge-red);"
+        style="padding: 2px 8px; font-size: var(--fs-xs); border-color: var(--doge-border); color: var(--doge-red);"
       >
         ✕
       </button>
@@ -291,7 +291,7 @@
               onclick={() => copyLine(i)}
               class="btn-ghost"
               title="Copy this debug line"
-              style="padding: 0 4px; font-size: 0.62rem; flex-shrink: 0; border-color: transparent; opacity: 0.5;"
+              style="padding: 0 4px; font-size: var(--fs-2xs); flex-shrink: 0; border-color: transparent; opacity: 0.5;"
             >
               {copiedIdx === i ? '✅' : '📋'}
             </button>
@@ -315,7 +315,7 @@
       border-radius: 10px;
       padding: 10px 18px;
       font-family: var(--font-mono);
-      font-size: 0.76rem;
+      font-size: var(--fs-xs);
       color: var(--doge-neon);
       z-index: 9000;
       white-space: nowrap;

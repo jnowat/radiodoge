@@ -83,8 +83,8 @@
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
     <div>
-      <h2 style="margin: 0 0 4px 0; font-size: 1.3rem; font-weight: 700;">📜 Transaction History</h2>
-      <p style="margin: 0; color: var(--doge-muted); font-size: 0.85rem;">
+      <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">📜 Transaction History</h2>
+      <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
         Last {history.length} transactions sent from this device. Much records. Very immutable.
       </p>
     </div>
@@ -93,7 +93,7 @@
       disabled={isLoading}
       class="btn-ghost"
       title="Refresh transaction history from local storage"
-      style="font-size: 0.8rem;"
+      style="font-size: var(--fs-sm);"
     >
       {isLoading ? '⏳ Loading...' : '↺ Refresh'}
     </button>
@@ -101,8 +101,8 @@
 
   <!-- ── SPV inclusion check ─────────────────────────────────────────────── -->
   <div class="card-doge" style="padding: 14px 16px; margin-bottom: 20px;">
-    <div style="font-size: 0.9rem; font-weight: 700; margin-bottom: 4px;">🔎 Verify a transaction on-chain</div>
-    <p style="margin: 0 0 10px 0; color: var(--doge-muted); font-size: 0.78rem;">
+    <div style="font-size: var(--fs-base); font-weight: 700; margin-bottom: 4px;">🔎 Verify a transaction on-chain</div>
+    <p style="margin: 0 0 10px 0; color: var(--doge-muted); font-size: var(--fs-sm);">
       Lightweight SPV check via your node or a public API — confirm a txid is mined and how deep, no full node needed.
     </p>
     <div style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -111,18 +111,18 @@
         placeholder="Transaction id (64 hex characters)"
         class="mono"
         aria-label="Transaction id to verify"
-        style="flex: 1; min-width: 240px; font-size: 0.78rem; padding: 8px 10px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 6px; color: var(--doge-text);"
+        style="flex: 1; min-width: 240px; font-size: var(--fs-sm); padding: 8px 10px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 6px; color: var(--doge-text);"
         onkeydown={(e) => { if (e.key === 'Enter') verifyTx(); }}
       />
-      <button onclick={verifyTx} disabled={verifying} class="btn-doge" style="font-size: 0.8rem;">
+      <button onclick={verifyTx} disabled={verifying} class="btn-doge" style="font-size: var(--fs-sm);">
         {verifying ? '⏳ Checking…' : 'Verify'}
       </button>
     </div>
     {#if verifyError}
-      <div style="margin-top: 10px; color: var(--doge-red); font-size: 0.8rem;" role="alert">❌ {verifyError}</div>
+      <div style="margin-top: 10px; color: var(--doge-red); font-size: var(--fs-sm);" role="alert">❌ {verifyError}</div>
     {/if}
     {#if verifyResult}
-      <div style="margin-top: 10px; font-size: 0.8rem;" role="status">
+      <div style="margin-top: 10px; font-size: var(--fs-sm);" role="status">
         {#if verifyResult.confirmed}
           <div style="color: var(--doge-neon); font-weight: 600;">
             ✅ Confirmed — {verifyResult.confirmations} confirmation{verifyResult.confirmations === 1 ? '' : 's'}
@@ -148,7 +148,7 @@
       border: 1px solid rgba(255, 68, 68, 0.3);
       border-radius: 8px;
       color: var(--doge-red);
-      font-size: 0.85rem;
+      font-size: var(--fs-base);
       margin-bottom: 20px;
     " role="alert">
       ❌ {loadError}
@@ -168,7 +168,7 @@
     ">
       <div style="font-size: 4rem; margin-bottom: 16px;" aria-hidden="true">📭</div>
       <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">No transactions yet</h3>
-      <p style="margin: 0; font-size: 0.9rem;">
+      <p style="margin: 0; font-size: var(--fs-base);">
         Send your first Dogecoin over LoRa from the Send tab!<br/>
         Much potential. Very future. Wow.
       </p>
@@ -187,19 +187,19 @@
 
             <!-- Left: status + amount -->
             <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
-              <span style="font-size: 1.1rem;" title="Status: {entry.status}">{statusIcon(entry.status)}</span>
+              <span style="font-size: var(--fs-lg);" title="Status: {entry.status}">{statusIcon(entry.status)}</span>
               <div>
-                <div style="font-family: var(--font-mono); font-weight: 700; font-size: 1rem; color: var(--doge-yellow);">
+                <div style="font-family: var(--font-mono); font-weight: 700; font-size: var(--fs-md); color: var(--doge-yellow);">
                   {entry.amountDoge.toFixed(8)} DOGE
                 </div>
-                <div style="font-size: 0.72rem; color: {statusColor(entry.status)}; font-weight: 600; text-transform: uppercase;">
+                <div style="font-size: var(--fs-xs); color: {statusColor(entry.status)}; font-weight: 600; text-transform: uppercase;">
                   {entry.status}
                 </div>
               </div>
             </div>
 
             <!-- Right: timestamp -->
-            <div style="font-size: 0.72rem; color: var(--doge-subtle); text-align: right; flex-shrink: 0;">
+            <div style="font-size: var(--fs-xs); color: var(--doge-subtle); text-align: right; flex-shrink: 0;">
               {formatTimestamp(entry.timestamp)}
             </div>
           </div>
@@ -215,10 +215,10 @@
             border-radius: 6px;
             padding: 6px 10px;
           ">
-            <span style="font-size: 0.7rem; color: var(--doge-muted); flex-shrink: 0;">→</span>
+            <span style="font-size: var(--fs-2xs); color: var(--doge-muted); flex-shrink: 0;">→</span>
             <span
               class="mono"
-              style="flex: 1; font-size: 0.75rem; color: var(--doge-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              style="flex: 1; font-size: var(--fs-xs); color: var(--doge-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
               title={entry.toAddress}
             >
               {entry.toAddress}
@@ -227,7 +227,7 @@
               onclick={() => copyAddr(entry.toAddress, i)}
               class="btn-ghost"
               title="Copy recipient address"
-              style="padding: 2px 8px; font-size: 0.7rem; flex-shrink: 0;"
+              style="padding: 2px 8px; font-size: var(--fs-2xs); flex-shrink: 0;"
             >
               {copiedTx[i] ? '✅' : '📋'}
             </button>
@@ -237,7 +237,7 @@
           {#if entry.memo}
             <div style="
               margin-top: 6px;
-              font-size: 0.75rem;
+              font-size: var(--fs-xs);
               color: var(--doge-muted);
               font-style: italic;
               padding-left: 4px;
@@ -249,7 +249,7 @@
       {/each}
     </div>
 
-    <p style="text-align: center; color: var(--doge-subtle); font-size: 0.75rem; margin-top: 16px;">
+    <p style="text-align: center; color: var(--doge-subtle); font-size: var(--fs-xs); margin-top: 16px;">
       Showing {history.length} most recent transactions · Stored locally · Much transparent. Such doge.
     </p>
   {/if}

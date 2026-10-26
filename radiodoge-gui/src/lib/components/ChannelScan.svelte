@@ -114,17 +114,17 @@
 
 <style>
   .scan { display: flex; flex-direction: column; gap: 10px; }
-  h3 { margin: 0; color: var(--doge-yellow); font-size: 0.95rem; }
-  .head p { margin: 4px 0 0; font-size: 0.75rem; color: var(--doge-muted); }
-  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 0.78rem; }
-  label { display: flex; gap: 6px; align-items: center; font-size: 0.78rem; }
+  h3 { margin: 0; color: var(--doge-yellow); font-size: var(--fs-md); }
+  .head p { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-muted); }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: var(--fs-sm); }
+  label { display: flex; gap: 6px; align-items: center; font-size: var(--fs-sm); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { border: 1px solid var(--doge-border); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
   .chip.on { border-color: var(--doge-yellow); }
   .chip input { margin: 0; }
-  .muted { color: var(--doge-subtle); font-size: 0.72rem; }
-  .err { color: var(--doge-red); font-size: 0.75rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+  .muted { color: var(--doge-subtle); font-size: var(--fs-xs); }
+  .err { color: var(--doge-red); font-size: var(--fs-xs); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
   th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--doge-border); }
   th { color: var(--doge-subtle); }
   tr.best td { color: var(--doge-neon); }

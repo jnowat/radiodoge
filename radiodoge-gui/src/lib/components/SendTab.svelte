@@ -246,8 +246,8 @@
 
 <div style="padding: 24px; max-width: 600px; margin: 0 auto;">
   <div style="margin-bottom: 24px;">
-    <h2 style="margin: 0 0 4px 0; font-size: 1.3rem; font-weight: 700;">📤 Send Dogecoin</h2>
-    <p style="margin: 0; color: var(--doge-muted); font-size: 0.85rem;">
+    <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">📤 Send Dogecoin</h2>
+    <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
       Broadcast via LoRa radio — no internet required 🚀
     </p>
   </div>
@@ -260,7 +260,7 @@
       border: 1px solid rgba(255, 68, 68, 0.25);
       border-radius: 12px;
       color: var(--doge-red);
-      font-size: 0.9rem;
+      font-size: var(--fs-base);
       margin-bottom: 20px;
       text-align: center;
     ">
@@ -272,7 +272,7 @@
   <div class="card-doge" style="display: flex; flex-direction: column; gap: 20px;">
     <!-- Recipient address -->
     <div>
-      <label for="send-to-address" style="display: block; font-size: 0.8rem; color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+      <label for="send-to-address" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
         Recipient Address
       </label>
       <div style="display: flex; gap: 8px;">
@@ -307,16 +307,16 @@
         />
       </div>
       {#if scanNote}
-        <p style="font-size: 0.75rem; margin: 6px 0 0 0; color: {scanNote.startsWith('✅') ? 'var(--doge-neon)' : 'var(--doge-red)'};">
+        <p style="font-size: var(--fs-xs); margin: 6px 0 0 0; color: {scanNote.startsWith('✅') ? 'var(--doge-neon)' : 'var(--doge-red)'};">
           {scanNote}
         </p>
       {/if}
       {#if toAddress && !isValidAddress()}
-        <p style="color: var(--doge-red); font-size: 0.75rem; margin: 6px 0 0 0;">
+        <p style="color: var(--doge-red); font-size: var(--fs-xs); margin: 6px 0 0 0;">
           ⚠️ Dogecoin addresses start with "D" and are 25-34 characters
         </p>
       {:else if isValidAddress()}
-        <p style="color: var(--doge-neon); font-size: 0.75rem; margin: 6px 0 0 0;">
+        <p style="color: var(--doge-neon); font-size: var(--fs-xs); margin: 6px 0 0 0;">
           ✅ Valid Dogecoin address
         </p>
       {/if}
@@ -324,7 +324,7 @@
 
     <!-- Amount -->
     <div>
-      <label for="send-amount" style="display: block; font-size: 0.8rem; color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+      <label for="send-amount" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
         Amount (DOGE)
       </label>
       <div style="position: relative;">
@@ -345,13 +345,13 @@
           transform: translateY(-50%);
           color: var(--doge-yellow);
           font-weight: 700;
-          font-size: 0.85rem;
+          font-size: var(--fs-base);
         ">
           DOGE 🐕
         </span>
       </div>
       {#if amountDoge && !isValidAmount()}
-        <p style="color: var(--doge-red); font-size: 0.75rem; margin: 6px 0 0 0;">
+        <p style="color: var(--doge-red); font-size: var(--fs-xs); margin: 6px 0 0 0;">
           ⚠️ Amount must be greater than 0
         </p>
       {/if}
@@ -359,8 +359,8 @@
 
     <!-- Memo (optional) -->
     <div>
-      <label for="send-memo" style="display: block; font-size: 0.8rem; color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
-        Memo <span style="color: var(--doge-subtle); text-transform: none; font-size: 0.75rem;">(optional)</span>
+      <label for="send-memo" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+        Memo <span style="color: var(--doge-subtle); text-transform: none; font-size: var(--fs-xs);">(optional)</span>
       </label>
       <input
         id="send-memo"
@@ -383,14 +383,14 @@
           background: rgba(245, 197, 24, 0.05);
           border: 1px solid rgba(245, 197, 24, 0.2);
           border-radius: 8px;
-          font-size: 0.8rem;
+          font-size: var(--fs-sm);
         "
       >
         <span style="color: var(--doge-muted); flex-shrink: 0;">From:</span>
         <span class="mono" style="color: var(--doge-yellow); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
           {wallet.address}
         </span>
-        <span style="color: var(--doge-neon); font-size: 0.7rem; flex-shrink: 0;" title="Wallet loaded ✅">✅</span>
+        <span style="color: var(--doge-neon); font-size: var(--fs-2xs); flex-shrink: 0;" title="Wallet loaded ✅">✅</span>
       </div>
     {:else}
       <div style="
@@ -401,7 +401,7 @@
         background: rgba(255, 68, 68, 0.06);
         border: 1px solid rgba(255, 68, 68, 0.25);
         border-radius: 8px;
-        font-size: 0.8rem;
+        font-size: var(--fs-sm);
         color: var(--doge-red);
       ">
         <span style="flex-shrink: 0;">❌</span>
@@ -420,7 +420,7 @@
         background: rgba(245, 197, 24, 0.04);
         border: 1px solid rgba(245, 197, 24, 0.15);
         border-radius: 8px;
-        font-size: 0.78rem;
+        font-size: var(--fs-sm);
         color: var(--doge-muted);
       ">
         <label for="send-fee">Network fee (DOGE)</label>
@@ -436,7 +436,7 @@
         />
       </div>
       {#if !feeDoge.trim()}
-        <p style="margin: 4px 0 0; font-size: 0.72rem; color: var(--doge-muted); text-align: right;">
+        <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-muted); text-align: right;">
           {#if feeEstimating}
             Estimating network fee…
           {:else if feeEstimate}
@@ -448,7 +448,7 @@
         </p>
       {/if}
       {#if !isValidFee()}
-        <p style="margin: 4px 0 0; font-size: 0.75rem; color: var(--doge-red);">⚠️ Fee must be 0 or more DOGE</p>
+        <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-red);">⚠️ Fee must be 0 or more DOGE</p>
       {/if}
     {/if}
 
@@ -467,7 +467,7 @@
       style="
         width: 100%;
         padding: 16px;
-        font-size: 1.1rem;
+        font-size: var(--fs-lg);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -501,10 +501,10 @@
       "
     >
       <div style="font-size: 2.5rem; margin-bottom: 8px;">🎉</div>
-      <div style="color: var(--doge-neon); font-weight: 700; font-size: 1rem; margin-bottom: 4px;">
+      <div style="color: var(--doge-neon); font-weight: 700; font-size: var(--fs-md); margin-bottom: 4px;">
         Transaction Sent! Much broadcast. Wow!
       </div>
-      <div style="color: var(--doge-muted); font-size: 0.82rem;">
+      <div style="color: var(--doge-muted); font-size: var(--fs-sm);">
         {success}
       </div>
     </div>
@@ -522,11 +522,11 @@
         border-radius: 12px;
       "
     >
-      <div style="font-size: 1.5rem; margin-bottom: 8px;">😢</div>
-      <div style="color: var(--doge-red); font-weight: 700; font-size: 0.9rem; margin-bottom: 4px;">
+      <div style="font-size: var(--fs-xl); margin-bottom: 8px;">😢</div>
+      <div style="color: var(--doge-red); font-weight: 700; font-size: var(--fs-base); margin-bottom: 4px;">
         Sad! Send failed.
       </div>
-      <div style="color: var(--doge-muted); font-size: 0.82rem; font-family: var(--font-mono);">
+      <div style="color: var(--doge-muted); font-size: var(--fs-sm); font-family: var(--font-mono);">
         {error}
       </div>
     </div>
@@ -538,7 +538,7 @@
     padding: 12px 16px;
     background: var(--doge-card);
     border-radius: 8px;
-    font-size: 0.78rem;
+    font-size: var(--fs-sm);
     color: var(--doge-subtle);
     line-height: 1.6;
   ">
@@ -577,10 +577,10 @@
 </ConfirmDialog>
 
 <style>
-  .review { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 0.85rem; }
+  .review { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: var(--fs-base); }
   .review dt { color: var(--doge-muted); }
   .review dd { margin: 0; overflow-wrap: anywhere; }
-  .mono { font-family: var(--font-mono); font-size: 0.8rem; }
-  .warn { margin: 12px 0 0; color: var(--doge-orange); font-size: 0.8rem; }
-  .note { margin: 12px 0 0; color: var(--doge-muted); font-size: 0.75rem; }
+  .mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
+  .warn { margin: 12px 0 0; color: var(--doge-orange); font-size: var(--fs-sm); }
+  .note { margin: 12px 0 0; color: var(--doge-muted); font-size: var(--fs-xs); }
 </style>

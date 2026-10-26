@@ -101,14 +101,14 @@
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 10px;">
     <div>
-      <h2 style="margin: 0; font-size: 1.1rem; font-weight: 700;">📒 Address Book</h2>
-      <p style="margin: 4px 0 0 0; font-size: 0.75rem; color: var(--doge-muted);">
+      <h2 style="margin: 0; font-size: var(--fs-lg); font-weight: 700;">📒 Address Book</h2>
+      <p style="margin: 4px 0 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
         Save labelled Dogecoin addresses · stored locally
       </p>
     </div>
     <button
       onclick={() => { showForm = !showForm; formError = null; }}
-      style="padding: 7px 16px; border: 1px solid var(--doge-yellow); background: rgba(245,197,24,0.08); color: var(--doge-yellow); border-radius: 8px; cursor: pointer; font-size: 0.82rem;"
+      style="padding: 7px 16px; border: 1px solid var(--doge-yellow); background: rgba(245,197,24,0.08); color: var(--doge-yellow); border-radius: 8px; cursor: pointer; font-size: var(--fs-sm);"
     >
       {showForm ? '✕ Cancel' : '+ Add Address'}
     </button>
@@ -117,38 +117,41 @@
   <!-- ── Add form ───────────────────────────────────────────────────────── -->
   {#if showForm}
     <div class="card-doge" style="margin-bottom: 18px;">
-      <h3 style="margin: 0 0 14px 0; font-size: 0.95rem; font-weight: 700; color: var(--doge-yellow);">Add New Address</h3>
+      <h3 style="margin: 0 0 14px 0; font-size: var(--fs-md); font-weight: 700; color: var(--doge-yellow);">Add New Address</h3>
       <div style="display: flex; flex-direction: column; gap: 10px;">
         <input
           type="text"
+          aria-label="Contact label"
           placeholder="Label (e.g. 'My main wallet')"
           bind:value={newLabel}
-          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: 0.88rem; outline: none;"
+          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base);"
         />
         <input
           type="text"
+          aria-label="Dogecoin address"
           placeholder="Dogecoin address (starts with D)"
           bind:value={newAddress}
-          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: 0.88rem; font-family: var(--font-mono); outline: none;"
+          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base); font-family: var(--font-mono);"
         />
         <input
           type="text"
+          aria-label="Notes"
           placeholder="Notes (optional)"
           bind:value={newNotes}
-          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: 0.88rem; outline: none;"
+          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base);"
         />
         {#if persistError && !formError}
-          <p style="margin: 0; font-size: 0.78rem; color: #ff6060;" role="alert">
+          <p style="margin: 0; font-size: var(--fs-sm); color: #ff6060;" role="alert">
             Could not save the address book: {persistError}
           </p>
         {/if}
         {#if formError}
-          <p style="margin: 0; font-size: 0.78rem; color: #ff6060;">{formError}</p>
+          <p style="margin: 0; font-size: var(--fs-sm); color: #ff6060;">{formError}</p>
         {/if}
         <button
           onclick={addEntry}
           disabled={isSaving}
-          style="align-self: flex-start; padding: 8px 18px; border: 1px solid var(--doge-yellow); background: rgba(245,197,24,0.1); color: var(--doge-yellow); border-radius: 8px; cursor: pointer; font-size: 0.85rem;"
+          style="align-self: flex-start; padding: 8px 18px; border: 1px solid var(--doge-yellow); background: rgba(245,197,24,0.1); color: var(--doge-yellow); border-radius: 8px; cursor: pointer; font-size: var(--fs-base);"
         >
           {isSaving ? '⏳ Saving…' : '💾 Save'}
         </button>
@@ -161,44 +164,44 @@
     <div class="card-doge" style="text-align: center; padding: 28px; color: var(--doge-muted);">⏳ Loading…</div>
   {:else if entries.length === 0}
     <div class="card-doge" style="text-align: center; padding: 32px; color: var(--doge-muted);">
-      <p style="font-size: 1.2rem; margin: 0 0 8px 0;">📭</p>
-      <p style="margin: 0; font-size: 0.9rem;">No saved addresses yet.</p>
-      <p style="margin: 6px 0 0 0; font-size: 0.75rem; opacity: 0.7;">Click "+ Add Address" to save a Dogecoin address with a label.</p>
+      <p style="font-size: var(--fs-lg); margin: 0 0 8px 0;">📭</p>
+      <p style="margin: 0; font-size: var(--fs-base);">No saved addresses yet.</p>
+      <p style="margin: 6px 0 0 0; font-size: var(--fs-xs); opacity: 0.7;">Click "+ Add Address" to save a Dogecoin address with a label.</p>
     </div>
   {:else}
     <div class="card-doge" style="padding: 0; overflow: hidden;">
       <table style="width: 100%; border-collapse: collapse;">
         <thead>
           <tr style="border-bottom: 1px solid var(--doge-border); background: rgba(255,255,255,0.02);">
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Label</th>
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Address</th>
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Notes</th>
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;"></th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Label</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Address</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Notes</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;"></th>
           </tr>
         </thead>
         <tbody>
           {#each entries as entry (entry.id)}
             <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
-              <td style="padding: 10px 14px; font-size: 0.88rem; font-weight: 600; color: var(--doge-text);">{entry.label}</td>
+              <td style="padding: 10px 14px; font-size: var(--fs-base); font-weight: 600; color: var(--doge-text);">{entry.label}</td>
               <td style="padding: 10px 14px;">
                 <div style="display: flex; align-items: center; gap: 6px;">
-                  <span style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--doge-yellow);">
+                  <span style="font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--doge-yellow);">
                     {entry.address.slice(0,10)}…{entry.address.slice(-6)}
                   </span>
                   <button
                     onclick={() => copyAddress(entry.address, entry.id)}
-                    style="padding: 2px 7px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 4px; cursor: pointer; font-size: 0.7rem;"
+                    style="padding: 2px 7px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-muted); border-radius: 4px; cursor: pointer; font-size: var(--fs-2xs);"
                     title="Copy full address"
                   >
                     {copiedId === entry.id ? '✅' : '📋'}
                   </button>
                 </div>
               </td>
-              <td style="padding: 10px 14px; font-size: 0.78rem; color: var(--doge-muted);">{entry.notes ?? '—'}</td>
+              <td style="padding: 10px 14px; font-size: var(--fs-sm); color: var(--doge-muted);">{entry.notes ?? '—'}</td>
               <td style="padding: 10px 14px;">
                 <button
                   onclick={() => removeEntry(entry.id)}
-                  style="padding: 4px 9px; border: 1px solid rgba(255,60,60,0.3); background: transparent; color: #ff8080; border-radius: 5px; cursor: pointer; font-size: 0.72rem;"
+                  style="padding: 4px 9px; border: 1px solid rgba(255,60,60,0.3); background: transparent; color: #ff8080; border-radius: 5px; cursor: pointer; font-size: var(--fs-xs);"
                   title="Remove entry"
                 >
                   🗑️
