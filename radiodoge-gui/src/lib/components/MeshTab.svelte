@@ -81,12 +81,12 @@
       gap: 14px;
       flex-wrap: wrap;
     ">
-      <span style="font-size: 1.4rem;">⚠️</span>
+      <span style="font-size: var(--fs-xl);">⚠️</span>
       <div style="flex: 1;">
-        <p style="margin: 0; font-weight: 700; color: #ff6060; font-size: 0.95rem;">
+        <p style="margin: 0; font-weight: 700; color: #ff6060; font-size: var(--fs-md);">
           Duplicate Node Address Detected!
         </p>
-        <p style="margin: 4px 0 0 0; font-size: 0.78rem; color: var(--doge-muted);">
+        <p style="margin: 4px 0 0 0; font-size: var(--fs-sm); color: var(--doge-muted);">
           Another device on the mesh is broadcasting with address
           <strong style="color: var(--doge-yellow);">
             {connection.nodeAddress ? nodeAddressToString(connection.nodeAddress) : '?'}
@@ -103,7 +103,7 @@
           color: #ff8080;
           border-radius: 6px;
           cursor: pointer;
-          font-size: 0.8rem;
+          font-size: var(--fs-sm);
         "
       >
         Dismiss
@@ -114,8 +114,8 @@
   <!-- ── Header ───────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 10px;">
     <div>
-      <h2 style="margin: 0; font-size: 1.1rem; font-weight: 700;">🕸️ Mesh Neighbors</h2>
-      <p style="margin: 4px 0 0 0; font-size: 0.75rem; color: var(--doge-muted);">
+      <h2 style="margin: 0; font-size: var(--fs-lg); font-weight: 700;">🕸️ Mesh Neighbors</h2>
+      <p style="margin: 4px 0 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
         Nodes recently heard on the LoRa mesh · auto-refreshes every 5 s
         {#if lastRefreshed}
           · last updated {relativeTime(lastRefreshed / 1000)}
@@ -132,7 +132,7 @@
         color: var(--doge-yellow);
         border-radius: 8px;
         cursor: pointer;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         opacity: {!connection.isConnected || isRefreshing ? 0.45 : 1};
       "
     >
@@ -147,9 +147,9 @@
     </div>
   {:else if connection.neighbors.length === 0}
     <div class="card-doge" style="text-align: center; padding: 32px; color: var(--doge-muted);">
-      <p style="font-size: 1.3rem; margin: 0 0 8px 0;">🦴</p>
-      <p style="margin: 0; font-size: 0.9rem;">No neighbors heard yet.</p>
-      <p style="margin: 6px 0 0 0; font-size: 0.75rem; opacity: 0.7;">
+      <p style="font-size: var(--fs-xl); margin: 0 0 8px 0;">🦴</p>
+      <p style="margin: 0; font-size: var(--fs-base);">No neighbors heard yet.</p>
+      <p style="margin: 6px 0 0 0; font-size: var(--fs-xs); opacity: 0.7;">
         Waiting for other RadioDoge nodes to transmit on the mesh…
       </p>
     </div>
@@ -158,23 +158,23 @@
       <table style="width: 100%; border-collapse: collapse;">
         <thead>
           <tr style="border-bottom: 1px solid var(--doge-border); background: rgba(255,255,255,0.02);">
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Node Address</th>
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Signal</th>
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">RSSI</th>
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Last Heard</th>
-            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Position</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Node Address</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Signal</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">RSSI</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Last Heard</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Position</th>
           </tr>
         </thead>
         <tbody>
           {#each connection.neighbors as nbr, i}
             <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
-              <td style="padding: 10px 14px; font-family: var(--font-mono); font-size: 0.88rem; color: var(--doge-yellow); font-weight: 700;">
+              <td style="padding: 10px 14px; font-family: var(--font-mono); font-size: var(--fs-base); color: var(--doge-yellow); font-weight: 700;">
                 {nodeAddressToString(nbr.address)}
               </td>
-              <td style="padding: 10px 14px; font-size: 0.8rem;">{rssiQuality(nbr.rssi)}</td>
-              <td style="padding: 10px 14px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--doge-muted);">{nbr.rssi} dBm</td>
-              <td style="padding: 10px 14px; font-size: 0.8rem; color: var(--doge-muted);">{relativeTime(nbr.lastSeen)}</td>
-              <td style="padding: 10px 14px; font-size: 0.78rem;">
+              <td style="padding: 10px 14px; font-size: var(--fs-sm);">{rssiQuality(nbr.rssi)}</td>
+              <td style="padding: 10px 14px; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--doge-muted);">{nbr.rssi} dBm</td>
+              <td style="padding: 10px 14px; font-size: var(--fs-sm); color: var(--doge-muted);">{relativeTime(nbr.lastSeen)}</td>
+              <td style="padding: 10px 14px; font-size: var(--fs-sm);">
                 {#if nbr.position}
                   <button class="maplink" title="Open in OpenStreetMap{nbr.positionAt ? ` · shared ${relativeTime(nbr.positionAt)}` : ''}"
                     onclick={() => open(mapUrl(nbr.position!)).catch(() => {})}>📍 {fmtPos(nbr.position)}</button>
@@ -192,14 +192,14 @@
   <!-- ── My Node ───────────────────────────────────────────────────────────── -->
   {#if connection.isConnected && connection.nodeAddress}
     <div class="card-doge" style="margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-      <span style="font-size: 1.2rem;">📍</span>
+      <span style="font-size: var(--fs-lg);">📍</span>
       <div>
-        <p style="margin: 0; font-size: 0.82rem; color: var(--doge-muted);">This node</p>
-        <p style="margin: 2px 0 0 0; font-family: var(--font-mono); font-size: 1rem; color: var(--doge-yellow); font-weight: 700;">
+        <p style="margin: 0; font-size: var(--fs-sm); color: var(--doge-muted);">This node</p>
+        <p style="margin: 2px 0 0 0; font-family: var(--font-mono); font-size: var(--fs-md); color: var(--doge-yellow); font-weight: 700;">
           {nodeAddressToString(connection.nodeAddress)}
         </p>
       </div>
-      <div style="margin-left: auto; font-size: 0.75rem; color: var(--doge-muted);">
+      <div style="margin-left: auto; font-size: var(--fs-xs); color: var(--doge-muted);">
         {connection.neighbors.length} neighbor{connection.neighbors.length !== 1 ? 's' : ''} heard
       </div>
     </div>
@@ -211,7 +211,7 @@
 <style>
   .maplink {
     background: none; border: none; padding: 0; cursor: pointer;
-    color: var(--doge-blue); font-family: var(--font-mono); font-size: 0.78rem; text-align: left;
+    color: var(--doge-blue); font-family: var(--font-mono); font-size: var(--fs-sm); text-align: left;
   }
   .maplink:hover { text-decoration: underline; }
 </style>

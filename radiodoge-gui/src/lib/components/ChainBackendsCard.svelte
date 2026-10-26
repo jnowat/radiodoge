@@ -53,16 +53,16 @@
 </div>
 
 <style>
-  .title { margin: 0 0 6px; font-size: 0.95rem; font-weight: 700; }
-  .hint { margin: 0 0 12px; font-size: 0.78rem; color: var(--doge-muted); line-height: 1.5; }
-  .hint code { font-family: var(--font-mono); font-size: 0.74rem; color: var(--doge-text); }
+  .title { margin: 0 0 6px; font-size: var(--fs-md); font-weight: 700; }
+  .hint { margin: 0 0 12px; font-size: var(--fs-sm); color: var(--doge-muted); line-height: 1.5; }
+  .hint code { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--doge-text); }
   .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .preset { font-size: 0.75rem; padding: 5px 10px; }
+  .preset { font-size: var(--fs-xs); padding: 5px 10px; }
   .preset.sel { border-color: var(--doge-yellow); color: var(--doge-yellow); }
   .row { display: flex; gap: 8px; }
   .row input { flex: 1; }
   .mono { font-family: var(--font-mono); }
-  .msg { margin: 10px 0 0; font-size: 0.78rem; }
+  .msg { margin: 10px 0 0; font-size: var(--fs-sm); }
   .msg.ok { color: var(--doge-neon); }
   .msg.err { color: var(--doge-red); }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

@@ -103,8 +103,8 @@
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
     <div>
-      <h2 style="margin: 0 0 4px 0; font-size: 1.3rem; font-weight: 700;">📡 Live Packet Log</h2>
-      <p style="margin: 0; color: var(--doge-muted); font-size: 0.85rem;">
+      <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">📡 Live Packet Log</h2>
+      <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
         All LoRa traffic — TX (↑ sent) and RX (↓ received)
       </p>
     </div>
@@ -127,7 +127,7 @@
               border: none;
               background: {filter === val ? 'rgba(245,197,24,0.15)' : 'transparent'};
               color: {filter === val ? 'var(--doge-yellow)' : 'var(--doge-muted)'};
-              font-size: 0.78rem;
+              font-size: var(--fs-sm);
               font-weight: {filter === val ? 700 : 400};
               cursor: pointer;
               transition: all 0.15s;
@@ -140,7 +140,7 @@
       <!-- Raw hex toggle -->
       <label
         title="Toggle between human-readable decoded text and raw hex bytes"
-        style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.8rem; color: var(--doge-muted);"
+        style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: var(--fs-sm); color: var(--doge-muted);"
       >
         <input
           type="checkbox"
@@ -157,7 +157,7 @@
           onclick={exportPackets}
           class="btn-ghost"
           title="Export visible packet log as JSON (includes all filtered packets)"
-          style="padding: 5px 14px; font-size: 0.8rem;"
+          style="padding: 5px 14px; font-size: var(--fs-sm);"
           aria-label="Export packet log"
         >
           💾 Export
@@ -170,7 +170,7 @@
           onclick={clearPackets}
           class="btn-ghost"
           title="Clear all packets from the log"
-          style="padding: 5px 14px; font-size: 0.8rem;"
+          style="padding: 5px 14px; font-size: var(--fs-sm);"
           aria-label="Clear packet log"
         >
           🗑️ Clear
@@ -186,7 +186,7 @@
           border: 1px solid rgba(68, 136, 255, 0.25);
           border-radius: 12px;
           padding: 4px 10px;
-          font-size: 0.75rem;
+          font-size: var(--fs-xs);
           font-family: var(--font-mono);
           white-space: nowrap;
         "
@@ -201,7 +201,7 @@
           border: 1px solid rgba(0, 255, 136, 0.25);
           border-radius: 12px;
           padding: 4px 10px;
-          font-size: 0.75rem;
+          font-size: var(--fs-xs);
           font-family: var(--font-mono);
           white-space: nowrap;
         "
@@ -216,7 +216,7 @@
     <div style="text-align: center; padding: 60px 20px; color: var(--doge-muted);">
       <div style="font-size: 3rem; margin-bottom: 16px; animation: bounce-doge 2s ease-in-out infinite; display: inline-block;">🐕</div>
       <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">Ears down</h3>
-      <p style="margin: 0; font-size: 0.9rem;">
+      <p style="margin: 0; font-size: var(--fs-base);">
         Connect to a Heltec device to monitor LoRa traffic.<br/>
         <span style="font-style: italic;">Such listen. Very wait. Wow.</span>
       </p>
@@ -228,7 +228,7 @@
       <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">
         {filter === 'all' ? 'Listening for packets...' : filter === 'tx' ? 'No TX packets yet' : 'No RX packets yet'}
       </h3>
-      <p style="margin: 0; font-size: 0.9rem;">
+      <p style="margin: 0; font-size: var(--fs-base);">
         {#if filter === 'tx'}
           Send a transaction to see TX packets here. 🐕
         {:else if filter === 'rx'}
@@ -261,7 +261,7 @@
           <span
             title="{isTx ? '↑ TX — Sent by this node over LoRa. Such broadcast, very radio.' : '↓ RX — Received from remote node. Much incoming, very packet.'}"
             style="
-              font-size: 0.85rem;
+              font-size: var(--fs-base);
               font-weight: 700;
               flex-shrink: 0;
               color: {isTx ? 'var(--doge-neon)' : 'var(--doge-blue)'};
@@ -277,7 +277,7 @@
           <!-- Timestamp -->
           <span style="
             font-family: var(--font-mono);
-            font-size: 0.72rem;
+            font-size: var(--fs-xs);
             color: var(--doge-subtle);
             flex-shrink: 0;
             padding-top: 2px;
@@ -294,7 +294,7 @@
               color: {commandTextColor(packet.command)};
               border-radius: 4px;
               padding: 2px 7px;
-              font-size: 0.7rem;
+              font-size: var(--fs-2xs);
               font-family: var(--font-mono);
               font-weight: 600;
               flex-shrink: 0;
@@ -310,7 +310,7 @@
             title="Source node address (Region.Community.Node)"
             style="
               font-family: var(--font-mono);
-              font-size: 0.72rem;
+              font-size: var(--fs-xs);
               color: var(--doge-muted);
               flex-shrink: 0;
               padding-top: 2px;
@@ -323,13 +323,13 @@
           <!-- Decoded / raw content -->
           <span style="
             flex: 1;
-            font-size: 0.82rem;
+            font-size: var(--fs-sm);
             color: {isTx ? '#b3ffe0' : 'var(--doge-text)'};
             word-break: break-all;
             line-height: 1.4;
           ">
             {#if showRaw || !packet.decoded}
-              <span style="font-family: var(--font-mono); color: var(--doge-muted); font-size: 0.73rem;">
+              <span style="font-family: var(--font-mono); color: var(--doge-muted); font-size: var(--fs-xs);">
                 {packet.payloadHex}
               </span>
             {:else}
@@ -343,7 +343,7 @@
               title="Relayed across {packet.hops} mesh hop{packet.hops === 1 ? '' : 's'} before reaching this node"
               style="
                 font-family: var(--font-mono);
-                font-size: 0.68rem;
+                font-size: var(--fs-2xs);
                 color: var(--doge-yellow);
                 background: rgba(255, 193, 7, 0.12);
                 border: 1px solid rgba(255, 193, 7, 0.3);
@@ -364,7 +364,7 @@
               title="Received Signal Strength Indicator — {packet.rssi >= -80 ? 'Strong signal! Much wow.' : packet.rssi >= -100 ? 'Moderate signal' : 'Weak signal — move nodes closer!'}"
               style="
                 font-family: var(--font-mono);
-                font-size: 0.7rem;
+                font-size: var(--fs-2xs);
                 color: {packet.rssi >= -80 ? 'var(--doge-neon)' : packet.rssi >= -100 ? 'var(--doge-yellow)' : 'var(--doge-red)'};
                 flex-shrink: 0;
                 white-space: nowrap;
@@ -374,7 +374,7 @@
               {packet.rssi} dBm
             </span>
           {:else}
-            <span style="font-size: 0.7rem; color: var(--doge-subtle); flex-shrink: 0; white-space: nowrap;">
+            <span style="font-size: var(--fs-2xs); color: var(--doge-subtle); flex-shrink: 0; white-space: nowrap;">
               sent ↑
             </span>
           {/if}
@@ -388,7 +388,7 @@
             class="btn-ghost"
             title="Copy {showRaw || !packet.decoded ? 'raw hex' : 'decoded text'} to clipboard"
             aria-label="Copy packet data"
-            style="padding: 2px 6px; font-size: 0.7rem; flex-shrink: 0;"
+            style="padding: 2px 6px; font-size: var(--fs-2xs); flex-shrink: 0;"
           >
             {copiedIndex === i ? '✅' : '📋'}
           </button>
@@ -401,7 +401,7 @@
       margin-top: 14px;
       text-align: center;
       color: var(--doge-subtle);
-      font-size: 0.73rem;
+      font-size: var(--fs-xs);
     ">
       Showing {filteredPackets().length} of {radio.packets.length} packets
       {filter !== 'all' ? `(${filter.toUpperCase()} filter active)` : ''}

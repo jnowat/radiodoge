@@ -216,7 +216,7 @@
       font-weight: 700;
       padding: 14px 28px;
       border-radius: 50px;
-      font-size: 1rem;
+      font-size: var(--fs-md);
       z-index: 9999;
       box-shadow: 0 4px 24px rgba(245, 197, 24, 0.5);
       white-space: nowrap;
@@ -282,6 +282,7 @@
     <div class="footer-right">
       <button
         onclick={toggleDebugConsole}
+        aria-label="Toggle debug console"
         title="Toggle Debug Console (Ctrl+Shift+D)"
         style="
           background: {debugVisible ? 'rgba(245, 197, 24, 0.15)' : 'transparent'};
@@ -289,7 +290,7 @@
           border-radius: 4px;
           color: {debugVisible ? 'var(--doge-yellow)' : 'var(--doge-subtle)'};
           cursor: pointer;
-          font-size: 0.68rem;
+          font-size: var(--fs-2xs);
           padding: 2px 7px;
           font-family: var(--font-mono);
           transition: all 0.15s;

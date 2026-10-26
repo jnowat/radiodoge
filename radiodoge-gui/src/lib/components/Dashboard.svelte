@@ -156,8 +156,8 @@
           style="border-radius: 20px; display: block; image-rendering: crisp-edges;"
         />
       </div>
-      <p style="font-size: 1rem; margin-bottom: 6px;">Connect to a Heltec device first to see the dashboard.</p>
-      <p style="font-size: 0.85rem; font-style: italic;">Such empty. Very disconnect. Wow.</p>
+      <p style="font-size: var(--fs-md); margin-bottom: 6px;">Connect to a Heltec device first to see the dashboard.</p>
+      <p style="font-size: var(--fs-base); font-style: italic;">Such empty. Very disconnect. Wow.</p>
     </div>
 
   {:else}
@@ -176,8 +176,8 @@
           role="figure"
           aria-label="{stat.label}: {stat.value}"
         >
-          <div style="font-size: 1.5rem; margin-bottom: 6px;" aria-hidden="true">{stat.icon}</div>
-          <div class="stat-value" style="font-size: 1.4rem;">{stat.value}</div>
+          <div style="font-size: var(--fs-xl); margin-bottom: 6px;" aria-hidden="true">{stat.icon}</div>
+          <div class="stat-value" style="font-size: var(--fs-xl);">{stat.value}</div>
           <div class="stat-label" style="margin-top: 3px;">{stat.label}</div>
         </div>
       {/each}
@@ -186,7 +186,7 @@
     <!-- ── Signal Strength Panel ────────────────────────────────────────── -->
     <div class="card-doge" style="margin-bottom: 20px;" aria-label="Signal strength panel">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
-        <h3 style="margin: 0; font-size: 1rem; font-weight: 600;">
+        <h3 style="margin: 0; font-size: var(--fs-md); font-weight: 600;">
           📡 Signal Strength:
           <span
             style="font-style: italic; color: var(--doge-muted);"
@@ -207,7 +207,7 @@
         <div style="display: flex; justify-content: space-between; margin-bottom: 6px; align-items: center;">
           <span class="stat-label">RSSI</span>
           <span
-            style="font-family: var(--font-mono); font-size: 0.85rem; color: {rssiColor()};"
+            style="font-family: var(--font-mono); font-size: var(--fs-base); color: {rssiColor()};"
             title={signalTooltip()}
           >
             {connection.stats?.rssi ?? '--'} dBm
@@ -238,8 +238,8 @@
           "></div>
         </div>
         <div style="display: flex; justify-content: space-between; margin-top: 4px;">
-          <span style="font-size: 0.65rem; color: var(--doge-subtle);">−120 dBm (very far)</span>
-          <span style="font-size: 0.65rem; color: var(--doge-subtle);">−50 dBm (much close)</span>
+          <span style="font-size: var(--fs-2xs); color: var(--doge-subtle);">−120 dBm (very far)</span>
+          <span style="font-size: var(--fs-2xs); color: var(--doge-subtle);">−50 dBm (much close)</span>
         </div>
       </div>
 
@@ -250,7 +250,7 @@
           title="Signal-to-Noise Ratio. Higher is better. Positive SNR = signal above noise floor. Very clean!"
           style="cursor: help;"
         >SNR</span>
-        <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--doge-text);">
+        <span style="font-family: var(--font-mono); font-size: var(--fs-base); color: var(--doge-text);">
           {connection.stats?.snr?.toFixed(1) ?? '--'} dB
         </span>
       </div>
@@ -259,7 +259,7 @@
     <!-- ── Live Packet Log (TX + RX) ────────────────────────────────────── -->
     <div class="card-doge">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
-        <h3 style="margin: 0; font-size: 1rem; font-weight: 600;">
+        <h3 style="margin: 0; font-size: var(--fs-md); font-weight: 600;">
           📋 Live Packet Log
         </h3>
         <div style="display: flex; gap: 8px; align-items: center;">
@@ -271,7 +271,7 @@
               border: 1px solid rgba(68,136,255,0.25);
               border-radius: 12px;
               padding: 2px 9px;
-              font-size: 0.72rem;
+              font-size: var(--fs-xs);
               font-family: var(--font-mono);
             "
           >
@@ -285,7 +285,7 @@
               border: 1px solid rgba(0,255,136,0.25);
               border-radius: 12px;
               padding: 2px 9px;
-              font-size: 0.72rem;
+              font-size: var(--fs-xs);
               font-family: var(--font-mono);
             "
           >
@@ -310,7 +310,7 @@
             align-items: center;
             justify-content: center;
             color: var(--doge-subtle);
-            font-size: 0.85rem;
+            font-size: var(--fs-base);
             font-style: italic;
           ">
             🐕 Ears up... listening for packets
@@ -380,7 +380,7 @@
                   class="btn-ghost"
                   title="Copy packet data to clipboard"
                   aria-label="Copy packet"
-                  style="padding: 1px 5px; font-size: 0.66rem; flex-shrink: 0; border-color: transparent;"
+                  style="padding: 1px 5px; font-size: var(--fs-2xs); flex-shrink: 0; border-color: transparent;"
                 >
                   {copiedPacketIdx === i ? '✅' : '📋'}
                 </button>

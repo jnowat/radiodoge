@@ -324,8 +324,8 @@
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
     <div>
-      <h2 style="margin: 0 0 4px 0; font-size: 1.3rem; font-weight: 700;">⚙️ LoRa Settings</h2>
-      <p style="margin: 0; color: var(--doge-muted); font-size: 0.85rem;">
+      <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">⚙️ LoRa Settings</h2>
+      <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
         Configure radio parameters — sent to Heltec device on save
       </p>
     </div>
@@ -334,7 +334,7 @@
       class="btn-ghost"
       title="Reset all settings to factory defaults (915 MHz, SF7, 125 kHz, 5 dBm). Much default. Very reset."
       aria-label="Reset all settings to defaults"
-      style="font-size: 0.8rem;"
+      style="font-size: var(--fs-sm);"
     >
       ↺ Defaults
     </button>
@@ -347,7 +347,7 @@
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
         <label
           for="settings-frequency"
-          style="font-weight: 600; font-size: 0.9rem; cursor: pointer;"
+          style="font-weight: 600; font-size: var(--fs-base); cursor: pointer;"
           title="LoRa carrier frequency in MHz. Must match all nodes in your mesh network. 915 = US/AU, 433 = EU/Asia."
         >
           📻 Frequency
@@ -367,7 +367,7 @@
         title="Enter frequency in MHz. Valid range: 433–915 MHz. Must match your Heltec firmware setting and regional regulations."
         aria-describedby="freq-hint"
       />
-      <p id="freq-hint" style="margin: 6px 0 0 0; font-size: 0.75rem; color: var(--doge-muted);">
+      <p id="freq-hint" style="margin: 6px 0 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
         433 MHz (EU/Asia) · 915 MHz (US/AU). Must match all nodes in your mesh.
       </p>
     </div>
@@ -377,7 +377,7 @@
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
         <label
           for="settings-tx-power"
-          style="font-weight: 600; font-size: 0.9rem; cursor: pointer;"
+          style="font-weight: 600; font-size: var(--fs-base); cursor: pointer;"
           title="Transmit power in dBm. Higher = more range but more current draw. 20 dBm = 100 mW = maximum."
         >
           ⚡ TX Power
@@ -397,7 +397,7 @@
         title="Slide to adjust transmit power. Higher = more range but more battery drain. 20 dBm is maximum per Heltec specs."
         style="width: 100%; accent-color: var(--doge-yellow); cursor: pointer;"
       />
-      <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--doge-subtle); margin-top: 4px;">
+      <div style="display: flex; justify-content: space-between; font-size: var(--fs-xs); color: var(--doge-subtle); margin-top: 4px;">
         <span>5 dBm (low power, very nearby)</span>
         <span>20 dBm (max range, much power)</span>
       </div>
@@ -405,7 +405,7 @@
 
     <!-- ── Spreading Factor ───────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Spreading factor setting">
-      <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 12px 0;"
+      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
          title="Spreading Factor controls range vs. data rate. SF7 = fastest, SF12 = longest range but very slow."
       >
         📶 Spreading Factor
@@ -432,14 +432,14 @@
           </button>
         {/each}
       </div>
-      <p style="margin: 8px 0 0 0; font-size: 0.75rem; color: var(--doge-muted);">
+      <p style="margin: 8px 0 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
         Higher SF = longer range, lower data rate. SF7 = fastest (default). Such tradeoff. Wow.
       </p>
     </div>
 
     <!-- ── Bandwidth ─────────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Bandwidth setting">
-      <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 12px 0;"
+      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
          title="LoRa channel bandwidth. Narrower = longer range. 125 kHz is the standard worldwide."
       >
         〰️ Bandwidth
@@ -470,7 +470,7 @@
 
     <!-- ── Coding Rate ────────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Coding rate setting">
-      <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 12px 0;"
+      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
          title="Forward error correction ratio. Higher denominator = more redundancy = better noise tolerance but slower."
       >
         🔢 Coding Rate
@@ -502,7 +502,7 @@
     <!-- ── Node Address ───────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Node address setting">
       <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 4px; flex-wrap: wrap; gap: 8px;">
-        <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0;"
+        <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0;"
            title="This node's unique address on the RadioDoge mesh. Format: Region.Community.Node (each 0–254). Address 255.255.255 is broadcast (all nodes)."
         >
           📍 Node Address
@@ -512,12 +512,12 @@
           class="btn-ghost"
           title="Copy node address to clipboard"
           aria-label="Copy node address"
-          style="padding: 3px 10px; font-size: 0.72rem;"
+          style="padding: 3px 10px; font-size: var(--fs-xs);"
         >
           {copiedNodeAddr ? '✅ Copied!' : '📋 Copy'}
         </button>
       </div>
-      <p style="margin: 0 0 12px 0; font-size: 0.75rem; color: var(--doge-muted);">
+      <p style="margin: 0 0 12px 0; font-size: var(--fs-xs); color: var(--doge-muted);">
         Region.Community.Node — identifies your device on the mesh. Much address. Very unique.
       </p>
       <div style="display: flex; align-items: center; gap: 8px;">
@@ -530,7 +530,7 @@
             <span style="color: var(--doge-muted); font-weight: 700; flex-shrink: 0;">.</span>
           {/if}
           <div style="flex: 1;" title={field.tooltip}>
-            <div style="font-size: 0.7rem; color: var(--doge-muted); margin-bottom: 4px; text-align: center;">
+            <div style="font-size: var(--fs-2xs); color: var(--doge-muted); margin-bottom: 4px; text-align: center;">
               {field.label}
             </div>
             <input
@@ -557,7 +557,7 @@
 
     <!-- ── v0.3.6 — Connection Type (USB / BLE) ─────────────────────────── -->
     <div class="card-doge" aria-label="Connection type">
-      <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 12px 0;"
+      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
          title="Choose how to connect to your Heltec board. USB = wired serial (default). BLE = wireless Bluetooth LE (Heltec V3 only)."
       >
         🔌 Connection Type
@@ -579,14 +579,14 @@
               border-radius: 8px;
               cursor: pointer;
               font-weight: {connType === opt.id ? 700 : 400};
-              font-size: 0.85rem;
+              font-size: var(--fs-base);
               transition: all 0.15s;
               display: flex; flex-direction: column; align-items: center; gap: 4px;
             "
           >
             <span>{opt.label}</span>
             {#if connType === opt.id && opt.id === 'ble'}
-              <span style="font-size: 0.65rem; color: var(--doge-yellow); opacity: 0.8;">
+              <span style="font-size: var(--fs-2xs); color: var(--doge-yellow); opacity: 0.8;">
                 Scan for "RadioDoge-XX" devices
               </span>
             {/if}
@@ -594,7 +594,7 @@
         {/each}
       </div>
       {#if connType === 'ble'}
-        <p style="margin: 8px 0 0 0; font-size: 0.75rem; color: var(--doge-muted);">
+        <p style="margin: 8px 0 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
           📶 BLE mode requires Heltec firmware v0.3.6+. Connect tab will scan for "RadioDoge-XX" devices.
           Such wireless. Very Bluetooth. Wow.
         </p>
@@ -605,10 +605,10 @@
     <div class="card-doge" aria-label="WiFi toggle">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
         <div>
-          <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 4px 0;">
+          <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 4px 0;">
             📡 WiFi Radio
           </p>
-          <p style="margin: 0; font-size: 0.75rem; color: var(--doge-muted);">
+          <p style="margin: 0; font-size: var(--fs-xs); color: var(--doge-muted);">
             Disable to save power. Persisted in board NVS. Board is source of truth.
           </p>
         </div>
@@ -616,7 +616,7 @@
           <span style="
             padding: 4px 12px;
             border-radius: 20px;
-            font-size: 0.72rem;
+            font-size: var(--fs-xs);
             font-weight: 700;
             background: {connection.wifiEnabled ? 'rgba(0,255,136,0.12)' : 'rgba(100,100,100,0.1)'};
             color: {connection.wifiEnabled ? 'var(--doge-neon)' : 'var(--doge-subtle)'};
@@ -637,14 +637,14 @@
             color: {connection.wifiEnabled ? 'var(--doge-neon)' : 'var(--doge-muted)'};
             border-radius: 8px;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: var(--fs-base);
             opacity: {!connection.isConnected || isTogglingWifi ? 0.5 : 1};
           "
         >
           {isTogglingWifi ? '⏳ Applying…' : connection.wifiEnabled ? '📴 Disable WiFi' : '📡 Enable WiFi'}
         </button>
         {#if wifiError}
-          <span style="font-size: 0.75rem; color: #ff6060;">{wifiError}</span>
+          <span style="font-size: var(--fs-xs); color: #ff6060;">{wifiError}</span>
         {/if}
       </div>
     </div>
@@ -653,18 +653,18 @@
     <div class="card-doge" aria-label="Board MAC address">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
         <div>
-          <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 4px 0;">🔑 Board MAC Address</p>
-          <p style="margin: 0; font-size: 0.75rem; color: var(--doge-muted);">WiFi station MAC address of the connected board.</p>
+          <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 4px 0;">🔑 Board MAC Address</p>
+          <p style="margin: 0; font-size: var(--fs-xs); color: var(--doge-muted);">WiFi station MAC address of the connected board.</p>
         </div>
         {#if connection.boardMac}
-          <span style="font-family: var(--font-mono); font-size: 0.88rem; color: var(--doge-yellow); font-weight: 700; letter-spacing: 0.05em;">
+          <span style="font-family: var(--font-mono); font-size: var(--fs-base); color: var(--doge-yellow); font-weight: 700; letter-spacing: 0.05em;">
             {connection.boardMac}
           </span>
         {:else}
           <button
             onclick={fetchMac}
             disabled={!connection.isConnected || isAndroidPlatform === null || isQueryingMac}
-            style="padding: 6px 14px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-yellow); border-radius: 6px; cursor: pointer; font-size: 0.8rem; opacity: {!connection.isConnected || isAndroidPlatform === null || isQueryingMac ? 0.5 : 1};"
+            style="padding: 6px 14px; border: 1px solid var(--doge-border); background: transparent; color: var(--doge-yellow); border-radius: 6px; cursor: pointer; font-size: var(--fs-sm); opacity: {!connection.isConnected || isAndroidPlatform === null || isQueryingMac ? 0.5 : 1};"
           >
             {isQueryingMac ? '⏳ Reading…' : '🔍 Read MAC'}
           </button>
@@ -679,10 +679,10 @@
     <div class="card-doge" aria-label="Theme toggle">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
         <div>
-          <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 4px 0;">
+          <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 4px 0;">
             {isDarkTheme ? '🌙 Dark Theme' : '☀️ Light Theme'}
           </p>
-          <p style="margin: 0; font-size: 0.75rem; color: var(--doge-muted);">Toggle between dark and light mode. Preference saved locally.</p>
+          <p style="margin: 0; font-size: var(--fs-xs); color: var(--doge-muted);">Toggle between dark and light mode. Preference saved locally.</p>
         </div>
         <button
           onclick={toggleTheme}
@@ -693,7 +693,7 @@
             color: var(--doge-yellow);
             border-radius: 8px;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: var(--fs-base);
           "
         >
           {isDarkTheme ? '☀️ Switch to Light' : '🌙 Switch to Dark'}
@@ -705,12 +705,12 @@
     <div class="card-doge" aria-label="Gateway mode">
       <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
         <div>
-          <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 4px 0;"
+          <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 4px 0;"
              title="Gateway mode routes LoRa traffic to the internet. Setting is stored on the board — survives power cycles. Such persist. Very NVS."
           >
             🌐 Gateway Mode
           </p>
-          <p style="margin: 0; font-size: 0.75rem; color: var(--doge-muted);">
+          <p style="margin: 0; font-size: var(--fs-xs); color: var(--doge-muted);">
             Stored in board NVS — persists across power cycles. Board is source of truth.
           </p>
         </div>
@@ -720,7 +720,7 @@
           <span style="
             padding: 4px 12px;
             border-radius: 20px;
-            font-size: 0.72rem;
+            font-size: var(--fs-xs);
             font-weight: 700;
             background: {connection.gatewayMode ? 'rgba(0,255,136,0.12)' : 'rgba(100,100,100,0.1)'};
             color: {connection.gatewayMode ? 'var(--doge-neon)' : 'var(--doge-subtle)'};
@@ -747,7 +747,7 @@
             color: {connection.gatewayMode ? 'var(--doge-neon)' : 'var(--doge-muted)'};
             border-radius: 8px;
             cursor: {connection.isConnected ? 'pointer' : 'not-allowed'};
-            font-size: 0.85rem;
+            font-size: var(--fs-base);
             font-weight: 600;
             transition: all 0.15s;
             display: flex; align-items: center; gap: 6px;
@@ -776,7 +776,7 @@
               color: var(--doge-muted);
               border-radius: 8px;
               cursor: pointer;
-              font-size: 0.85rem;
+              font-size: var(--fs-base);
               transition: all 0.15s;
               display: flex; align-items: center; gap: 6px;
             "
@@ -799,7 +799,7 @@
               color: var(--doge-neon);
               border-radius: 8px;
               cursor: pointer;
-              font-size: 0.85rem;
+              font-size: var(--fs-base);
               font-weight: 600;
               transition: all 0.15s;
             "
@@ -810,13 +810,13 @@
       </div>
 
       {#if gatewayError}
-        <div style="margin-top: 8px; color: var(--doge-red); font-size: 0.78rem;" role="alert">❌ {gatewayError}</div>
+        <div style="margin-top: 8px; color: var(--doge-red); font-size: var(--fs-sm);" role="alert">❌ {gatewayError}</div>
       {/if}
       {#if daemonError}
-        <div style="margin-top: 8px; color: var(--doge-red); font-size: 0.78rem;" role="alert">❌ Daemon: {daemonError}</div>
+        <div style="margin-top: 8px; color: var(--doge-red); font-size: var(--fs-sm);" role="alert">❌ Daemon: {daemonError}</div>
       {/if}
       {#if daemonNote}
-        <div style="margin-top: 8px; color: var(--doge-muted); font-size: 0.78rem;" role="status">ℹ️ {daemonNote}</div>
+        <div style="margin-top: 8px; color: var(--doge-muted); font-size: var(--fs-sm);" role="status">ℹ️ {daemonNote}</div>
       {/if}
     </div>
 
@@ -832,10 +832,10 @@
     <div class="card-doge" aria-label="BLE advertising toggle">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
         <div>
-          <p style="display: block; font-weight: 600; font-size: 0.9rem; margin: 0 0 4px 0;">
+          <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 4px 0;">
             📶 BLE Advertising
           </p>
-          <p style="margin: 0; font-size: 0.75rem; color: var(--doge-muted);">
+          <p style="margin: 0; font-size: var(--fs-xs); color: var(--doge-muted);">
             Enable/disable board BLE advertising. Disable to save power. Requires firmware v0.3.16+.
           </p>
         </div>
@@ -843,7 +843,7 @@
           <span style="
             padding: 4px 12px;
             border-radius: 20px;
-            font-size: 0.72rem;
+            font-size: var(--fs-xs);
             font-weight: 700;
             background: {bleAdvertisingEnabled ? 'rgba(0,255,136,0.12)' : 'rgba(100,100,100,0.1)'};
             color: {bleAdvertisingEnabled ? 'var(--doge-neon)' : 'var(--doge-subtle)'};
@@ -864,14 +864,14 @@
             color: {bleAdvertisingEnabled ? 'var(--doge-neon)' : 'var(--doge-muted)'};
             border-radius: 8px;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: var(--fs-base);
             opacity: {!connection.isConnected || isTogglingBle ? 0.5 : 1};
           "
         >
           {isTogglingBle ? '⏳ Applying…' : bleAdvertisingEnabled ? '📴 Disable BLE' : '📶 Enable BLE'}
         </button>
         {#if bleError}
-          <span style="font-size: 0.75rem; color: #ff6060;">{bleError}</span>
+          <span style="font-size: var(--fs-xs); color: #ff6060;">{bleError}</span>
         {/if}
       </div>
     </div>
@@ -880,10 +880,10 @@
     <div class="card-doge" aria-label="Board state sync">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
         <div>
-          <p style="font-weight: 600; font-size: 0.9rem; margin: 0 0 4px 0;">
+          <p style="font-weight: 600; font-size: var(--fs-base); margin: 0 0 4px 0;">
             🔄 Board State Sync
           </p>
-          <p style="margin: 0; font-size: 0.75rem; color: var(--doge-muted);">
+          <p style="margin: 0; font-size: var(--fs-xs); color: var(--doge-muted);">
             Board is source of truth. Query live state — if mismatch, board wins.
           </p>
         </div>
@@ -892,7 +892,7 @@
           disabled={!connection.isConnected || isSyncing}
           class="btn-ghost"
           title="Query CMD_GET_SETTINGS (0x22) from board — read live node address + gateway mode. Board state is authoritative."
-          style="font-size: 0.8rem; display: flex; align-items: center; gap: 6px;"
+          style="font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px;"
         >
           {#if isSyncing}
             <DogeSpinner size="sm" message="" />
@@ -909,7 +909,7 @@
             margin-top: 10px;
             padding: 8px 12px;
             border-radius: 8px;
-            font-size: 0.8rem;
+            font-size: var(--fs-sm);
             font-family: var(--font-mono);
             background: {syncResult.startsWith('✅') ? 'rgba(0,255,136,0.08)' : 'rgba(255,140,0,0.08)'};
             border: 1px solid {syncResult.startsWith('✅') ? 'rgba(0,255,136,0.25)' : 'rgba(255,140,0,0.25)'};
@@ -928,7 +928,7 @@
         ? 'Send new LoRa settings to the Heltec device and verify they were accepted (round-trip check). Much configure. Very verify.'
         : 'Save settings locally — connect a device to push settings to hardware.'}"
       aria-label="Save settings to device"
-      style="width: 100%; padding: 14px; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 8px;"
+      style="width: 100%; padding: 14px; font-size: var(--fs-md); display: flex; align-items: center; justify-content: center; gap: 8px;"
     >
       {#if isSaving}
         <DogeSpinner size="sm" message="" />
@@ -950,7 +950,7 @@
           border: 1px solid {saveVerified ? 'rgba(0, 255, 136, 0.35)' : 'rgba(245, 197, 24, 0.3)'};
           border-radius: 8px;
           color: {saveVerified ? 'var(--doge-neon)' : 'var(--doge-yellow)'};
-          font-size: 0.85rem;
+          font-size: var(--fs-base);
           text-align: center;
           line-height: 1.5;
         "
@@ -976,7 +976,7 @@
           border: 1px solid rgba(255, 68, 68, 0.3);
           border-radius: 8px;
           color: var(--doge-red);
-          font-size: 0.85rem;
+          font-size: var(--fs-base);
           line-height: 1.5;
         "
       >

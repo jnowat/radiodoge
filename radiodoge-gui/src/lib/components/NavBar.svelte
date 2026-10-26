@@ -153,7 +153,7 @@
     background-clip: text;
     -webkit-text-fill-color: transparent;
   }
-  .brand-sub { font-size: 0.66rem; color: var(--doge-muted); letter-spacing: 0.04em; }
+  .brand-sub { font-size: var(--fs-2xs); color: var(--doge-muted); letter-spacing: 0.04em; }
 
   .groups { display: flex; flex-direction: column; gap: 14px; flex: 1; }
   .group { display: flex; flex-direction: column; gap: 2px; }
@@ -192,7 +192,7 @@
   }
   .tab-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .tab-btn:focus-visible { outline: 2px solid var(--doge-yellow); outline-offset: 1px; }
-  .tab-icon { width: 20px; text-align: center; font-size: 1rem; }
+  .tab-icon { width: 20px; text-align: center; font-size: var(--fs-md); }
   .tab-label { flex: 1; white-space: nowrap; }
 
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--doge-subtle); }
@@ -219,13 +219,13 @@
   .status-card:focus-visible { outline: 2px solid var(--doge-yellow); }
   .status-ok { border-color: rgba(0, 255, 136, 0.3); }
   .status-row { display: flex; align-items: center; gap: 8px; }
-  .status-label { flex: 1; font-size: 0.82rem; font-weight: 600; }
-  .status-detail { font-size: 0.7rem; color: var(--doge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-label { flex: 1; font-size: var(--fs-sm); font-weight: 600; }
+  .status-detail { font-size: var(--fs-2xs); color: var(--doge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-detail.err { color: var(--doge-red); white-space: normal; }
   .mono { font-family: var(--font-mono); }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .chip {
-    font-size: 0.62rem;
+    font-size: var(--fs-2xs);
     font-weight: 700;
     letter-spacing: 0.04em;
     padding: 2px 7px;

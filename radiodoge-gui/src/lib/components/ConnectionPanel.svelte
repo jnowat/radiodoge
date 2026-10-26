@@ -399,7 +399,7 @@
   <!-- ── Android USB/BT connection card (v0.3.10) ─────────────────────────── -->
   {#if isAndroidPlatform}
     <div class="card-doge {connection.isConnected ? 'card-connected' : ''}" style="margin-bottom: 16px;">
-      <h2 style="margin: 0 0 16px 0; font-size: 1.1rem; font-weight: 600; color: var(--doge-text);">
+      <h2 style="margin: 0 0 16px 0; font-size: var(--fs-lg); font-weight: 600; color: var(--doge-text);">
         📱 Connect to Heltec Device
       </h2>
 
@@ -409,7 +409,7 @@
           margin-bottom: 14px;
           padding: 8px 14px;
           border-radius: 8px;
-          font-size: 0.83rem;
+          font-size: var(--fs-sm);
           font-weight: 600;
           display: flex;
           align-items: center;
@@ -459,13 +459,13 @@
                 color: {mobileConnectTab === tab.id ? 'var(--doge-yellow)' : 'var(--doge-muted)'};
                 cursor: pointer;
                 transition: background 0.15s;
-                font-size: 0.85rem;
+                font-size: var(--fs-base);
                 font-weight: {mobileConnectTab === tab.id ? 600 : 400};
                 line-height: 1.4;
               "
             >
               <div>{tab.label}</div>
-              <div style="font-size: 0.65rem; opacity: 0.7; margin-top: 2px;">{tab.subtitle}</div>
+              <div style="font-size: var(--fs-2xs); opacity: 0.7; margin-top: 2px;">{tab.subtitle}</div>
             </button>
           {/each}
         </div>
@@ -476,7 +476,7 @@
             background: rgba(255,140,0,0.06);
             border: 1px solid rgba(255,140,0,0.2);
             border-radius: 8px;
-            font-size: 0.8rem;
+            font-size: var(--fs-sm);
             color: var(--doge-muted);
             margin-bottom: 12px;
             line-height: 1.6;
@@ -490,7 +490,7 @@
         <!-- ── Device list ─────────────────────────────────────────────── -->
         <div style="margin-bottom: 14px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <div style="font-size: 0.8rem; color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em;">
+            <div style="font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em;">
               {mobileConnectTab === 'bluetooth' ? 'Bluetooth Devices' : 'USB Serial Devices'}
             </div>
             <button
@@ -498,7 +498,7 @@
               disabled={mobileRefreshing}
               class="btn-ghost"
               title="Scan for devices"
-              style="padding: 6px 12px; font-size: 0.78rem;"
+              style="padding: 6px 12px; font-size: var(--fs-sm);"
             >
               {#if mobileRefreshing}
                 <span style="animation: spin-doge 1s linear infinite; display: inline-block;">⟳</span>
@@ -515,7 +515,7 @@
               background: rgba(245,197,24,0.04);
               border: 1px dashed rgba(245,197,24,0.2);
               border-radius: 8px;
-              font-size: 0.82rem;
+              font-size: var(--fs-sm);
               color: var(--doge-subtle);
               text-align: center;
               line-height: 1.7;
@@ -523,14 +523,14 @@
               {#if mobileConnectTab === 'usb'}
                 No USB serial devices found.<br>
                 Plug in the Heltec via USB-C OTG cable, then tap <strong>⟳ Scan</strong>.<br>
-                <span style="font-size: 0.7rem; opacity: 0.75; margin-top: 4px; display: inline-block;">
+                <span style="font-size: var(--fs-2xs); opacity: 0.75; margin-top: 4px; display: inline-block;">
                   Android will prompt for USB permission on first connect.
                 </span>
               {:else}
                 No Bluetooth devices found.<br>
                 Make sure the Heltec is <strong>powered on</strong>, BLE is enabled
                 in firmware, and the board is within ~10 m.<br>
-                <span style="font-size: 0.7rem; opacity: 0.75; margin-top: 4px; display: inline-block;">
+                <span style="font-size: var(--fs-2xs); opacity: 0.75; margin-top: 4px; display: inline-block;">
                   Board advertises as "RadioDoge-X.X.X" (Nordic UART Service).
                 </span>
               {/if}
@@ -551,14 +551,14 @@
                     width: 100%; transition: all 0.15s;
                   "
                 >
-                  <span style="font-size: 1.1rem; flex-shrink: 0;">
+                  <span style="font-size: var(--fs-lg); flex-shrink: 0;">
                     {device.isLikelyHeltec ? '🟢' : device.type === 'bluetooth' ? '📶' : '🔵'}
                   </span>
                   <div style="min-width: 0; flex: 1;">
-                    <div style="font-size: 0.82rem; font-family: var(--font-mono); color: var(--doge-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div style="font-size: var(--fs-sm); font-family: var(--font-mono); color: var(--doge-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                       {device.path}
                     </div>
-                    <div style="font-size: 0.7rem; color: var(--doge-muted); margin-top: 2px;">
+                    <div style="font-size: var(--fs-2xs); color: var(--doge-muted); margin-top: 2px;">
                       {device.isLikelyHeltec ? '✅ Heltec-compatible USB adapter' : device.description}
                     </div>
                   </div>
@@ -576,7 +576,7 @@
           onclick={mobileConnect}
           disabled={!selectedMobileDevice || connection.mobileStatus === 'connecting'}
           class="btn-doge"
-          style="width: 100%; padding: 14px; font-size: 1rem;"
+          style="width: 100%; padding: 14px; font-size: var(--fs-md);"
         >
           {#if connection.mobileStatus === 'connecting'}
             <DogeSpinner size="sm" message="" />
@@ -593,12 +593,12 @@
         <div style="margin-bottom: 4px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
             <div style="display: flex; align-items: center; gap: 10px;">
-              <h3 style="margin: 0; font-size: 1rem; color: var(--doge-neon);">✅ Connected!</h3>
+              <h3 style="margin: 0; font-size: var(--fs-md); color: var(--doge-neon);">✅ Connected!</h3>
               {#if mobileFirmwareVersion ?? connection.firmwareVersion}
                 <span style="
                   background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3);
                   border-radius: 12px; padding: 2px 10px;
-                  font-size: 0.72rem; font-family: var(--font-mono); color: var(--doge-neon);
+                  font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--doge-neon);
                 ">
                   {mobileFirmwareVersion ?? connection.firmwareVersion}
                 </span>
@@ -610,7 +610,7 @@
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
             <div>
               <div class="stat-label">Device</div>
-              <div style="font-family: var(--font-mono); color: var(--doge-yellow); font-weight: 600; font-size: 0.78rem; word-break: break-all;">
+              <div style="font-family: var(--font-mono); color: var(--doge-yellow); font-weight: 600; font-size: var(--fs-sm); word-break: break-all;">
                 {selectedMobileDevice || connection.portName}
               </div>
             </div>
@@ -624,7 +624,7 @@
             {/if}
             <div>
               <div class="stat-label">Transport</div>
-              <div style="color: var(--doge-text); font-size: 0.82rem;">
+              <div style="color: var(--doge-text); font-size: var(--fs-sm);">
                 {connection.mobileConnectionType === 'bluetooth' ? '📶 Bluetooth' : '🔌 USB-C (OTG)'}
               </div>
             </div>
@@ -634,7 +634,7 @@
             onclick={mobilePingDevice}
             disabled={isPinging}
             class="btn-ghost"
-            style="width: 100%; padding: 10px; font-size: 0.9rem; margin-bottom: {pingResult ? '10px' : '8px'};"
+            style="width: 100%; padding: 10px; font-size: var(--fs-base); margin-bottom: {pingResult ? '10px' : '8px'};"
           >
             {#if isPinging}
               <span style="animation: spin-doge 1s linear infinite; display: inline-block;">📡</span>
@@ -645,7 +645,7 @@
           </button>
           {#if pingResult}
             <div style="
-              padding: 10px 14px; border-radius: 8px; font-size: 0.82rem; margin-bottom: 10px;
+              padding: 10px 14px; border-radius: 8px; font-size: var(--fs-sm); margin-bottom: 10px;
               {pingResult.success
                 ? 'background: rgba(0,255,136,0.07); border: 1px solid rgba(0,255,136,0.25); color: var(--doge-neon);'
                 : 'background: rgba(255,68,68,0.07); border: 1px solid rgba(255,68,68,0.25); color: var(--doge-red);'}
@@ -666,7 +666,7 @@
           ">
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
               <div>
-                <div style="font-size: 0.82rem; font-weight: 600; color: var(--doge-text);">
+                <div style="font-size: var(--fs-sm); font-weight: 600; color: var(--doge-text);">
                   📶 BLE Advertising
                 </div>
                 <div style="font-size: 0.71rem; color: var(--doge-muted); margin-top: 2px;">
@@ -682,7 +682,7 @@
                   border: 1px solid {panelBleEnabled ? 'rgba(100,100,255,0.5)' : 'rgba(255,100,100,0.4)'};
                   background: {panelBleEnabled ? 'rgba(100,100,255,0.15)' : 'rgba(255,100,100,0.1)'};
                   color: {panelBleEnabled ? '#9090ff' : 'var(--doge-red)'};
-                  font-size: 0.78rem; font-weight: 600; cursor: pointer;
+                  font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
                   opacity: {isPanelTogglingBle ? 0.6 : 1};
                 "
               >
@@ -690,7 +690,7 @@
               </button>
             </div>
             {#if panelBleError}
-              <div style="font-size: 0.7rem; color: var(--doge-red); margin-top: 6px;">❌ {panelBleError}</div>
+              <div style="font-size: var(--fs-2xs); color: var(--doge-red); margin-top: 6px;">❌ {panelBleError}</div>
             {/if}
           </div>
 
@@ -700,7 +700,7 @@
               width: 100%;
               background: rgba(255,68,68,0.1); color: var(--doge-red);
               border: 1px solid rgba(255,68,68,0.3); border-radius: 12px;
-              padding: 12px; font-size: 0.95rem; font-weight: 700; cursor: pointer;
+              padding: 12px; font-size: var(--fs-md); font-weight: 700; cursor: pointer;
             "
           >
             🔌 Disconnect
@@ -713,14 +713,14 @@
         <div style="
           margin-top: 10px; padding: 10px 14px;
           background: rgba(255,68,68,0.08); border: 1px solid rgba(255,68,68,0.3);
-          border-radius: 8px; color: var(--doge-red); font-size: 0.8rem;
+          border-radius: 8px; color: var(--doge-red); font-size: var(--fs-sm);
           display: flex; align-items: flex-start; gap: 8px;
         ">
           <span style="flex-shrink:0;">❌</span>
           <span style="flex:1; word-break: break-word; white-space: pre-line;">{connection.error}</span>
           <button
             onclick={() => { connection.error = null; }}
-            style="background:none;border:none;cursor:pointer;color:inherit;opacity:0.5;font-size:0.85rem;padding:0;flex-shrink:0;"
+            style="background:none;border:none;cursor:pointer;color:inherit;opacity:0.5;font-size: var(--fs-base);padding:0;flex-shrink:0;"
           >✕</button>
         </div>
       {/if}
@@ -730,13 +730,13 @@
   <!-- ── Connection card (Desktop) ──────────────────────────────────────────── -->
   {#if !isAndroidPlatform}
   <div class="card-doge {connection.isConnected ? 'card-connected' : ''}">
-    <h2 style="margin: 0 0 20px 0; font-size: 1.1rem; font-weight: 600; color: var(--doge-text);">
+    <h2 style="margin: 0 0 20px 0; font-size: var(--fs-lg); font-weight: 600; color: var(--doge-text);">
       🔌 Connect to Heltec Device
     </h2>
 
     <!-- Port selection -->
     <div style="margin-bottom: 16px;">
-      <label for="serial-port-select" style="display: block; font-size: 0.8rem; color: var(--doge-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">
+      <label for="serial-port-select" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">
         Serial Port
       </label>
       <div style="display: flex; gap: 8px; min-width: 0;">
@@ -753,8 +753,7 @@
             border-radius: 8px;
             color: {selectedPort ? 'var(--doge-text)' : 'var(--doge-subtle)'};
             padding: 10px 12px;
-            font-size: 0.85rem;
-            outline: none;
+            font-size: var(--fs-base);
             font-family: var(--font-mono);
             cursor: pointer;
             overflow: hidden;
@@ -779,6 +778,7 @@
         <button
           onclick={refreshPorts}
           disabled={isRefreshing}
+          aria-label="Refresh serial ports"
           class="btn-ghost"
           title="Refresh port list"
           style="padding: 10px 14px; flex-shrink: 0;"
@@ -798,7 +798,7 @@
           display: flex;
           align-items: center;
           gap: 8px;
-          font-size: 0.76rem;
+          font-size: var(--fs-xs);
           color: var(--doge-muted);
         ">
           {#if selectedPortInfo.isLikelyHeltec}
@@ -822,7 +822,7 @@
           background: rgba(245, 197, 24, 0.05);
           border: 1px solid rgba(245, 197, 24, 0.15);
           border-radius: 8px;
-          font-size: 0.8rem;
+          font-size: var(--fs-sm);
           color: var(--doge-muted);
           line-height: 1.7;
         ">
@@ -834,7 +834,7 @@
               <button
                 onclick={() => open('https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers')}
                 class="btn-ghost"
-                style="font-size: 0.72rem; padding: 2px 8px; margin-top: 4px; text-decoration: underline; color: var(--doge-yellow);"
+                style="font-size: var(--fs-xs); padding: 2px 8px; margin-top: 4px; text-decoration: underline; color: var(--doge-yellow);"
               >
                 🔗 silabs.com — CP210x USB Driver
               </button>
@@ -844,7 +844,7 @@
               <button
                 onclick={() => open('https://www.wch-ic.com/products/CH340.html')}
                 class="btn-ghost"
-                style="font-size: 0.72rem; padding: 2px 8px; margin-top: 4px; text-decoration: underline; color: var(--doge-yellow);"
+                style="font-size: var(--fs-xs); padding: 2px 8px; margin-top: 4px; text-decoration: underline; color: var(--doge-yellow);"
               >
                 🔗 wch-ic.com — CH340 USB Driver
               </button>
@@ -856,7 +856,7 @@
 
       <!-- Non-USB port selected: warn user -->
       {#if selectedIsNonUsb}
-        <p style="color: var(--doge-orange); font-size: 0.76rem; margin: 6px 0 0 0;">
+        <p style="color: var(--doge-orange); font-size: var(--fs-xs); margin: 6px 0 0 0;">
           ⚠️ This doesn't look like a USB serial port. Your Heltec should appear as a USB device (CP210x / CH340).
         </p>
       {/if}
@@ -873,7 +873,7 @@
           border: 1px solid rgba(255, 68, 68, 0.3);
           border-radius: 12px;
           padding: 14px;
-          font-size: 1rem;
+          font-size: var(--fs-md);
           font-weight: 700;
           cursor: pointer;
           transition: all 0.2s;
@@ -891,7 +891,7 @@
         app was the only way out. Give them the stop button.
       -->
       <div style="display: flex; gap: 8px; width: 100%;">
-        <button disabled class="btn-doge" style="flex: 1; padding: 14px; font-size: 1rem; opacity: 0.85;">
+        <button disabled class="btn-doge" style="flex: 1; padding: 14px; font-size: var(--fs-md); opacity: 0.85;">
           <DogeSpinner size="sm" message="" />
           <span style="margin-left: 8px;">🔄 Reconnecting... such retry 🐕</span>
         </button>
@@ -905,7 +905,7 @@
             color: #ff8080;
             border-radius: 10px;
             cursor: pointer;
-            font-size: 0.95rem;
+            font-size: var(--fs-md);
             font-weight: 600;
             white-space: nowrap;
           "
@@ -914,7 +914,7 @@
         </button>
       </div>
     {:else if connection.isConnecting}
-      <button disabled class="btn-doge" style="width: 100%; padding: 14px; font-size: 1rem;">
+      <button disabled class="btn-doge" style="width: 100%; padding: 14px; font-size: var(--fs-md);">
         <DogeSpinner size="sm" message="" />
         <span style="margin-left: 8px;">Connecting... such patience 🐕</span>
       </button>
@@ -923,7 +923,7 @@
         onclick={connect}
         disabled={!selectedPort}
         class="btn-doge"
-        style="width: 100%; padding: 14px; font-size: 1.05rem;"
+        style="width: 100%; padding: 14px; font-size: var(--fs-md);"
       >
         🔌 Connect to Heltec
       </button>
@@ -950,7 +950,7 @@
         <button
           onclick={() => { connection.error = null; }}
           title="Dismiss"
-          style="background:none;border:none;cursor:pointer;color:inherit;opacity:0.5;font-size:0.85rem;padding:0;flex-shrink:0;line-height:1;"
+          style="background:none;border:none;cursor:pointer;color:inherit;opacity:0.5;font-size: var(--fs-base);padding:0;flex-shrink:0;line-height:1;"
         >✕</button>
       </div>
     {/if}
@@ -962,7 +962,7 @@
     <div class="card-doge card-connected" style="margin-top: 16px; animation: slide-up 0.3s ease;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
         <div style="display: flex; align-items: center; gap: 10px;">
-          <h3 style="margin: 0; font-size: 1rem; color: var(--doge-neon);">✅ Connected!</h3>
+          <h3 style="margin: 0; font-size: var(--fs-md); color: var(--doge-neon);">✅ Connected!</h3>
           {#if connection.firmwareVersion}
             <span
               title="Firmware version reported by the Heltec device"
@@ -971,7 +971,7 @@
                 border: 1px solid rgba(0,255,136,0.3);
                 border-radius: 12px;
                 padding: 2px 10px;
-                font-size: 0.72rem;
+                font-size: var(--fs-xs);
                 font-family: var(--font-mono);
                 color: var(--doge-neon);
               "
@@ -986,7 +986,7 @@
                 border: 1px solid rgba(245,197,24,0.2);
                 border-radius: 12px;
                 padding: 2px 10px;
-                font-size: 0.72rem;
+                font-size: var(--fs-xs);
                 font-family: var(--font-mono);
                 color: var(--doge-subtle);
               "
@@ -998,7 +998,7 @@
               disabled={isQueryingFw}
               class="btn-ghost"
               title="Re-query firmware version from device"
-              style="padding: 2px 8px; font-size: 0.68rem;"
+              style="padding: 2px 8px; font-size: var(--fs-2xs);"
             >
               {#if isQueryingFw}
                 <span style="animation: spin-doge 1s linear infinite; display: inline-block;">⟳</span>
@@ -1029,7 +1029,7 @@
                 onclick={() => copyToClipboard(nodeAddressToString(connection.nodeAddress!), 'nodeAddr')}
                 class="btn-ghost"
                 title="Copy node address"
-                style="padding: 2px 6px; font-size: 0.7rem; flex-shrink: 0;"
+                style="padding: 2px 6px; font-size: var(--fs-2xs); flex-shrink: 0;"
               >
                 {copiedField === 'nodeAddr' ? '✅' : '📋'}
               </button>
@@ -1057,7 +1057,7 @@
         onclick={pingDevice}
         disabled={isPinging}
         class="btn-ghost"
-        style="width: 100%; padding: 10px; font-size: 0.9rem; margin-bottom: {pingResult ? '10px' : '0'};"
+        style="width: 100%; padding: 10px; font-size: var(--fs-base); margin-bottom: {pingResult ? '10px' : '0'};"
       >
         {#if isPinging}
           <span style="animation: spin-doge 1s linear infinite; display: inline-block;">📡</span>
@@ -1072,7 +1072,7 @@
         <div style="
           padding: 10px 14px;
           border-radius: 8px;
-          font-size: 0.82rem;
+          font-size: var(--fs-sm);
           {pingResult.success
             ? 'background: rgba(0,255,136,0.07); border: 1px solid rgba(0,255,136,0.25); color: var(--doge-neon);'
             : 'background: rgba(255,68,68,0.07); border: 1px solid rgba(255,68,68,0.25); color: var(--doge-red);'}
@@ -1086,7 +1086,7 @@
         padding: 10px 14px;
         background: rgba(0, 255, 136, 0.05);
         border-radius: 8px;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         color: var(--doge-muted);
         font-style: italic;
       ">
@@ -1098,7 +1098,7 @@
   <!-- ── How it works ─────────────────────────────────────────────────────── -->
   {#if !connection.isConnected}
     <div style="margin-top: 32px;">
-      <h3 style="color: var(--doge-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px;">
+      <h3 style="color: var(--doge-muted); font-size: var(--fs-base); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px;">
         How it works
       </h3>
       <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -1113,8 +1113,8 @@
           { icon: '3️⃣', text: 'Generate a Dogecoin wallet in the Wallet tab' },
           { icon: '4️⃣', text: 'Send DOGE over LoRa radio — no internet needed! 🚀' },
         ]) as step}
-          <div style="display: flex; align-items: flex-start; gap: 12px; color: var(--doge-muted); font-size: 0.88rem;">
-            <span style="font-size: 1.1rem; flex-shrink: 0;">{step.icon}</span>
+          <div style="display: flex; align-items: flex-start; gap: 12px; color: var(--doge-muted); font-size: var(--fs-base);">
+            <span style="font-size: var(--fs-lg); flex-shrink: 0;">{step.icon}</span>
             <span>{step.text}</span>
           </div>
         {/each}
