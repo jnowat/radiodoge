@@ -24,6 +24,8 @@ python -m http.server -d crates/radiodoge-inspector/www 8080
 # open http://localhost:8080
 ```
 
+Link straight to a dump with `index.html#hex=02000a0001...`; it decodes on load.
+
 Input may use spaces, commas, colons, dashes or `0x` prefixes between bytes.
 Bytes that cannot start a packet are listed as skipped noise; an incomplete
 packet at the end is reported as trailing bytes.

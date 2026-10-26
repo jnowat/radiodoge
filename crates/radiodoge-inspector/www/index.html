@@ -64,6 +64,9 @@
   }
   $('go').onclick = run;
   $('ex').onclick = () => { $('hex').value = 'fe 01 06\n02 00 0a 00 01 0a 00 02\n04 00 0a 00 01 ff ff ff 6d 75 63 68 20 77 6f 77'; run(); };
+  // Shareable links: index.html#hex=02000a...
+  const fromHash = new URLSearchParams(location.hash.slice(1)).get('hex');
+  if (fromHash) { $('hex').value = fromHash; run(); }
   $('hex').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
 </script>
 </body>
