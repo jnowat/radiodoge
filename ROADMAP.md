@@ -173,11 +173,11 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   for the cost of one packet.** The app says so in the packet description now rather than showing a checkmark,
   but the only real answer is the chain: use `radiodoge-cli verify-tx <txid>` or the History tab's inclusion
   check before treating anything as received.
-- **🟡 The web/REST interface has no authentication, by design.**
-  Any device that can reach the board's web server can call every `/api/*` route — and in dual-WiFi mode that
-  includes hosts on the upstream LAN, not only devices joined to the board's own access point. Treat a firmware
-  gateway as a device on a trusted network. `/proxy` is now gated on the internet bridge being explicitly
-  enabled and capped at 32 KB per response, but it remains a forward proxy for whoever can reach it.
+- **🟡 The web/REST interface uses HTTP Basic auth, not TLS.**
+  Every route except `/ping`, `/status`, `/api/ping` and `/api/status` now needs user `radiodoge` and the
+  board's AP password. Basic credentials travel unencrypted, so on an upstream LAN (dual-WiFi mode) anyone
+  sniffing that network could capture them. `/proxy` is also gated on the internet bridge being explicitly
+  enabled and capped at 32 KB per response.
 - **🟡 A LoRa frame lost in the air is not retransmitted.**
   A multipart transaction is several independent LoRa transmissions and boards do not acknowledge each other's
   data packets. If one part is lost, the gateway's reassembler discards the session after 30 s
@@ -225,17 +225,17 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   enables the mode, so a board configured entirely through the web interface keeps forwarding as before. The
   web UI's *own* "send transaction" endpoint is deliberately not gated — that is the operator acting directly,
   not the board relaying someone else's traffic.
-- **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP.
-  Treat a firmware gateway as trusted-network only until authentication lands.
+- ~~**The firmware web UI is unauthenticated.**~~ Routes now require HTTP Basic auth (see below).
   - ✅ *The credential disclosure is fixed (v0.4.1, needs hardware validation).* `GET /api/password/status`
     returned the AP password and `GET /api/gateway/load` returned the stored gateway RPC password, both in
     plaintext to any unauthenticated caller. Neither is returned now: the password endpoint reports only
     `is_default` and `length`, and the gateway endpoint reports `has_password`. The RPC password is write-only —
     the web UI leaves the field blank with a placeholder showing whether one is saved, and submitting it blank
     keeps the stored value rather than erasing it.
-  - 🔜 *Route authentication itself is still open.* The remaining work is a guard on all 40 handlers; it is not
-    done here because it cannot be compile- or hardware-tested in the review environment, and a mistake locks
-    the operator out of their own board.
+  - ✅ *Route authentication added (needs hardware validation).* All handlers except the four liveness
+    checks are wrapped in `requireAuth()` (HTTP Basic, user `radiodoge`, password = AP password). Recovery if
+    locked out: the AP password is printed on serial at boot, and `/api/password/reset` is reachable once
+    logged in.
 - ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
   crate version via clap's `version` attribute, so it always matches the package.
 - ~~**`cargo build --workspace` failed on a fresh clone.**~~ *Fixed:* `tauri.conf.json` declared an

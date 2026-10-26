@@ -23,11 +23,11 @@ web-based management interface.
 
 Please read before deploying:
 
-- **The web/REST interface has no authentication.** Any device on the board's WiFi AP can call every `/api/*`
-  route. Treat a firmware gateway as a device on a **trusted network only**.
-  *(v0.4.1 did fix the credential disclosure: `GET /api/password/status` and `GET /api/gateway/load` no longer
-  return the AP password or the gateway RPC password. The RPC password is now write-only — the UI shows whether
-  one is stored and submitting the field blank keeps it. Route authentication itself is still outstanding.)*
+- **The web/REST interface requires HTTP Basic auth.** User `radiodoge`, password = the board's AP password
+  (unique per board, printed on serial at first boot, changeable at `POST /api/password/change`). Your browser
+  asks once; scripts pass it with e.g. `curl -u radiodoge:<ap-password> http://192.168.4.1/api/logs`. Only
+  `/ping`, `/status`, `/api/ping` and `/api/status` stay open for liveness checks. Basic auth is not encrypted,
+  so it relies on the AP's WPA2; on a shared network (STA mode) treat the board as trusted-network-only.
 - **"Gateway discovery" is not a discovery protocol.** There is no election or negotiation: any node that
   receives a broadcast and happens to have a configured gateway (or internet) forwards it; others simply
   rebroadcast. Rebroadcast is bounded by a hop count (`MAX_REBROADCAST_HOPS`, currently 3) carried in the
