@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.38] - 2026-10-26
+
+### Added
+- Signal strength on over-the-air ACKs. Firmware FW13 reports a heard ACK as `RECEIVED_ACK_SIGNAL` (`0x2F`, header plus RSSI and SNR) instead of the bare `0x29`. The host folds it back into `RECEIVED_ACK` with the real RSSI, so `lora-ping` prints the ACK's dBm and `discover` and the neighbor table show a signal instead of `n/a`. Hosts still accept the 8-byte `0x29` from older firmware.
+
 ## [0.3.37] - 2026-10-26
 
 ### Changed
