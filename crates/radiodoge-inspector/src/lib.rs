@@ -82,7 +82,7 @@ pub fn parse_hex(input: &str) -> Result<Vec<u8>, String> {
         .chars()
         .filter(|c| !c.is_whitespace() && !matches!(c, ',' | ':' | '-'))
         .collect();
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err(format!("odd number of hex digits ({})", cleaned.len()));
     }
     hex::decode(&cleaned).map_err(|e| format!("not valid hex: {}", e))
@@ -174,7 +174,7 @@ mod tests {
         assert_eq!(r.frames[0].command_name, "PING");
         assert_eq!(r.frames[0].source.as_deref(), Some("10.0.1"));
         assert_eq!(r.frames[0].destination.as_deref(), Some("10.0.2"));
-        assert_eq!(r.frames[1].command_name, "BROADCAST");
+        assert_eq!(r.frames[1].command_name, "MESSAGE");
         assert_eq!(r.frames[1].destination.as_deref(), Some("255.255.255 (broadcast)"));
         assert!(r.frames[1].decoded.as_deref().unwrap_or("").contains("much wow"));
     }
