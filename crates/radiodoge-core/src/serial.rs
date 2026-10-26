@@ -332,6 +332,11 @@ impl SerialManager {
             // Multipart sequences are stitched back together here, so everything
             // downstream sees one complete packet instead of fragments.
             let mut reassembler = radio::MultipartReassembler::new();
+            // When the last byte arrived; variable-length frames are only framed
+            // after the line has been quiet for UNBOUNDED_FRAME_QUIET.
+            let mut last_rx = std::time::Instant::now();
+            const UNBOUNDED_FRAME_QUIET: Duration = Duration::from_millis(40);
+            const STALE_PARTIAL_FRAME: Duration = Duration::from_millis(250);
 
             loop {
                 if token.is_cancelled() {
@@ -375,11 +380,19 @@ impl SerialManager {
                         connected_clone.store(false, Ordering::Relaxed);
                         break;
                     }
-                    Ok(Ok(bytes)) if bytes.is_empty() => {
+                    Ok(Ok(bytes)) if bytes.is_empty() && accumulator.is_empty() => {
                         // Timeout — yield to other async tasks
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                     Ok(Ok(bytes)) => {
+                        if bytes.is_empty() {
+                            // Quiet line with a partial frame buffered: fall through
+                            // so a variable-length frame can be emitted once quiet.
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        } else {
+                            last_rx = std::time::Instant::now();
+                            log::trace!("serial rx {} bytes: {}", bytes.len(), hex::encode(&bytes));
+                        }
                         // Bound the accumulator, mirroring the Android bridge's
                         // MOBILE_ACCUMULATOR_CAP. In normal operation the drain
                         // loop below keeps this to a few hundred bytes; a board
@@ -417,12 +430,29 @@ impl SerialManager {
                             // cause next-packet bytes to appear in payload_hex.
                             // Mirrors the equivalent logic in mobile_push_bytes (lib.rs).
                             let cmd = accumulator[0];
+                            if radio::is_unbounded_frame(cmd, &accumulator)
+                                && accumulator.len() < radio::SINGLE_HDR_LEN + radio::MAX_SINGLE_PAYLOAD_LEN
+                                && last_rx.elapsed() < UNBOUNDED_FRAME_QUIET
+                            {
+                                break; // more of this frame may still be in flight
+                            }
                             let packet_len = match radio::frame_packet_len(cmd, &accumulator) {
                                 Some(n) => n,
                                 // Not enough bytes yet for a complete packet — leave the
                                 // accumulator untouched and wait for the next serial read.
                                 // Truncating here (the old `.min(accumulator.len())`) emitted
                                 // a short packet and left its tail to be misparsed as a new one.
+                                //
+                                // …unless the line has gone quiet: then the "partial frame" is
+                                // junk (a stray byte that happens to look like a fixed-length
+                                // command), and waiting for its tail would glue it to the next
+                                // real packet and misframe everything after it. Drop the head
+                                // byte and resync instead.
+                                None if last_rx.elapsed() > STALE_PARTIAL_FRAME => {
+                                    log::debug!("dropping stale partial frame head 0x{:02X} ({} bytes buffered)", cmd, accumulator.len());
+                                    accumulator.drain(..1);
+                                    continue;
+                                }
                                 None => break,
                             };
                             let now_secs = std::time::SystemTime::now()
@@ -937,6 +967,28 @@ impl SerialManager {
     /// v0.3.8 — Board MAC address string as last reported by the board, or None if not yet queried.
     pub async fn get_board_mac(&self) -> Option<String> {
         self.board_mac.lock().await.clone()
+    }
+
+    /// Ask the board for its address (GET_NODE_ADDR) and wait up to `timeout_ms`
+    /// for the reply, which the read loop stores. Until this runs the manager
+    /// only knows the default 10.0.1, so a CLI that skipped it stamped packets
+    /// with the wrong source on any board configured to another address.
+    pub async fn refresh_node_address(&self, timeout_ms: u64) -> NodeAddress {
+        if self.is_connected() {
+            let mut rx = self.packet_tx.subscribe();
+            let local = self.node_address.lock().await.clone();
+            if self.send_raw(radio::build_get_node_addr(&local)).await.is_ok() {
+                let _ = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async move {
+                    while let Ok(pkt) = rx.recv().await {
+                        if pkt.command == radio::CMD_GET_NODE_ADDR && pkt.source != NodeAddress::broadcast() {
+                            return;
+                        }
+                    }
+                })
+                .await;
+            }
+        }
+        self.node_address.lock().await.clone()
     }
 
     /// After sending SET_NODE_ADDR, verify the device accepted it by querying
