@@ -3586,7 +3586,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radiodoge-cli"
-version = "0.3.26"
+version = "0.3.27"
 dependencies = [
  "anyhow",
  "clap",
@@ -3600,7 +3600,7 @@ dependencies = [
 
 [[package]]
 name = "radiodoge-core"
-version = "0.3.26"
+version = "0.3.27"
 dependencies = [
  "aes",
  "anyhow",
@@ -3627,7 +3627,7 @@ dependencies = [
 
 [[package]]
 name = "radiodoge-gui"
-version = "0.3.26"
+version = "0.3.27"
 dependencies = [
  "anyhow",
  "bs58",

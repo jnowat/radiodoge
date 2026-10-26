@@ -4,7 +4,7 @@
 
 **Much ambition. Very phases. Such plan. Wow.** 🐕
 
-*Current release: **v0.3.26** (app) · **v0.3.8** (Heltec V3 firmware)*
+*Current release: **v0.3.27** (app) · **v0.3.8** (Heltec V3 firmware)*
 
 [← Back to the README](README.md) · [User Manual](docs/USER_MANUAL.md) · [Changelog](CHANGELOG.md)
 
@@ -156,6 +156,8 @@ Bridge RadioDoge with the existing Meshtastic community.
 ---
 
 ## 🧭 Known Limitations & In Progress
+
+> **Hardware session:** [docs/HARDWARE_SESSION.md](docs/HARDWARE_SESSION.md) + `scripts/hw-session.ps1` script the two-board check (flash app-only, verify `10.0.1`/`10.0.2`, ping, LoRa balance, dry-run sign) that clears most of the "needs hardware validation" items below.
 
 Honesty keeps the mesh healthy. These are real gaps in the current build, each already on a roadmap line above:
 
