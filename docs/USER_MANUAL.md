@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.33 · Heltec V3 firmware v0.3.8*
+*App v0.3.34 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -95,7 +95,7 @@ On phone-width screens (≤640 px) the tab labels and logo text collapse to **ic
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.33`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.34`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
