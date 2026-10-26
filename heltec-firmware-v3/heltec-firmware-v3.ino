@@ -1,6 +1,7 @@
 // Prototype RadioDoge firmware for the Heltec WiFi LoRa 32 v2 & v3 modules
 // v0.3.8 — Bug fixes + features: fake-neighbor fix, OOB write fix, KNOWN_CMDS 0x24/0x25,
 //           battery voltage (0x26), board MAC address (0x27), accumulator drain fix.
+#include "raw_lora.h"
 #include <Wire.h>
 #include "LoRaWan_APP.h"
 #include "Arduino.h"
@@ -232,13 +233,6 @@ uint8_t  lora_coding_rate      = LORA_CODINGRATE;
 #define RAW_PROFILE_LEN 12
 #define RAW_RX_DEFAULT_TIMEOUT_S 600
 #define RAW_RX_MAX_TIMEOUT_S 3600
-struct RawLoRaProfile {
-  uint8_t  sync;
-  uint8_t  sf, bw, cr;
-  uint32_t freq_hz;
-  int8_t   power;
-  uint16_t preamble;
-};
 
 bool rawRxActive = false;
 bool rawTxInProgress = false;
