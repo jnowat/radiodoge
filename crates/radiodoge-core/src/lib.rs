@@ -23,6 +23,8 @@ pub mod backend;
 #[cfg(feature = "native")]
 pub mod gateway_stats;
 #[cfg(feature = "native")]
+pub mod store_forward;
+#[cfg(feature = "native")]
 pub mod qr;
 pub mod radio;
 #[cfg(feature = "native")]
