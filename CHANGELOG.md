@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.35] - 2026-10-26
+
+### Changed
+- Split the two largest source files into modules — a pure move with no behavior change, one module per commit, each passing the full gate.
+  - CLI `main.rs` (≈1,950 → ≈880 lines): `cli.rs` (clap definitions), `daemon.rs` (gateway daemon), `meshtastic_cmd.rs` (Meshtastic commands).
+  - Desktop app `lib.rs` (≈2,640 → ≈1,590 lines): `mobile.rs` (Android USB/BLE bridge), `wallet_store.rs` (encrypted wallet + address book), `gateway.rs` (gateway daemon control and stats).
+
 ## [0.3.34] - 2026-10-26
 
 ### Changed
