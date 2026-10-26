@@ -3620,7 +3620,6 @@ dependencies = [
  "serde_json",
  "serialport",
  "sha2",
- "thiserror 1.0.69",
  "tokio",
  "tokio-util",
 ]
@@ -3629,21 +3628,15 @@ dependencies = [
 name = "radiodoge-gui"
 version = "0.3.30"
 dependencies = [
- "anyhow",
- "bs58",
  "env_logger",
  "hex",
  "image",
  "log",
  "radiodoge-core",
- "rand 0.8.8",
- "ripemd",
  "rqrr",
- "secp256k1",
  "serde",
  "serde_json",
  "serialport",
- "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-blec",
@@ -3651,9 +3644,7 @@ dependencies = [
  "tauri-plugin-os",
  "tauri-plugin-serialplugin",
  "tauri-plugin-shell",
- "thiserror 1.0.69",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
