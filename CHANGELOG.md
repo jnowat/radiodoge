@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.39] - 2026-10-26
+
+### Notes
+- First real transaction over LoRa: a 1 DOGE test self-send (226 bytes, 2 frames) went from sender `10.0.2` to gateway `10.0.1` on FW13, was acknowledged with TX_ACK about 1.1 s after it went on air, and was broadcast by the gateway daemon. txid `4268f62b3869e1a829ba7aecc699f1ffd34b198bf034c642e8442e0a5307f9ca`.
+
 ## [0.3.38] - 2026-10-26
 
 ### Added
