@@ -28,6 +28,10 @@ bs58       = { version = "0.5", features = ["check"] }
 rand       = "0.8"
 hex        = "0.4"
 
+# Meshtastic interop — AES-CTR channel encryption
+aes        = "0.8"
+ctr        = "0.9"
+
 # HTTP client for UTXO fetching and transaction broadcast
 reqwest          = { workspace = true }
 

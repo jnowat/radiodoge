@@ -60,6 +60,12 @@ enum Commands {
     /// Example: radiodoge-cli ports
     Ports,
 
+    /// Meshtastic frame tools (offline): wrap RadioDoge packets / decode frames
+    Meshtastic {
+        #[command(subcommand)]
+        cmd: MeshtasticCommands,
+    },
+
     /// Wallet operations (generate, validate)
     Wallet {
         #[command(subcommand)]
@@ -196,6 +202,50 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum MeshtasticCommands {
+    /// Wrap a hex RadioDoge packet in a Meshtastic frame (PRIVATE_APP, broadcast)
+    ///
+    /// Example: radiodoge-cli meshtastic wrap 0301027769 --from 0xdeadbeef
+    Wrap {
+        /// RadioDoge packet bytes as hex
+        packet_hex: String,
+        /// Sender node number (decimal or 0x-hex)
+        #[arg(long, default_value = "0x52440001")]
+        from: String,
+        /// Packet id (random if omitted)
+        #[arg(long)]
+        id: Option<u32>,
+        #[command(flatten)]
+        channel: ChannelArgs,
+    },
+    /// Decode a hex Meshtastic frame and show its header and payload
+    Decode {
+        frame_hex: String,
+        #[command(flatten)]
+        channel: ChannelArgs,
+    },
+}
+
+#[derive(clap::Args)]
+struct ChannelArgs {
+    /// Channel name
+    #[arg(long, default_value = "LongFast")]
+    channel: String,
+    /// Channel key as hex (16/32 bytes) or a 1-byte PSK index; default 01 = public key
+    #[arg(long, default_value = "01")]
+    key: String,
+}
+
+impl ChannelArgs {
+    fn to_channel(&self) -> Result<radiodoge_core::meshtastic::Channel> {
+        Ok(radiodoge_core::meshtastic::Channel {
+            name: self.channel.clone(),
+            key: hex::decode(&self.key).context("--key must be hex")?,
+        })
+    }
+}
+
+#[derive(Subcommand)]
 enum WalletCommands {
     /// Generate a new Dogecoin keypair (address + private key)
     ///
@@ -269,6 +319,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Ports => cmd_ports(),
         Commands::Wallet { cmd } => cmd_wallet(cmd),
+        Commands::Meshtastic { cmd } => cmd_meshtastic(cmd),
         Commands::Send { port, to_address, amount, memo, wif } => {
             cmd_send(&port, &to_address, amount, memo.as_deref(), wif.as_deref()).await
         }
@@ -1257,4 +1308,38 @@ mod tests {
             );
         }
     }
+}
+
+fn cmd_meshtastic(cmd: MeshtasticCommands) -> Result<()> {
+    use radiodoge_core::meshtastic as mt;
+    match cmd {
+        MeshtasticCommands::Wrap { packet_hex, from, id, channel } => {
+            let pkt = hex::decode(packet_hex.trim()).context("packet must be hex")?;
+            let from = match from.strip_prefix("0x") {
+                Some(h) => u32::from_str_radix(h, 16),
+                None => from.parse(),
+            }.context("--from must be a u32")?;
+            let id = id.unwrap_or_else(|| {
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos() ^ d.as_secs() as u32).unwrap_or(1)
+            });
+            let frame = mt::wrap_radiodoge(from, id, &pkt, &channel.to_channel()?)?;
+            println!("{}", hex::encode(frame));
+        }
+        MeshtasticCommands::Decode { frame_hex, channel } => {
+            let frame = hex::decode(frame_hex.trim()).context("frame must be hex")?;
+            match mt::decode_frame(&frame, &channel.to_channel()?)? {
+                None => println!("Channel hash 0x{:02x} doesn't match this channel.", frame.get(13).copied().unwrap_or(0)),
+                Some((h, d)) => {
+                    println!("to=0x{:08x} from=0x{:08x} id={} hops={}/{} want_ack={} channel=0x{:02x}",
+                        h.to, h.from, h.id, h.hop_limit, h.hop_start, h.want_ack, h.channel_hash);
+                    println!("portnum={} payload={}", d.portnum, hex::encode(&d.payload));
+                    if d.portnum == mt::PORT_TEXT_MESSAGE {
+                        println!("text: {}", String::from_utf8_lossy(&d.payload));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
