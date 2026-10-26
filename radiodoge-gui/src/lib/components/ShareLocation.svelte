@@ -4,6 +4,11 @@
   import { invoke } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-shell';
   import { mapUrl } from '$lib/types';
+  import { bridge } from '$lib/device/connection-bridge';
+
+  // Android has no desktop serial loop: build the packet in Rust, write it over USB/BLE.
+  let isAndroidPlatform = $state(false);
+  bridge.isAndroid().then((v) => (isAndroidPlatform = v)).catch(() => {});
 
   let lat = $state('');
   let lon = $state('');
@@ -46,9 +51,15 @@
     sending = true;
     status = null;
     try {
-      const text = await invoke<string>('share_position', {
-        lat: parsed.lat, lon: parsed.lon, accuracyM: parsed.accuracyM ?? null,
-      });
+      const args = { lat: parsed.lat, lon: parsed.lon, accuracyM: parsed.accuracyM ?? null };
+      let text: string;
+      if (isAndroidPlatform) {
+        const [t, bytes] = await invoke<[string, number[]]>('mobile_build_position', args);
+        await bridge.mobileSendBytes(new Uint8Array(bytes));
+        text = t;
+      } else {
+        text = await invoke<string>('share_position', args);
+      }
       status = { ok: true, text: `Broadcast ${text}` };
     } catch (e) {
       status = { ok: false, text: String(e) };

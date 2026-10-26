@@ -1307,11 +1307,7 @@ async fn share_position(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    let acc = accuracy_m
-        .filter(|a| a.is_finite() && *a >= 0.0)
-        .map(|a| a.round().min(u32::MAX as f64) as u32);
-    let pos = radiodoge_core::geo::Position::new(lat, lon, acc)
-        .ok_or_else(|| "Latitude must be −90…90 and longitude −180…180".to_string())?;
+    let pos = parse_position(lat, lon, accuracy_m)?;
     if !state.serial.is_connected() {
         return Err("Connect to a board first".into());
     }
@@ -1321,6 +1317,28 @@ async fn share_position(
     emit_debug_traffic(&app, "TX", &hex::encode(&pkt), &format!("CMD_MESSAGE → broadcast {}", pos.describe()));
     state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
     Ok(text)
+}
+
+fn parse_position(lat: f64, lon: f64, accuracy_m: Option<f64>) -> Result<radiodoge_core::geo::Position, String> {
+    let acc = accuracy_m
+        .filter(|a| a.is_finite() && *a >= 0.0)
+        .map(|a| a.round().min(u32::MAX as f64) as u32);
+    radiodoge_core::geo::Position::new(lat, lon, acc)
+        .ok_or_else(|| "Latitude must be −90…90 and longitude −180…180".to_string())
+}
+
+/// v0.3.20 — Build a POS: broadcast for the Android USB/BLE bridge; JS writes the bytes.
+#[tauri::command]
+async fn mobile_build_position(
+    lat: f64,
+    lon: f64,
+    accuracy_m: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<(String, Vec<u8>), String> {
+    let pos = parse_position(lat, lon, accuracy_m)?;
+    let local = state.serial.get_node_address().await;
+    let text = pos.to_message();
+    Ok((text.clone(), radio::build_broadcast(&local, &text)))
 }
 
 /// v0.3.7 — Whether the board has reported a duplicate node address.
@@ -1711,6 +1729,9 @@ async fn mobile_push_bytes(
         let cmd = packet.command;
 
         packets_extracted += 1;
+
+        // v0.3.20 — Mobile neighbor list (incl. shared POS: positions), same rules as desktop.
+        state.serial.record_neighbor(&packet).await;
 
         // Emit to UI (same event as desktop)
         let _ = app.emit("radio-packet", &packet);
@@ -2237,6 +2258,7 @@ pub fn run() {
             mobile_build_wifi_toggle,
             mobile_build_ble_toggle,
             mobile_build_get_mac,
+            mobile_build_position,
             set_ble_enabled,
             // ── v0.3.16 Android USB TX debug ──────────────────────────────
             mobile_emit_debug_tx,
