@@ -330,6 +330,37 @@ enum MeshtasticCommands {
         #[command(flatten)]
         channel: ChannelArgs,
     },
+    /// Bridge mode: listen to (and optionally send on) a Meshtastic channel
+    /// through the board's raw LoRa mode. Needs firmware v0.4.4 (FW12).
+    ///
+    /// Raw mode is volatile: the board's saved RadioDoge settings are never
+    /// changed, and it returns to normal receive when this exits or times out.
+    ///
+    /// Example: radiodoge-cli meshtastic bridge --port COM5 --listen 120
+    Bridge {
+        #[arg(short, long)]
+        port: String,
+        /// Seconds to listen for Meshtastic frames (0 = send only)
+        #[arg(long, default_value_t = 60)]
+        listen: u16,
+        /// Send this hex RadioDoge packet wrapped as PRIVATE_APP first
+        #[arg(long)]
+        send_hex: Option<String>,
+        /// Send this Meshtastic text message first
+        #[arg(long, conflicts_with = "send_hex")]
+        text: Option<String>,
+        /// Sender node number (decimal or 0x-hex)
+        #[arg(long, default_value = "0x52440001")]
+        from: String,
+        /// Frequency in kHz (default: LongFast US slot, 906875)
+        #[arg(long, default_value_t = 906_875)]
+        freq_khz: u32,
+        /// TX power in dBm
+        #[arg(long, default_value_t = 17)]
+        power: i8,
+        #[command(flatten)]
+        channel: ChannelArgs,
+    },
 }
 
 #[derive(clap::Args)]
@@ -425,6 +456,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Ports => cmd_ports(),
         Commands::Wallet { cmd } => cmd_wallet(cmd),
+        Commands::Meshtastic { cmd: MeshtasticCommands::Bridge { port, listen, send_hex, text, from, freq_khz, power, channel } } => {
+            cmd_meshtastic_bridge(&port, listen, send_hex, text, &from, freq_khz, power, channel).await
+        }
         Commands::Meshtastic { cmd } => cmd_meshtastic(cmd),
         Commands::Send { port, to_address, amount, memo, wif, fee } => {
             cmd_send(&port, &to_address, amount, memo.as_deref(), wif.as_deref(), fee).await
@@ -1623,9 +1657,90 @@ async fn cmd_broadcast(wif: &str, to: &str, amount: f64, fee: Option<f64>) -> Re
     Ok(())
 }
 
+fn parse_node_num(from: &str) -> Result<u32> {
+    match from.strip_prefix("0x") {
+        Some(h) => u32::from_str_radix(h, 16),
+        None => from.parse(),
+    }.context("--from must be a u32")
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_meshtastic_bridge(
+    port: &str, listen: u16, send_hex: Option<String>, text: Option<String>,
+    from: &str, freq_khz: u32, power: i8, channel: ChannelArgs,
+) -> Result<()> {
+    use radiodoge_core::meshtastic as mt;
+    let ch = channel.to_channel()?;
+    let from = parse_node_num(from)?;
+    let profile = radio::RawProfile { freq_khz, power_dbm: power, ..radio::RawProfile::meshtastic_longfast_us() };
+    profile.validate().map_err(|e| anyhow::anyhow!(e))?;
+
+    let manager = Arc::new(SerialManager::new());
+    let on_packet = Arc::new(|_: IncomingPacket| {});
+    manager.connect(port, on_packet).await
+        .with_context(|| format!("Failed to open serial port {}", port))?;
+    let fw = manager.ensure_firmware_version().await;
+    if !radio::firmware_supports_raw(fw.as_deref()) {
+        manager.disconnect().await.ok();
+        anyhow::bail!("Bridge mode needs firmware FW{} or newer; the board reports {}. Flash heltec-firmware-v3/.",
+            radio::MIN_RAW_LORA_FIRMWARE, fw.as_deref().unwrap_or("no version"));
+    }
+    let host = manager.get_node_address().await;
+    let result = async {
+        let send = match (send_hex, text) {
+            (Some(h), _) => Some(mt::bridge_tx_command(&host, from, mt::new_packet_id(),
+                &hex::decode(h.trim()).context("--send-hex must be hex")?, &ch, &profile)),
+            (None, Some(t)) => Some(mt::bridge_text_command(&host, from, mt::new_packet_id(), &t, &ch, &profile)),
+            _ => None,
+        };
+        if let Some(cmd) = send {
+            let cmd = cmd.map_err(|e| anyhow::anyhow!(e))?;
+            match manager.send_and_get_reply(cmd, radio::CMD_RAW_TX, 8000).await? {
+                Some(r) if r.payload_hex == "01" => println!("📡 Sent on {} ({} kHz).", ch.name, freq_khz),
+                Some(_) => println!("❌ The board reported the raw transmit failed."),
+                None => println!("❌ No reply to the raw transmit (rejected profile or old firmware)."),
+            }
+        }
+        if listen == 0 { return Ok(()); }
+        let mut rx = manager.subscribe_packets();
+        let on = radio::build_raw_rx_mode(&host, Some(&profile), listen.saturating_add(5))
+            .map_err(|e| anyhow::anyhow!(e))?;
+        match manager.send_and_get_reply(on, radio::CMD_RAW_RX_MODE, 3000).await? {
+            Some(r) if r.payload_hex == "01" => {}
+            _ => anyhow::bail!("The board did not enter raw receive mode."),
+        }
+        println!("👂 Listening on Meshtastic {} for {} s (Ctrl+C to stop)...", ch.name, listen);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(listen as u64);
+        loop {
+            let pkt = tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => break,
+                _ = tokio::signal::ctrl_c() => break,
+                p = rx.recv() => match p { Ok(p) => p, Err(_) => continue },
+            };
+            if pkt.command != radio::CMD_RAW_RX { continue; }
+            let Some(f) = hex::decode(&pkt.payload_hex).ok().and_then(|b| radio::parse_raw_rx(&b)) else { continue };
+            let sig = format!("rssi={} snr={}", f.rssi, f.snr);
+            match mt::bridge_decode(&f.data, &ch) {
+                mt::BridgeEvent::RadioDoge { from, packet } => println!("🐕 RadioDoge from !{:08x} {}: {}", from, sig, hex::encode(packet)),
+                mt::BridgeEvent::Text { from, text } => println!("💬 !{:08x} {}: {}", from, sig, text),
+                mt::BridgeEvent::Other { from, portnum } => println!("·  !{:08x} {} portnum {}", from, sig, portnum),
+                mt::BridgeEvent::Undecodable => println!("·  {} B not on this channel {}", f.data.len(), sig),
+            }
+        }
+        Ok(())
+    }.await;
+    // Always leave raw mode, even after an error.
+    if let Ok(off) = radio::build_raw_rx_mode(&host, None, 0) {
+        let _ = manager.send_and_get_reply(off, radio::CMD_RAW_RX_MODE, 2000).await;
+    }
+    manager.disconnect().await.ok();
+    result
+}
+
 fn cmd_meshtastic(cmd: MeshtasticCommands) -> Result<()> {
     use radiodoge_core::meshtastic as mt;
     match cmd {
+        MeshtasticCommands::Bridge { .. } => unreachable!("bridge is async; dispatched in main"),
         MeshtasticCommands::Wrap { packet_hex, from, id, channel } => {
             let pkt = hex::decode(packet_hex.trim()).context("packet must be hex")?;
             let from = match from.strip_prefix("0x") {

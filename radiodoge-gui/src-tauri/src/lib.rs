@@ -532,6 +532,87 @@ async fn query_firmware_version(
     Ok(state.serial.get_firmware_version().await)
 }
 
+// ─── v0.3.25 — Meshtastic bridge mode over raw LoRa (firmware FW12) ─────────
+
+fn bridge_profile(freq_khz: u32) -> Result<radio::RawProfile, String> {
+    let p = radio::RawProfile { freq_khz, ..radio::RawProfile::meshtastic_longfast_us() };
+    p.validate()?;
+    Ok(p)
+}
+
+async fn require_raw_firmware(state: &State<'_, AppState>) -> Result<NodeAddress, String> {
+    if !state.serial.is_connected() {
+        return Err("Not connected to a board.".into());
+    }
+    let fw = state.serial.ensure_firmware_version().await;
+    if !radio::firmware_supports_raw(fw.as_deref()) {
+        return Err(format!(
+            "Bridge mode needs firmware FW{} (v0.4.4) or newer; this board reports {}.",
+            radio::MIN_RAW_LORA_FIRMWARE, fw.as_deref().unwrap_or("no version")
+        ));
+    }
+    Ok(state.serial.get_node_address().await)
+}
+
+/// Enter (or leave) volatile raw receive on the Meshtastic LongFast channel.
+/// Returns whether raw RX is active. Never changes the board's saved settings.
+#[tauri::command]
+async fn meshtastic_bridge_listen(
+    state: State<'_, AppState>, enable: bool, freq_khz: u32, timeout_s: u16,
+) -> Result<bool, String> {
+    let host = require_raw_firmware(&state).await?;
+    let profile = bridge_profile(freq_khz)?;
+    let pkt = radio::build_raw_rx_mode(&host, enable.then_some(&profile), timeout_s)?;
+    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_RX_MODE, 3000).await.map_err(|e| e.to_string())? {
+        Some(r) => Ok(r.payload_hex == "01"),
+        None => Err("The board did not answer the raw-mode command.".into()),
+    }
+}
+
+/// Send a Meshtastic text message on LongFast via a single raw transmit.
+#[tauri::command]
+async fn meshtastic_bridge_send_text(
+    state: State<'_, AppState>, text: String, freq_khz: u32,
+) -> Result<bool, String> {
+    if text.trim().is_empty() {
+        return Err("Message is empty.".into());
+    }
+    let host = require_raw_firmware(&state).await?;
+    let profile = bridge_profile(freq_khz)?;
+    let ch = radiodoge_core::meshtastic::Channel::default_longfast();
+    let pkt = radiodoge_core::meshtastic::bridge_text_command(
+        &host, 0x5244_0000 | u32::from(host.node), radiodoge_core::meshtastic::new_packet_id(), &text, &ch, &profile,
+    )?;
+    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_TX, 8000).await.map_err(|e| e.to_string())? {
+        Some(r) => Ok(r.payload_hex == "01"),
+        None => Err("No reply to the raw transmit.".into()),
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeDecoded {
+    kind: &'static str,
+    from: Option<String>,
+    text: Option<String>,
+    rssi: i16,
+    snr: i8,
+}
+
+/// Decode the payload of a CMD_RAW_RX (0x2D) packet on LongFast.
+#[tauri::command]
+fn meshtastic_bridge_decode(payload_hex: String) -> Option<BridgeDecoded> {
+    use radiodoge_core::meshtastic::{bridge_decode, BridgeEvent, Channel};
+    let f = radio::parse_raw_rx(&hex::decode(payload_hex).ok()?)?;
+    let (kind, from, text) = match bridge_decode(&f.data, &Channel::default_longfast()) {
+        BridgeEvent::RadioDoge { from, packet } => ("radiodoge", Some(from), Some(hex::encode(packet))),
+        BridgeEvent::Text { from, text } => ("text", Some(from), Some(text)),
+        BridgeEvent::Other { from, portnum } => ("other", Some(from), Some(format!("portnum {}", portnum))),
+        BridgeEvent::Undecodable => ("undecodable", None, None),
+    };
+    Some(BridgeDecoded { kind, from: from.map(|n| format!("!{:08x}", n)), text, rssi: f.rssi, snr: f.snr })
+}
+
 #[tauri::command]
 async fn ping_device(state: State<'_, AppState>, app: AppHandle) -> Result<bool, String> {
     if !state.serial.is_connected() {
@@ -2411,6 +2492,9 @@ pub fn run() {
         .plugin(tauri_plugin_blec::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            meshtastic_bridge_listen,
+            meshtastic_bridge_send_text,
+            meshtastic_bridge_decode,
             // ── Desktop serial (existing) ─────────────────────────────────
             list_ports,
             list_ports_detailed,

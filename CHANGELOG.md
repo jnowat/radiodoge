@@ -11,6 +11,23 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.25] — 2026-10-26 — Meshtastic bridge mode over raw LoRa
+
+> **Not tested on hardware.** Compiled for Heltec V3 and covered by unit tests only.
+
+### Added
+- **Firmware v0.4.4 (FW12): raw LoRa commands.** `CMD_RAW_TX` (0x2B) sends one frame on an explicit
+  profile (sync word, SF, BW, CR, frequency, power, preamble) and restores the saved RadioDoge
+  config straight after. `CMD_RAW_RX_MODE` (0x2C) enters a volatile raw receive mode that forwards
+  every frame as `CMD_RAW_RX` (0x2D, length-framed, with RSSI/SNR). Raw RX is never persisted, times
+  out (default 10 min, max 1 h) and is left automatically before any RadioDoge transmission. The boot
+  sync word is captured and restored, so default radio behaviour is unchanged.
+- **Core:** `RawProfile` (with `meshtastic_longfast_us()`), `build_raw_tx`, `build_raw_rx_mode`,
+  `parse_raw_rx`, `firmware_supports_raw`, exact framing for 0x2B/0x2C/0x2D, and Meshtastic bridge
+  helpers (`bridge_tx_command`, `bridge_text_command`, `bridge_decode`). `SerialManager::send_and_get_reply`.
+- **CLI:** `radiodoge-cli meshtastic bridge --port P [--listen S] [--text T | --send-hex H]`.
+- **GUI:** Mesh tab "Meshtastic bridge" card — listen to LongFast, send a text, see what was heard.
+
 ## [0.3.24] — 2026-10-26 — UI polish: design tokens, light-theme contrast, accessibility
 
 ### Changed

@@ -55,6 +55,9 @@ pub const CMD_GET_MAC: u8 = 0x27;              // v0.3.8: Query board MAC addres
 pub const CMD_BLE_TOGGLE: u8 = 0x28;          // v0.3.16: Enable/disable BLE advertising (persists to NVS)
 pub const CMD_RECEIVED_ACK: u8 = 0x29;        // v0.4.0: Board-initiated: over-the-air ACK received from remote node
 pub const CMD_RECEIVED_PING: u8 = 0x2A;       // v0.4.0: Board-initiated: over-the-air Ping received from remote node
+pub const CMD_RAW_TX: u8 = 0x2B;              // v0.4.4 (FW12): transmit one raw LoRa frame on an explicit profile
+pub const CMD_RAW_RX_MODE: u8 = 0x2C;         // v0.4.4 (FW12): enter/leave volatile raw receive mode
+pub const CMD_RAW_RX: u8 = 0x2D;              // v0.4.4 (FW12): board-initiated raw frame received in raw mode
 
 // ─── Firmware legacy serial enum ─────────────────────────────────────────────
 //
@@ -280,6 +283,8 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
         CMD_RECEIVED_ACK    => Some(8),  // header only; src = remote node that sent the ACK
         CMD_RECEIVED_PING   => Some(8),  // header only; src = remote node that sent the Ping
+        CMD_RAW_TX          => Some(9),  // header + 1 byte (status: 1 = sent)
+        CMD_RAW_RX_MODE     => Some(9),  // header + 1 byte (raw RX active)
 
         // The firmware's legacy result code: `[0xFE, 1, ACK|NAK]`, three bytes,
         // not a desktop packet at all. A gateway board emits one every time it
@@ -507,6 +512,9 @@ pub fn is_known_command(byte: u8) -> bool {
             | CMD_BLE_TOGGLE
             | CMD_RECEIVED_ACK
             | CMD_RECEIVED_PING
+            | CMD_RAW_TX
+            | CMD_RAW_RX_MODE
+            | CMD_RAW_RX
             | LEGACY_HARDWARE_INFO
             | 0x62
             | 0x64
@@ -571,6 +579,15 @@ pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
 
     let after_hdr = &buf[SINGLE_HDR_LEN..];
 
+    // A raw-mode frame carries its own length: [rssi u16, snr, len, data].
+    if cmd == CMD_RAW_RX {
+        if after_hdr.len() < RAW_RX_META_LEN {
+            return None;
+        }
+        let total = SINGLE_HDR_LEN + RAW_RX_META_LEN + after_hdr[3] as usize;
+        return if buf.len() >= total { Some(total) } else { None };
+    }
+
     if cmd == CMD_GET_FIRMWARE_VERSION {
         return match after_hdr.iter().position(|&b| b == 0) {
             Some(i) => Some(SINGLE_HDR_LEN + i + 1), // include the NUL
@@ -595,7 +612,117 @@ pub fn is_unbounded_frame(cmd: u8, buf: &[u8]) -> bool {
     if buf.len() >= 2 && is_multipart_flags(buf[1]) {
         return false;
     }
-    exact_packet_len(cmd).is_none() && cmd != CMD_GET_FIRMWARE_VERSION
+    exact_packet_len(cmd).is_none() && cmd != CMD_GET_FIRMWARE_VERSION && cmd != CMD_RAW_RX
+}
+
+// ─── Raw LoRa mode (firmware v0.4.4 / FW12) ─────────────────────────────────
+
+/// First firmware build with `CMD_RAW_TX` / `CMD_RAW_RX_MODE`.
+pub const MIN_RAW_LORA_FIRMWARE: u32 = 12;
+/// Encoded [`RawProfile`] length on the wire.
+pub const RAW_PROFILE_LEN: usize = 12;
+/// `[rssi i16 BE, snr i8, len u8]` ahead of a raw frame's data.
+pub const RAW_RX_META_LEN: usize = 4;
+/// Largest raw frame the board accepts from the host (248-byte extra payload
+/// limit minus the profile).
+pub const MAX_RAW_TX_LEN: usize = 248 - RAW_PROFILE_LEN;
+/// Board-side default raw RX timeout when the host passes 0, and the ceiling.
+pub const RAW_RX_DEFAULT_TIMEOUT_S: u16 = 600;
+pub const RAW_RX_MAX_TIMEOUT_S: u16 = 3600;
+
+/// Radio settings for one raw transmit or a raw receive session.
+///
+/// Raw mode never touches the board's saved RadioDoge settings: a raw TX
+/// restores them immediately, and raw RX is volatile, times out, and is left
+/// automatically before any RadioDoge transmission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawProfile {
+    /// LoRa sync word (Meshtastic uses 0x2B; RadioDoge uses the private 0x12).
+    pub sync_word: u8,
+    pub sf: u8,
+    /// 0 = 125 kHz, 1 = 250 kHz, 2 = 500 kHz.
+    pub bw_idx: u8,
+    /// Coding rate 4/5..4/8, given as 1..4.
+    pub cr: u8,
+    pub freq_khz: u32,
+    pub power_dbm: i8,
+    pub preamble: u16,
+}
+
+impl RawProfile {
+    /// Meshtastic LongFast on the US default slot (906.875 MHz).
+    pub fn meshtastic_longfast_us() -> Self {
+        RawProfile { sync_word: 0x2B, sf: 11, bw_idx: 1, cr: 1, freq_khz: 906_875, power_dbm: 17, preamble: 16 }
+    }
+
+    /// Same checks the firmware applies; a profile that fails here would be NACKed.
+    pub fn validate(&self) -> Result<(), String> {
+        if !(7..=12).contains(&self.sf) { return Err(format!("SF {} out of range 7–12", self.sf)); }
+        if self.bw_idx > 2 { return Err("bandwidth index must be 0–2".into()); }
+        if !(1..=4).contains(&self.cr) { return Err("coding rate must be 1–4 (4/5–4/8)".into()); }
+        if !(2..=22).contains(&self.power_dbm) { return Err(format!("TX power {} dBm out of range 2–22", self.power_dbm)); }
+        if !(6..=64).contains(&self.preamble) { return Err(format!("preamble {} out of range 6–64", self.preamble)); }
+        if !(150_000..=960_000).contains(&self.freq_khz) { return Err(format!("frequency {} kHz out of range", self.freq_khz)); }
+        Ok(())
+    }
+
+    pub fn encode(&self) -> [u8; RAW_PROFILE_LEN] {
+        let f = self.freq_khz.to_be_bytes();
+        let p = self.preamble.to_be_bytes();
+        [self.sync_word, self.sf, self.bw_idx, self.cr, f[0], f[1], f[2], f[3], self.power_dbm as u8, p[0], p[1], 0]
+    }
+}
+
+/// `true` when the connected board understands raw LoRa commands.
+pub fn firmware_supports_raw(version: Option<&str>) -> bool {
+    version.and_then(firmware_build_number).is_some_and(|b| b >= MIN_RAW_LORA_FIRMWARE)
+}
+
+/// Build a CMD_RAW_TX packet: header + profile + frame.
+pub fn build_raw_tx(src: &NodeAddress, profile: &RawProfile, frame: &[u8]) -> Result<Vec<u8>, String> {
+    profile.validate()?;
+    if frame.is_empty() { return Err("nothing to send: the raw frame is empty".into()); }
+    if frame.len() > MAX_RAW_TX_LEN {
+        return Err(format!("raw frame is {} bytes; the board accepts at most {}", frame.len(), MAX_RAW_TX_LEN));
+    }
+    let mut pkt = build_header(CMD_RAW_TX, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    pkt.extend_from_slice(&profile.encode());
+    pkt.extend_from_slice(frame);
+    Ok(pkt)
+}
+
+/// Build a CMD_RAW_RX_MODE packet. `profile: None` leaves raw mode.
+pub fn build_raw_rx_mode(src: &NodeAddress, profile: Option<&RawProfile>, timeout_s: u16) -> Result<Vec<u8>, String> {
+    let mut pkt = build_header(CMD_RAW_RX_MODE, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    match profile {
+        Some(p) => {
+            p.validate()?;
+            pkt.push(1);
+            pkt.extend_from_slice(&p.encode());
+        }
+        None => {
+            pkt.push(0);
+            pkt.extend_from_slice(&[0u8; RAW_PROFILE_LEN]);
+        }
+    }
+    pkt.extend_from_slice(&timeout_s.min(RAW_RX_MAX_TIMEOUT_S).to_be_bytes());
+    Ok(pkt)
+}
+
+/// One frame the board heard in raw RX mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawRxFrame {
+    pub rssi: i16,
+    pub snr: i8,
+    pub data: Vec<u8>,
+}
+
+/// Parse the payload (bytes after the 8-byte header) of a CMD_RAW_RX packet.
+pub fn parse_raw_rx(payload: &[u8]) -> Option<RawRxFrame> {
+    if payload.len() < RAW_RX_META_LEN { return None; }
+    let n = payload[3] as usize;
+    let data = payload.get(RAW_RX_META_LEN..RAW_RX_META_LEN + n)?.to_vec();
+    Some(RawRxFrame { rssi: i16::from_be_bytes([payload[0], payload[1]]), snr: payload[2] as i8, data })
 }
 
 /// Build a SET_LORA_PARAMS packet (CMD 0x21).
@@ -1154,6 +1281,9 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
         }
         CMD_RECEIVED_ACK  => Some("📨 ACK received".to_string()),
         CMD_RECEIVED_PING => Some("🏓 Ping received".to_string()),
+        CMD_RAW_TX => Some(format!("📡 Raw TX {}", if payload.first() == Some(&1) { "sent" } else { "failed" })),
+        CMD_RAW_RX_MODE => Some(format!("📡 Raw RX mode {}", if payload.first() == Some(&1) { "ON" } else { "OFF" })),
+        CMD_RAW_RX => Some(match parse_raw_rx(payload) { Some(r) => format!("📡 Raw frame {} B, RSSI {} dBm", r.data.len(), r.rssi), None => "📡 Raw frame".to_string() }),
         _ => None,
     }
 }
@@ -1371,6 +1501,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_raw_profile_encoding_and_framing() {
+        let p = RawProfile::meshtastic_longfast_us();
+        assert_eq!(p.encode(), [0x2B, 11, 1, 1, 0x00, 0x0D, 0xD6, 0x7B, 17, 0, 16, 0]);
+        let src = NodeAddress::new(1, 2, 3);
+        let tx = build_raw_tx(&src, &p, &[9, 8, 7]).unwrap();
+        assert_eq!(tx[0], CMD_RAW_TX);
+        assert_eq!(tx.len(), 8 + RAW_PROFILE_LEN + 3);
+        assert!(build_raw_tx(&src, &p, &[]).is_err());
+        assert!(build_raw_tx(&src, &p, &vec![0; MAX_RAW_TX_LEN + 1]).is_err());
+        let bad = RawProfile { sf: 13, ..p };
+        assert!(build_raw_tx(&src, &bad, &[1]).is_err());
+        let on = build_raw_rx_mode(&src, Some(&p), 0).unwrap();
+        assert_eq!(on.len(), 23);
+        assert_eq!(on[8], 1);
+        let off = build_raw_rx_mode(&src, None, 0).unwrap();
+        assert_eq!((off.len(), off[8]), (23, 0));
+        assert!(firmware_supports_raw(Some("RadioDoge NV3FW12")));
+        assert!(!firmware_supports_raw(Some("NV3FW11")));
+        assert!(!firmware_supports_raw(None));
+    }
+
+    #[test]
+    fn test_raw_rx_frame_is_length_framed() {
+        let mut f = vec![CMD_RAW_RX, 0, 1, 2, 3, 0xFF, 0xFF, 0xFF, 0xFF, 0xA6, 0xFB, 3, 0xAA, 0xBB];
+        assert_eq!(frame_packet_len(CMD_RAW_RX, &f), None, "waits for the tail");
+        assert!(!is_unbounded_frame(CMD_RAW_RX, &f));
+        f.push(0xCC);
+        f.extend_from_slice(&[CMD_PING, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(frame_packet_len(CMD_RAW_RX, &f), Some(15));
+        let r = parse_raw_rx(&f[8..15]).unwrap();
+        assert_eq!((r.rssi, r.snr, r.data), (-90, -5, vec![0xAA, 0xBB, 0xCC]));
+        assert!(parse_raw_rx(&[0, 0, 0, 5, 1]).is_none());
+    }
+
     /// Every command the framing loops accept as a packet start must be known,
     /// and the two transports must agree on the set.
     #[test]
@@ -1381,6 +1546,7 @@ mod tests {
             CMD_GET_FIRMWARE_VERSION, CMD_SET_LORA_PARAMS, CMD_GET_SETTINGS,
             CMD_SET_GATEWAY, CMD_WIFI_TOGGLE, CMD_ADDR_CONFLICT, CMD_GET_BATTERY,
             CMD_GET_MAC, CMD_BLE_TOGGLE, CMD_RECEIVED_ACK, CMD_RECEIVED_PING,
+            CMD_RAW_TX, CMD_RAW_RX_MODE, CMD_RAW_RX,
         ] {
             assert!(is_known_command(cmd), "CMD 0x{:02X} must be recognised", cmd);
         }

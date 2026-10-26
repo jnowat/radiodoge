@@ -9,6 +9,7 @@
   import { open } from '@tauri-apps/plugin-shell';
   import { nodeAddressToString, mapUrl, type NeighborEntry, type GeoPosition } from '$lib/types';
   import ShareLocation from './ShareLocation.svelte';
+  import MeshtasticBridge from './MeshtasticBridge.svelte';
 
   let isRefreshing = $state(false);
   let lastRefreshed = $state<number | null>(null);
@@ -204,7 +205,7 @@
       </div>
     </div>
     <ShareLocation />
-    {#if !isAndroidScan}<ChannelScan />{/if}
+    {#if !isAndroidScan}<ChannelScan /><MeshtasticBridge />{/if}
   {/if}
 </div>
 

@@ -696,6 +696,29 @@ impl SerialManager {
         .unwrap_or(false))
     }
 
+    /// Like [`send_and_await_reply`](Self::send_and_await_reply), but returns
+    /// the reply itself so the caller can read its payload (e.g. a status byte).
+    pub async fn send_and_get_reply(
+        &self,
+        packet: Vec<u8>,
+        expect_cmd: u8,
+        timeout_ms: u64,
+    ) -> Result<Option<IncomingPacket>> {
+        let mut rx = self.packet_tx.subscribe();
+        self.send_raw(packet).await?;
+        Ok(tokio::time::timeout(Duration::from_millis(timeout_ms), async move {
+            loop {
+                match rx.recv().await {
+                    Ok(pkt) if pkt.command == expect_cmd => return Some(pkt),
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        })
+        .await
+        .unwrap_or(None))
+    }
+
     /// Write a complete host→board send — one frame, or a multipart sequence.
     ///
     /// Frames go out strictly one at a time, each waiting for the board's

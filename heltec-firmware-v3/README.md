@@ -150,6 +150,24 @@ See the project [Roadmap](../ROADMAP.md#-known-limitations--in-progress) for sta
 - **User Guide**: Comprehensive examples for sending Dogecoin transactions via LoRa and direct API calls
 - **Security Improvements**: Removed sensitive password information from logs, enhanced credential storage
 
+### Raw LoRa mode (v0.4.4 / FW12) — Meshtastic bridge
+
+> Not yet tested on hardware.
+
+Two host commands let the desktop app talk to non-RadioDoge LoRa networks such as Meshtastic
+without changing the board's saved settings:
+
+| Cmd | Direction | Payload | Reply |
+|-----|-----------|---------|-------|
+| `0x2B` RAW_TX | host → board | 12-byte profile + frame (≤ 236 B) | header + status (1 = sent) |
+| `0x2C` RAW_RX_MODE | host → board | enable, 12-byte profile, timeout s (u16 BE; 0 = 600, max 3600) | header + active |
+| `0x2D` RAW_RX | board → host | rssi i16 BE, snr i8, len, data | — |
+
+Profile: `[sync, sf, bw_idx, cr 1–4, freq_khz u32 BE, power dBm, preamble u16 BE, reserved]`.
+A raw TX restores the RadioDoge radio config immediately. Raw RX is volatile, times out, and is
+left automatically before any RadioDoge transmission. Use `radiodoge-cli meshtastic bridge` or
+the Mesh tab's bridge card.
+
 ### Previous Features (v3.1)
 - **Real-Time Logs**: Live monitoring of all system activity including display messages, network activity, and transaction processing
 - **Internet Gateway Integration**: Send transactions directly to Dogecoin Core, DogeBox, Dogecoin Wallet, or custom gateways

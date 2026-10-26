@@ -255,9 +255,92 @@ pub fn unwrap_radiodoge(frame: &[u8], channel: &Channel) -> Result<Option<Vec<u8
         .map(|(_, d)| d.payload))
 }
 
+// ─── Bridge mode: Meshtastic over the board's raw LoRa commands (FW12) ──────
+
+/// What the bridge made of one frame the board heard in raw RX mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BridgeEvent {
+    /// A RadioDoge packet relayed through Meshtastic (PRIVATE_APP).
+    RadioDoge { from: u32, packet: Vec<u8> },
+    /// A plain Meshtastic text message on the channel.
+    Text { from: u32, text: String },
+    /// A frame on the channel with another portnum.
+    Other { from: u32, portnum: u32 },
+    /// Not decodable on this channel (other channel, noise, or truncated).
+    Undecodable,
+}
+
+/// Build the board command that sends `radiodoge_packet` over Meshtastic.
+pub fn bridge_tx_command(
+    host: &crate::types::NodeAddress,
+    from: u32,
+    id: u32,
+    radiodoge_packet: &[u8],
+    channel: &Channel,
+    profile: &crate::radio::RawProfile,
+) -> Result<Vec<u8>, String> {
+    let frame = wrap_radiodoge(from, id, radiodoge_packet, channel).map_err(|e| e.to_string())?;
+    crate::radio::build_raw_tx(host, profile, &frame)
+}
+
+/// Build a Meshtastic text-message frame command (portnum TEXT_MESSAGE_APP).
+pub fn bridge_text_command(
+    host: &crate::types::NodeAddress,
+    from: u32,
+    id: u32,
+    text: &str,
+    channel: &Channel,
+    profile: &crate::radio::RawProfile,
+) -> Result<Vec<u8>, String> {
+    let header = Header {
+        to: BROADCAST, from, id, hop_limit: 3, hop_start: 3,
+        want_ack: false, via_mqtt: false, channel_hash: 0, next_hop: 0, relay_node: 0,
+    };
+    let frame = encode_frame(header, &Data { portnum: PORT_TEXT_MESSAGE, payload: text.as_bytes().to_vec() }, channel)
+        .map_err(|e| e.to_string())?;
+    crate::radio::build_raw_tx(host, profile, &frame)
+}
+
+/// Decode the data of a CMD_RAW_RX frame on `channel`.
+pub fn bridge_decode(frame: &[u8], channel: &Channel) -> BridgeEvent {
+    match decode_frame(frame, channel) {
+        Ok(Some((h, d))) => match d.portnum {
+            PORT_PRIVATE_APP => BridgeEvent::RadioDoge { from: h.from, packet: d.payload },
+            PORT_TEXT_MESSAGE => BridgeEvent::Text { from: h.from, text: String::from_utf8_lossy(&d.payload).into_owned() },
+            p => BridgeEvent::Other { from: h.from, portnum: p },
+        },
+        _ => BridgeEvent::Undecodable,
+    }
+}
+
+/// A random-enough packet id for Meshtastic dedupe (never 0).
+pub fn new_packet_id() -> u32 {
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let x = (n ^ (n >> 29)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    ((x >> 32) as u32).max(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_round_trip_through_raw_tx() {
+        use crate::radio::{RawProfile, RAW_PROFILE_LEN}; use crate::types::NodeAddress;
+        let ch = Channel::default_longfast();
+        let host = NodeAddress::new(1, 1, 1);
+        let p = RawProfile::meshtastic_longfast_us();
+        let cmd = bridge_tx_command(&host, 0x1234, 7, b"doge", &ch, &p).unwrap();
+        let frame = &cmd[8 + RAW_PROFILE_LEN..];
+        assert_eq!(bridge_decode(frame, &ch), BridgeEvent::RadioDoge { from: 0x1234, packet: b"doge".to_vec() });
+        let t = bridge_text_command(&host, 9, 8, "hi", &ch, &p).unwrap();
+        assert_eq!(bridge_decode(&t[8 + RAW_PROFILE_LEN..], &ch), BridgeEvent::Text { from: 9, text: "hi".into() });
+        assert_eq!(bridge_decode(&[1, 2, 3], &ch), BridgeEvent::Undecodable);
+        assert_ne!(new_packet_id(), 0);
+    }
 
     #[test]
     fn longfast_hash_matches_meshtastic() {
