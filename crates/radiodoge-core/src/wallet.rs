@@ -1018,6 +1018,17 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
 /// Returns a human-readable string with verification status, amount, and addresses.
 /// Falls back to an "unverified" message if the transaction cannot be parsed or verified.
 pub fn describe_signed_tx(raw_tx: &[u8]) -> String {
+    let desc = describe_signed_tx_body(raw_tx);
+    if desc.starts_with("📩") {
+        // The txid is what the user checks on-chain; the GUI's "Check on-chain"
+        // button and `verify-tx` both read it from here.
+        format!("{} txid={}", desc, compute_txid(raw_tx))
+    } else {
+        desc
+    }
+}
+
+fn describe_signed_tx_body(raw_tx: &[u8]) -> String {
     match verify_signed_tx(raw_tx) {
         Ok((sender, recipients)) => {
             // Deliberately not a green checkmark.
@@ -1348,6 +1359,7 @@ mod tests {
             "a signature check must not be presented as a confirmed payment: {}",
             desc
         );
+        assert!(desc.contains(&format!("txid={}", compute_txid(&tx))));
         assert!(
             desc.contains("NOT confirmed on-chain"),
             "the description must say what was not checked: {}",

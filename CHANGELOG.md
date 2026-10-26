@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.29] - 2026-10-26
+
+### Added
+- Incoming LoRa transactions now show their txid, and the Receive tab has a **🔎 Check on-chain** button beside each one that looks the txid up (confirmations and block height), since a LoRa packet alone is never proof of payment.
+
 ## [0.3.28] - 2026-10-26
 
 ### Added

@@ -12,7 +12,30 @@
 
   import { connection } from '$lib/stores/connection.svelte';
   import { radio, clearPackets, type PacketEntry } from '$lib/stores/radio.svelte';
-  import { formatTimestamp, commandName } from '$lib/types';
+  import { formatTimestamp, commandName, type TxInclusion } from '$lib/types';
+  import { invoke } from '@tauri-apps/api/core';
+
+  // ── On-chain check for incoming transactions ─────────────────────────────
+  // A DOGE_TX heard over LoRa is unauthenticated: anyone in range can forge
+  // one. The only proof of payment is the chain, so offer a one-click lookup.
+  let chainChecks = $state<Record<string, { busy: boolean; text: string; ok?: boolean }>>({});
+
+  function incomingTxid(decoded?: string): string | null {
+    if (!decoded || !decoded.includes('NOT confirmed on-chain')) return null;
+    return /txid=([0-9a-f]{64})/.exec(decoded)?.[1] ?? null;
+  }
+
+  async function checkOnChain(txid: string) {
+    chainChecks[txid] = { busy: true, text: 'Checking…' };
+    try {
+      const r = await invoke<TxInclusion>('verify_tx_inclusion', { txid });
+      chainChecks[txid] = r.confirmed
+        ? { busy: false, ok: true, text: `✅ In block ${r.blockHeight ?? '?'} · ${r.confirmations} conf` }
+        : { busy: false, ok: false, text: '⏳ Not in a block yet (mempool or unknown) — not proof of payment' };
+    } catch (e) {
+      chainChecks[txid] = { busy: false, ok: false, text: `❌ ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
 
   // ── Filter state ─────────────────────────────────────────────────────────
   type Filter = 'all' | 'tx' | 'rx';
@@ -334,6 +357,23 @@
               </span>
             {:else}
               {packet.decoded}
+              {@const txid = incomingTxid(packet.decoded)}
+              {#if txid}
+                <span style="display: inline-flex; gap: 6px; align-items: center; margin-left: 6px;">
+                  <button
+                    class="btn-ghost"
+                    style="padding: 1px 6px; font-size: var(--fs-2xs);"
+                    title="Look this txid up on the chain — the only real proof of payment"
+                    disabled={chainChecks[txid]?.busy}
+                    onclick={() => checkOnChain(txid)}
+                  >🔎 Check on-chain</button>
+                  {#if chainChecks[txid]}
+                    <span style="font-size: var(--fs-2xs); color: {chainChecks[txid].ok ? 'var(--doge-neon)' : 'var(--doge-muted)'};">
+                      {chainChecks[txid].text}
+                    </span>
+                  {/if}
+                </span>
+              {/if}
             {/if}
           </span>
 
