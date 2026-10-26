@@ -232,6 +232,21 @@ uint8_t  lora_coding_rate      = LORA_CODINGRATE;
 #define RAW_PROFILE_LEN 12
 #define RAW_RX_DEFAULT_TIMEOUT_S 600
 #define RAW_RX_MAX_TIMEOUT_S 3600
+struct RawLoRaProfile {
+  uint8_t  sync;
+  uint8_t  sf, bw, cr;
+  uint32_t freq_hz;
+  int8_t   power;
+  uint16_t preamble;
+};
+
+bool rawRxActive = false;
+bool rawTxInProgress = false;
+unsigned long rawRxDeadline = 0;
+RawLoRaProfile rawRxProfile;
+uint8_t defaultSyncRegs[2] = {0x14, 0x24};  // captured from the radio at boot
+bool defaultSyncCaptured = false;
+void applyLoRaRadioConfig();
 #define CONTROL_SIZE 8
 #define SERIAL_TERMINATOR 255
 #define SENDER_ADDRESS_OFFSET 2
@@ -1051,20 +1066,6 @@ bool gatewayForwardingEnabled() {
 //   [sync, sf, bw_idx, cr(1..4 or 5..8), freq_khz u32 BE, power, preamble u16 BE, reserved]
 bool loRaParamsAreValid(uint32_t freq_hz, uint8_t sf, uint8_t bw, uint8_t cr, int8_t power);
 
-struct RawLoRaProfile {
-  uint8_t  sync;
-  uint8_t  sf, bw, cr;
-  uint32_t freq_hz;
-  int8_t   power;
-  uint16_t preamble;
-};
-
-bool rawRxActive = false;
-bool rawTxInProgress = false;
-unsigned long rawRxDeadline = 0;
-RawLoRaProfile rawRxProfile;
-uint8_t defaultSyncRegs[2] = {0x14, 0x24};  // captured from the radio at boot
-bool defaultSyncCaptured = false;
 
 bool parseRawProfile(const uint8_t* p, RawLoRaProfile& out) {
   out.sync = p[0];
