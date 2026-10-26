@@ -35,7 +35,7 @@ internet on your device required. It pairs a friendly desktop/mobile app with lo
 phone or PC builds and signs a transaction locally, beams the raw bytes to a nearby Heltec node, and the mesh
 relays it — hop by hop — until it reaches a gateway node that pushes it to the Dogecoin network.
 
-> **What's real today (v0.3.39):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
+> **What's real today (v0.3.41):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
 > `m/44'/3'/0'/0/0`. It builds, signs (secp256k1, `SIGHASH_ALL`), and broadcasts genuine P2PKH transactions.
 > Private keys are encrypted at rest with ChaCha20-Poly1305 + argon2id. Incoming signed transactions are
 > verified in-process. Balances, UTXOs and broadcasts go through your own Dogecoin Core node (JSON-RPC) with a public-API fallback ([chain backends](docs/BACKENDS.md)), or are relayed over LoRa by a gateway.
@@ -458,9 +458,10 @@ Unsigned builds are fine for development; Windows may show a SmartScreen prompt 
 - **Wallet keys** are encrypted at rest with ChaCha20-Poly1305, keyed by argon2id (64 MiB, 2 iterations) from
   your passphrase. Legacy plaintext wallets are auto-detected and the app nudges you to re-encrypt.
 - **Your recovery phrase is shown once** on generate and never stored — write it down offline.
-- **The firmware web UI has no authentication.** Anyone on the board's WiFi AP can reach every `/api/*` route,
-  and a couple of status endpoints echo stored credentials in plaintext. Treat a firmware gateway as a device
-  on a trusted network only. This is tracked in the [roadmap](ROADMAP.md#-known-limitations--in-progress).
+- **The firmware web UI and REST API require a login** (HTTP Basic): user `radiodoge`, password = the board's
+  WiFi AP password. Only `/ping`, `/status`, `/api/ping` and `/api/status` are open. Basic auth is not
+  encrypted on the wire, so the AP's WPA2 is what protects it; on a shared STA network, treat the board as
+  trusted-network-only.
 - RadioDoge is beta software for the Dogecoin community. Don't send more than you're willing to experiment with.
 
 ---
