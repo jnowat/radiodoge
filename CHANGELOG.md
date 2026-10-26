@@ -20,6 +20,28 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CLI: `radiodoge-cli fee [--from D… --amount N]` prints the rate and the fee a send would pay.
 - Core: `backend::fee_rate_from` / `fetch_fee_rate`, `wallet::network_fee_rate`, `estimate_fee`,
   `estimate_fee_for`, `fee_for_size`, `p2pkh_tx_size`, `build_signed_transaction_at_rate`; Tauri `estimate_fee`.
+## [Unreleased] — Windows app overhaul
+
+### Changed — GUI layout and navigation
+- Navigation is now a grouped left sidebar (Device / Wallet / App) on wide windows, with a live device-status card
+  (connection state, port, node address, signal, gateway/daemon/firmware chips) that opens the Connect panel.
+  Narrow windows and Android keep a compact top icon bar. Tabs that need a board are real disabled buttons
+  (keyboard- and screen-reader-friendly) with visible focus rings.
+- The footer version comes from `package.json` instead of a hard-coded string.
+
+### Added
+- **Settings → Chain backends**: pick Core / BlockCypher / Blockbook (or a custom list with URLs) for balances and
+  broadcasts; validated by `set_chain_backends`, saved locally and re-applied at startup.
+- **Send review dialog**: sending now opens a confirmation showing from/to/amount/fee/memo, warns about fees of
+  1 DOGE or more, and only signs after you confirm.
+
+### Changed — Windows packaging
+- Window title `RadioDoge`, default 1280×820, minimum 760×560 (the sidebar collapses below 860 px).
+- Installer metadata: publisher, homepage, NSIS installer icon, per-user NSIS install (no admin prompt).
+## [Unreleased] - Dependency security updates
+
+### Security
+- Bumped `rustls` 0.23.45 -> 0.23.46, `rustls-webpki` 0.103.15 -> 0.103.16, `webpki-roots` 1.0.9 -> 1.0.11 and `tokio` 1.53.2 -> 1.54.1 (Cargo.lock only). Clears RUSTSEC-2026-0347/0348/0349 and related rustls advisories, RUSTSEC-2026-0381/0382 and the tokio unsoundness warning RUSTSEC-2026-0386. `cargo audit` now reports 0 vulnerabilities (7 allowed unmaintained/unsound warnings in transitive GTK/zbus/lru deps remain).
 
 ## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
