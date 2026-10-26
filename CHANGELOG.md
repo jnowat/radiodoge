@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.31] - 2026-10-26
+
+### Changed
+- README shows current desktop screenshots (Connect screen, dark and light themes).
+
+### Removed
+- Dead code: the deprecated `wallet::fetch_balance_blockbook` shim (use `fetch_balance`) and the unused `randomDogephrase` / `DOGE_PHRASES` GUI helpers.
+
 ## [0.3.30] - 2026-10-26
 
 ### Removed

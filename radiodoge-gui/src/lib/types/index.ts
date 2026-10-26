@@ -247,24 +247,6 @@ export interface AddressBookEntry {
   notes?: string;       // Optional free-text notes
 }
 
-/** The Doge-speak phrases randomly selected for UI copy */
-export const DOGE_PHRASES = [
-  'much wow',
-  'very transaction',
-  'such radio',
-  'many signals',
-  'wow so doge',
-  'very blockchain',
-  'much LoRa',
-  'such decentralize',
-  'to the moon 🌙',
-  'very shibu',
-];
-
-export function randomDogephrase(): string {
-  return DOGE_PHRASES[Math.floor(Math.random() * DOGE_PHRASES.length)];
-}
-
 /** Result of the `estimate_fee` command. */
 export interface FeeEstimate {
   feeDoge: number;
