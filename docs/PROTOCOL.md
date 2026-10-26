@@ -187,6 +187,7 @@ board originates.
 | `0x28` | `BLE_TOGGLE` | host→board | Enable/disable BLE advertising |
 | `0x29` | `RECEIVED_ACK` | board→host | The board heard an over-the-air ACK |
 | `0x2A` | `RECEIVED_PING` | board→host | The board heard an over-the-air Ping |
+| `0x2E` | `DISCOVER` | host→board | Transmit a broadcast PING (echoed as an 8-byte header). Discovery-capable nodes ACK it after a random 0–3 s jitter; each ACK arrives as `0x29` |
 
 See the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress) for commands whose
 firmware behaviour is partial, such as `SET_LORA_PARAMS`.

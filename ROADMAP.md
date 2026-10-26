@@ -136,7 +136,7 @@ Rock-solid against real hardware, and now on your phone.
 Bridge RadioDoge with the existing Meshtastic community.
 
 - ✅ **Meshtastic packet encoding** — wrap RadioDoge payloads in Meshtastic protobuf so standard nodes can relay them (v0.3.23; CLI `meshtastic wrap/decode`)
-- 🔨 **Node discovery** _(PR #44, awaiting hardware test)_ — scan for nodes on the same channel and render a network map
+- ✅ **Node discovery** — `CMD_DISCOVER` (0x2E) broadcasts a PING that discovery-capable firmware ACKs after a random jitter; Mesh tab *Scan network* button and radial network map, `radiodoge-cli discover`. *ACK notifications carry no RSSI yet.* (v0.3.36)
 - 🔨 **Bridge mode** _(v0.3.25, awaiting hardware test)_ — firmware FW12 raw LoRa TX/RX (`0x2B`/`0x2C`/`0x2D`), `radiodoge-cli meshtastic bridge`, and a Mesh-tab bridge card hear and send on Meshtastic LongFast. Still open: transparent relaying inside `daemon`
 - ✅ **Multi-channel scanning** — hop across frequencies/SFs to reach different Meshtastic presets (v0.3.22)
 - ✅ **GPS location embedding** — POS: position broadcasts + neighbor positions (v0.3.19 desktop, v0.3.20 Android)

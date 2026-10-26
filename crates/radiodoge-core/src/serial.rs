@@ -851,6 +851,25 @@ impl SerialManager {
         self.neighbors.lock().await.clone()
     }
 
+    /// Actively discover nodes on the current channel.
+    ///
+    /// Asks the board to transmit a broadcast PING (CMD 0x2E), listens for
+    /// `listen` while ACKs arrive, and returns the neighbors heard during the
+    /// scan (strongest first). Needs firmware with discovery support; older
+    /// boards ignore the command and the scan returns only nodes that happened
+    /// to transmit meanwhile.
+    pub async fn discover_nodes(&self, listen: std::time::Duration) -> Result<Vec<NeighborEntry>> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        if !self.is_connected() {
+            anyhow::bail!("Not connected to a board");
+        }
+        let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let local = self.get_node_address().await;
+        self.send_raw(radio::build_discover(&local)).await?;
+        tokio::time::sleep(listen).await;
+        Ok(heard_since(&self.get_neighbors().await, started))
+    }
+
     /// v0.3.7 — Return whether an address conflict has been detected since last connect.
     pub fn has_addr_conflict(&self) -> bool {
         self.addr_conflict.load(Ordering::Relaxed)
@@ -1207,5 +1226,25 @@ mod tests {
         assert!(is_likely_heltec_vid_pid(CP210X_VID, CP210X_PID));
         assert!(is_likely_heltec_vid_pid(CH340_VID, CH340_PID));
         assert!(!is_likely_heltec_vid_pid(0xDEAD, 0xBEEF));
+    }
+}
+
+/// Neighbors last heard at or after `since` (unix seconds), strongest first.
+pub fn heard_since(neighbors: &[NeighborEntry], since: u64) -> Vec<NeighborEntry> {
+    let mut v: Vec<NeighborEntry> = neighbors.iter().filter(|n| n.last_seen >= since).cloned().collect();
+    v.sort_by_key(|n| std::cmp::Reverse(n.rssi));
+    v
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn heard_since_filters_and_sorts() {
+        let n = |node, rssi, last_seen| NeighborEntry { address: NodeAddress::new(10, 0, node), rssi, last_seen, position: None, position_at: None };
+        let out = heard_since(&[n(2, -90, 100), n(3, -40, 105), n(4, -70, 99), n(5, -60, 101)], 100);
+        let nodes: Vec<u8> = out.iter().map(|e| e.address.node).collect();
+        assert_eq!(nodes, vec![3, 5, 2]);
     }
 }

@@ -226,6 +226,18 @@ pub(crate) enum Commands {
         port: String,
     },
 
+    /// Discover nodes on the current channel (broadcast PING, list who ACKs)
+    ///
+    /// Example: radiodoge-cli discover -p COM3 --listen 8
+    Discover {
+        /// Serial port
+        #[arg(short, long)]
+        port: String,
+        /// Seconds to listen for answers (1-30)
+        #[arg(long, default_value_t = 6)]
+        listen: u64,
+    },
+
     /// Interactive REPL — replaces RadioDogeSharp's menu-driven interface
     ///
     /// Type 'help' at the prompt for available commands.
