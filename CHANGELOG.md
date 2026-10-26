@@ -10,6 +10,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## 0.3.20 — GPS on Android
+
+### Added
+- **GPS on Android** — "Share my location" now works over the Android USB/BLE bridge (new `mobile_build_position` command; JS writes the bytes).
+- Android now builds the mesh neighbor list (including shared positions) from bridged packets, using the same rules as desktop.
+
+### Changed
+- Neighbor tracking moved out of the desktop read loop into a shared `serial::record_neighbor`.
+
 ## 0.3.19 — GPS position sharing
 
 ### Added
