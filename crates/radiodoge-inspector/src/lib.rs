@@ -66,6 +66,7 @@ pub fn command_name(cmd: u8) -> &'static str {
         CMD_GET_MAC => "GET_MAC",
         CMD_BLE_TOGGLE => "BLE_TOGGLE",
         CMD_RECEIVED_ACK => "RECEIVED_ACK",
+        CMD_RECEIVED_ACK_SIGNAL => "RECEIVED_ACK_SIGNAL",
         CMD_RECEIVED_PING => "RECEIVED_PING",
         LEGACY_HARDWARE_INFO => "LEGACY_HARDWARE_INFO",
         LEGACY_RESULT_CODE => "LEGACY_RESULT_CODE",
