@@ -80,7 +80,7 @@
   </div>
   <div class="row">
     {#if running}
-      <button class="ghost" onclick={cancel}>⏹ Stop scan</button>
+      <button class="btn-ghost" onclick={cancel}>⏹ Stop scan</button>
       {#if progress && progress.index < progress.total}<span>Listening on <b>{progress.label}</b> ({progress.index + 1}/{progress.total})…</span>{/if}
     {:else}
       <button class="btn-doge" onclick={start} disabled={!connection.isConnected || chosen.length === 0}>▶ Start scan</button>

@@ -44,7 +44,7 @@
   }
 
   // ── v0.3.8 — Light/dark theme ─────────────────────────────────────────────
-  let isDarkTheme = $state(true); // dark is default
+  let isDarkTheme = $state(typeof document === 'undefined' || document.documentElement.getAttribute('data-theme') !== 'light'); // dark is default; app.html applies the saved pref before paint
   function toggleTheme() {
     isDarkTheme = !isDarkTheme;
     document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');

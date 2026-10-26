@@ -6,6 +6,10 @@
 		<meta name="description" content="RadioDoge — Wireless P2P Dogecoin Over LoRa" />
 		<!-- Favicon set via Tauri window icon -->
 		<link rel="icon" href="%sveltekit.assets%/favicon.png" />
+		<script>
+			// Apply the saved theme before first paint so every tab (not just Settings) honours it.
+			try { if (localStorage.getItem('rd-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover" class="bg-doge-dark text-white antialiased">

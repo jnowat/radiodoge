@@ -71,12 +71,12 @@
     returns to RadioDoge on its own. Not yet tested on hardware.
   </p>
   <div class="row">
-    <label>Frequency (kHz) <input type="number" bind:value={freqKhz} min="150000" max="960000" step="125" /></label>
-    <label>Minutes <input type="number" bind:value={minutes} min="1" max="60" /></label>
+    <label>Frequency (kHz) <input class="input-doge" type="number" bind:value={freqKhz} min="150000" max="960000" step="125" /></label>
+    <label>Minutes <input class="input-doge" type="number" bind:value={minutes} min="1" max="60" /></label>
     <button class="btn-doge" onclick={toggle} disabled={busy}>{active ? 'Stop listening' : 'Listen'}</button>
   </div>
   <div class="row">
-    <input class="grow" type="text" maxlength="200" placeholder="Message to LongFast" aria-label="Message to LongFast" bind:value={message} />
+    <input class="input-doge grow" type="text" maxlength="200" placeholder="Message to LongFast" aria-label="Message to LongFast" bind:value={message} />
     <button class="btn-doge" onclick={send} disabled={busy || !message.trim()}>Send</button>
   </div>
   {#if status}<p class="status" class:err={!status.ok} role="status">{status.text}</p>{/if}

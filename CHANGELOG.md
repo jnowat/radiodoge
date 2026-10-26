@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.26] — 2026-10-26 — Light theme applies on every tab at startup
+
+### Fixed
+- The saved light theme was only applied once the Settings tab mounted, so the app opened dark on Connect/Mesh/History until Settings was visited. `app.html` now applies the `rd-theme` preference before first paint; the Settings toggle reads the live state.
+- Gateway Fleet path input and Add button, Channel Scan's Stop button, and the Meshtastic bridge inputs used undefined `ghost`/bare styles and rendered unstyled (no border/background), most visibly in the light theme. They now use the shared `input-doge` / `btn-ghost` styles.
+
 ## [0.3.25] — 2026-10-26 — Meshtastic bridge mode over raw LoRa
 
 > **Not tested on hardware.** Compiled for Heltec V3 and covered by unit tests only.
