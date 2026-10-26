@@ -481,7 +481,7 @@ async fn main() -> Result<()> {
         radiodoge_core::backend::set_backends(Some(radiodoge_core::backend::parse_backends(&spec, &env)?));
     }
 
-    match cli.command {
+    let result = match cli.command {
         Commands::Ports => cmd_ports(),
         Commands::Wallet { cmd } => cmd_wallet(cmd),
         Commands::Meshtastic { cmd: MeshtasticCommands::Bridge { port, listen, send_hex, text, from, freq_khz, power, channel } } => {
@@ -506,7 +506,17 @@ async fn main() -> Result<()> {
         Commands::VerifyTx { txid } => cmd_verify_tx(&txid).await,
         Commands::Broadcast { wif, to_address, amount, fee } => cmd_broadcast(&wif, &to_address, amount, fee).await,
         Commands::Fee { from, amount } => cmd_fee(from.as_deref(), amount).await,
+    };
+    if let Err(e) = &result {
+        // `{:#}` keeps the whole context chain on one line.
+        let raw = format!("{:#}", e);
+        eprintln!("❌ {}", raw);
+        if let Some(hint) = radiodoge_core::errors::hint_for(&raw) {
+            eprintln!("💡 {}", hint);
+        }
+        std::process::exit(1);
     }
+    Ok(())
 }
 
 async fn cmd_fee(from: Option<&str>, amount: Option<f64>) -> Result<()> {
@@ -1104,7 +1114,7 @@ async fn cmd_connect(port: &str) -> Result<()> {
                         println!("   Private key: {}", w.private_key_wif);
                         println!("   ⚠️  Save the private key now — not stored anywhere!");
                     }
-                    Err(e) => println!("❌ Error: {}", e),
+                    Err(e) => println!("❌ Error: {}", radiodoge_core::errors::friendly(e)),
                 }
             }
             ["wallet-mnemonic"] => {
@@ -1120,7 +1130,7 @@ async fn cmd_connect(port: &str) -> Result<()> {
                         println!("   Address: {}", w.address);
                         println!("   ⚠️  Write the phrase offline — shows once!");
                     }
-                    Err(e) => println!("❌ Error: {}", e),
+                    Err(e) => println!("❌ Error: {}", radiodoge_core::errors::friendly(e)),
                 }
             }
             ["send", to_addr, amount_str, memo @ ..] => {
@@ -1154,7 +1164,7 @@ async fn cmd_connect(port: &str) -> Result<()> {
                                             Ok(()) => println!(
                                                 "✅ Sent {:.8} DOGE → {} 🐕🌙", amount, to_addr
                                             ),
-                                            Err(e) => println!("❌ Failed to send: {}", e),
+                                            Err(e) => println!("❌ Failed to send: {}", radiodoge_core::errors::friendly(e)),
                                         },
                                     }
                                 }

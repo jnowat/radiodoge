@@ -333,7 +333,7 @@ async fn connect_port(
                     port
                 )
             } else {
-                raw
+                radiodoge_core::errors::friendly(raw)
             }
         })?;
 
@@ -487,7 +487,7 @@ async fn disconnect_port(
 ) -> Result<(), String> {
     log::info!("disconnect_port");
     state.reconnect_enabled.store(false, Ordering::Relaxed);
-    state.serial.disconnect().await.map_err(|e| e.to_string())?;
+    state.serial.disconnect().await.map_err(radiodoge_core::errors::friendly)?;
     *state.current_port.lock().await = None;
     let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
     #[cfg(desktop)]
@@ -527,7 +527,7 @@ async fn query_firmware_version(
         &hex::encode(radio::build_get_firmware_version(&NodeAddress::default_local())),
         "CMD_GET_FIRMWARE_VERSION (manual re-query)",
     );
-    state.serial.request_firmware_version().await.map_err(|e| e.to_string())?;
+    state.serial.request_firmware_version().await.map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_firmware_version().await)
 }
@@ -563,7 +563,7 @@ async fn meshtastic_bridge_listen(
     let host = require_raw_firmware(&state).await?;
     let profile = bridge_profile(freq_khz)?;
     let pkt = radio::build_raw_rx_mode(&host, enable.then_some(&profile), timeout_s)?;
-    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_RX_MODE, 3000).await.map_err(|e| e.to_string())? {
+    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_RX_MODE, 3000).await.map_err(radiodoge_core::errors::friendly)? {
         Some(r) => Ok(r.payload_hex == "01"),
         None => Err("The board did not answer the raw-mode command.".into()),
     }
@@ -583,7 +583,7 @@ async fn meshtastic_bridge_send_text(
     let pkt = radiodoge_core::meshtastic::bridge_text_command(
         &host, 0x5244_0000 | u32::from(host.node), radiodoge_core::meshtastic::new_packet_id(), &text, &ch, &profile,
     )?;
-    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_TX, 8000).await.map_err(|e| e.to_string())? {
+    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_TX, 8000).await.map_err(radiodoge_core::errors::friendly)? {
         Some(r) => Ok(r.payload_hex == "01"),
         None => Err("No reply to the raw transmit.".into()),
     }
@@ -633,7 +633,7 @@ async fn ping_device(state: State<'_, AppState>, app: AppHandle) -> Result<bool,
 
 #[tauri::command]
 async fn generate_wallet() -> Result<WalletInfo, String> {
-    wallet::generate_keypair().map_err(|e| e.to_string())
+    wallet::generate_keypair().map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.3.6 — Import a Dogecoin wallet from a WIF-encoded private key.
@@ -641,7 +641,7 @@ async fn generate_wallet() -> Result<WalletInfo, String> {
 /// ⚠️ Hot wallet warning — only use with test amounts.
 #[tauri::command]
 async fn import_wif(wif: String) -> Result<WalletInfo, String> {
-    wallet::import_wif(&wif).map_err(|e| e.to_string())
+    wallet::import_wif(&wif).map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.3.16 — Generate a new wallet with a 12-word BIP39 recovery phrase.
@@ -649,9 +649,9 @@ async fn import_wif(wif: String) -> Result<WalletInfo, String> {
 /// The mnemonic is NOT stored — the caller must back it up before it disappears.
 #[tauri::command]
 async fn generate_mnemonic_wallet() -> Result<serde_json::Value, String> {
-    let mnemonic = wallet::generate_mnemonic().map_err(|e| e.to_string())?;
+    let mnemonic = wallet::generate_mnemonic().map_err(radiodoge_core::errors::friendly)?;
     let phrase = mnemonic.to_string();
-    let info = wallet::wallet_from_mnemonic(&phrase).map_err(|e| e.to_string())?;
+    let info = wallet::wallet_from_mnemonic(&phrase).map_err(radiodoge_core::errors::friendly)?;
     Ok(serde_json::json!({
         "mnemonic": phrase,
         "address": info.address,
@@ -664,7 +664,7 @@ async fn generate_mnemonic_wallet() -> Result<serde_json::Value, String> {
 /// Derives the key at m/44'/3'/0'/0/0 (Dogecoin BIP44 path).
 #[tauri::command]
 async fn import_mnemonic_wallet(phrase: String) -> Result<WalletInfo, String> {
-    wallet::wallet_from_mnemonic(&phrase).map_err(|e| e.to_string())
+    wallet::wallet_from_mnemonic(&phrase).map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.3.16 — Query the confirmed Dogecoin balance for an address via the configured chain backends (Core RPC, then BlockCypher).
@@ -676,7 +676,7 @@ async fn get_balance(address: String) -> Result<f64, String> {
     }
     let koinus = wallet::fetch_balance(&address)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(radiodoge_core::errors::friendly)?;
     Ok(koinus as f64 / 1e8)
 }
 
@@ -697,7 +697,7 @@ async fn estimate_fee(from_address: String, amount_doge: f64) -> Result<wallet::
     if !wallet::is_valid_address(&from_address) {
         return Err("Invalid Dogecoin address".to_string());
     }
-    wallet::estimate_fee(&from_address, amount_doge).await.map_err(|e| e.to_string())
+    wallet::estimate_fee(&from_address, amount_doge).await.map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.4.3 — Override the chain backend list for this session, e.g.
@@ -711,7 +711,7 @@ async fn set_chain_backends(spec: String) -> Result<(), String> {
         return Ok(());
     }
     let list = radiodoge_core::backend::parse_backends(&spec, &|k| std::env::var(k).ok())
-        .map_err(|e| e.to_string())?;
+        .map_err(radiodoge_core::errors::friendly)?;
     radiodoge_core::backend::set_backends(Some(list));
     Ok(())
 }
@@ -721,7 +721,7 @@ async fn set_chain_backends(spec: String) -> Result<(), String> {
 async fn verify_tx_inclusion(txid: String) -> Result<radiodoge_core::spv::TxInclusion, String> {
     radiodoge_core::spv::fetch_tx_inclusion(&txid)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.4.0 — Decode a QR code from raw image bytes (PNG/JPEG from a file picker or
@@ -815,7 +815,7 @@ async fn send_transaction(
             tx.amount_doge,
             tx.memo.as_deref(),
         )
-        .map_err(|e| e.to_string())?
+        .map_err(radiodoge_core::errors::friendly)?
     };
 
     // Duplicate-broadcast guard: the same signed bytes radioed twice in a short
@@ -897,7 +897,7 @@ async fn send_transaction(
                 );
             })
             .await
-            .map_err(|e| e.to_string());
+            .map_err(radiodoge_core::errors::friendly);
         if let Err(e) = sent {
             // Not every frame reached the board, so no complete transaction
             // was aired — allow an immediate retry.
@@ -989,7 +989,7 @@ async fn retune_radio(state: &AppState, app: &AppHandle, s: &LoraSettings) -> Re
         .serial
         .send_and_await_reply(pkt, radio::CMD_SET_LORA_PARAMS, 1500)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(radiodoge_core::errors::friendly)
 }
 
 /// Built-in scan plan for a region (`us915` or `eu868`).
@@ -1102,7 +1102,7 @@ async fn update_lora_settings(
         &format!("CMD_SET_NODE_ADDRS → {}.{}.{}",
             settings.node_address.region, settings.node_address.community, settings.node_address.node),
     );
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
 
     let freq_khz = (settings.frequency_mhz * 1000.0).round() as u32;
     let bw_idx: u8 = match settings.bandwidth_khz as u32 {
@@ -1140,7 +1140,7 @@ async fn update_lora_settings(
         .serial
         .send_and_await_reply(lora_pkt, radio::CMD_SET_LORA_PARAMS, 1500)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(radiodoge_core::errors::friendly)?;
 
     if board_applies_lora_params && !params_acked {
         return Err(format!(
@@ -1220,7 +1220,7 @@ async fn get_board_settings(
     let pkt = radio::build_get_settings(&src);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_GET_SETTINGS (0x22) — manual query");
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_board_settings().await)
 }
@@ -1240,7 +1240,7 @@ async fn set_gateway_mode(
     let pkt = radio::build_set_gateway(&src, enable);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_SET_GATEWAY (0x23) → {}", if enable { "ON" } else { "OFF" }));
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Re-query to confirm board saved the setting
@@ -1317,7 +1317,7 @@ async fn start_gateway(
         log::info!("Releasing {} so the gateway daemon can own it", port);
         state.reconnect_enabled.store(false, Ordering::Relaxed);
         state.connection_generation.fetch_add(1, Ordering::SeqCst);
-        state.serial.disconnect().await.map_err(|e| e.to_string())?;
+        state.serial.disconnect().await.map_err(radiodoge_core::errors::friendly)?;
         *state.current_port.lock().await = None;
         let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
         #[cfg(desktop)]
@@ -1476,11 +1476,11 @@ async fn get_fleet_stats(paths: Vec<String>, app: AppHandle) -> Result<serde_jso
     for (i, (fixed, path)) in sources.into_iter().enumerate() {
         let Some(path) = path else { continue };
         let read = async {
-            let meta = tokio::fs::metadata(&path).await.map_err(|e| e.to_string())?;
+            let meta = tokio::fs::metadata(&path).await.map_err(radiodoge_core::errors::friendly)?;
             if meta.len() > MAX_BYTES {
                 return Err("file is larger than 4 MB".to_string());
             }
-            let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+            let bytes = tokio::fs::read(&path).await.map_err(radiodoge_core::errors::friendly)?;
             serde_json::from_slice::<GatewayStats>(&bytes).map_err(|e| format!("not a stats file: {e}"))
         }
         .await;
@@ -1597,7 +1597,7 @@ async fn set_wifi_enabled(
         .serial
         .send_and_await_reply(pkt, radio::CMD_WIFI_TOGGLE, 2000)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(radiodoge_core::errors::friendly)?;
     if !acked {
         return Err(
             "The board did not acknowledge the WiFi change, so it may not have been applied.              Nothing was changed in the app."
@@ -1645,7 +1645,7 @@ async fn share_position(
     let text = pos.to_message();
     let pkt = radio::build_broadcast(&local, &text);
     emit_debug_traffic(&app, "TX", &hex::encode(&pkt), &format!("CMD_MESSAGE → broadcast {}", pos.describe()));
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
     Ok(text)
 }
 
@@ -1698,7 +1698,7 @@ async fn query_battery(state: State<'_, AppState>, app: AppHandle) -> Result<Opt
     let pkt = radio::build_get_battery(&src);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_GET_BATTERY (0x26)");
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_battery_mv().await)
 }
@@ -1723,7 +1723,7 @@ async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
     let pkt = radio::build_get_mac(&src);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_GET_MAC (0x27)");
-    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(600)).await;  // raised from 400ms (too tight)
     Ok(state.serial.get_board_mac().await)
 }
@@ -1777,7 +1777,7 @@ async fn save_wallet(
         }
     }
     let encrypted = wallet::encrypt_wallet(&wallet_info, &passphrase)
-        .map_err(|e| e.to_string())?;
+        .map_err(radiodoge_core::errors::friendly)?;
 
     // Prove the ciphertext decrypts back to this exact wallet before anything is
     // written. This file is often the user's only copy of the key, and a wallet
@@ -1800,10 +1800,10 @@ async fn save_wallet(
         }
     }
 
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let dir = app.path().app_data_dir().map_err(radiodoge_core::errors::friendly)?;
+    tokio::fs::create_dir_all(&dir).await.map_err(radiodoge_core::errors::friendly)?;
     let path = dir.join("wallet.json");
-    let json = serde_json::to_string_pretty(&encrypted).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&encrypted).map_err(radiodoge_core::errors::friendly)?;
     write_file_atomically(&path, &json).await?;
     log::info!("Encrypted wallet saved to disk.");
     Ok(())
@@ -1840,7 +1840,7 @@ async fn load_saved_wallet(passphrase: Option<String>, app: AppHandle) -> Result
             Some(p) if !p.is_empty() => p.as_str(),
             _ => return Err("passphrase_required".to_string()),
         };
-        let info = wallet::decrypt_wallet(&enc, pp).map_err(|e| e.to_string())?;
+        let info = wallet::decrypt_wallet(&enc, pp).map_err(radiodoge_core::errors::friendly)?;
         return Ok(Some(info));
     }
     // Legacy plaintext format (pre-v0.3.16) — load directly.
@@ -1887,10 +1887,10 @@ async fn load_address_book(app: AppHandle) -> Result<Vec<serde_json::Value>, Str
 /// v0.3.8 — Save the address book to app-local storage.
 #[tauri::command]
 async fn save_address_book(entries: Vec<serde_json::Value>, app: AppHandle) -> Result<(), String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let dir = app.path().app_data_dir().map_err(radiodoge_core::errors::friendly)?;
+    tokio::fs::create_dir_all(&dir).await.map_err(radiodoge_core::errors::friendly)?;
     let path = dir.join("address_book.json");
-    let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&entries).map_err(radiodoge_core::errors::friendly)?;
     write_file_atomically(&path, &json).await?;
     Ok(())
 }
@@ -2277,7 +2277,7 @@ async fn set_ble_enabled(
         .serial
         .send_and_await_reply(pkt, radio::CMD_BLE_TOGGLE, 2000)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(radiodoge_core::errors::friendly)?;
     if !acked {
         return Err(
             "The board did not acknowledge the Bluetooth change, so it may not have been              applied. Nothing was changed in the app."
@@ -2343,7 +2343,7 @@ async fn mobile_build_tx_packets(
             tx.amount_doge,
             tx.memo.as_deref(),
         )
-        .map_err(|e| e.to_string())?
+        .map_err(radiodoge_core::errors::friendly)?
     };
 
     // Whether a multipart sequence can be handed to the board depends on its

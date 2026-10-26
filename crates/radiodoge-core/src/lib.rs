@@ -30,6 +30,7 @@ pub mod geo;
 pub mod store_forward;
 #[cfg(feature = "native")]
 pub mod qr;
+pub mod errors;
 pub mod radio;
 #[cfg(feature = "native")]
 pub mod scan;

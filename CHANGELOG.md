@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.34] - 2026-10-26
+
+### Changed
+- Friendlier, actionable errors. A new `radiodoge_core::errors` module recognises common serial, network, filesystem and wallet failures and adds a one-line `Hint:` with the next step (close the program holding the port, check the USB cable, wait out explorer rate limits, check the passphrase, …). The original message is always kept.
+- The desktop app's commands now return these hinted errors instead of bare `to_string()` text; port-open errors keep their existing driver/cable hints.
+- The CLI prints failures as `❌ <error>` plus a `💡` hint line and exits with status 1, and its interactive send/error lines carry hints too.
+
 ## [0.3.33] - 2026-10-26
 
 ### Added
