@@ -16,6 +16,7 @@
   import { connection, setBoardMac } from '$lib/stores/connection.svelte';
   import { bridge } from '$lib/device/connection-bridge';
   import DogeSpinner from './DogeSpinner.svelte';
+  import ChainBackendsCard from './ChainBackendsCard.svelte';
 
   // ── Platform detection ────────────────────────────────────────────────────
   // Use null as "not yet resolved" to prevent fetchMac() from taking the wrong
@@ -668,6 +669,9 @@
         {/if}
       </div>
     </div>
+
+    <!-- Chain backends (balance / broadcast services) -->
+    <ChainBackendsCard />
 
     <!-- ── v0.3.8 — Light/Dark Theme ─────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Theme toggle">
