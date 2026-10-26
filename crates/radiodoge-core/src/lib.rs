@@ -21,6 +21,8 @@
 #[cfg(feature = "native")]
 pub mod backend;
 #[cfg(feature = "native")]
+pub mod fleet;
+#[cfg(feature = "native")]
 pub mod gateway_stats;
 #[cfg(feature = "native")]
 pub mod geo;

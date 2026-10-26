@@ -4,7 +4,7 @@
 
 **Much ambition. Very phases. Such plan. Wow.** 🐕
 
-*Current release: **v0.3.20** (app) · **v0.3.8** (Heltec V3 firmware)*
+*Current release: **v0.3.21** (app) · **v0.3.8** (Heltec V3 firmware)*
 
 [← Back to the README](README.md) · [User Manual](docs/USER_MANUAL.md) · [Changelog](CHANGELOG.md)
 
@@ -150,7 +150,7 @@ Bridge RadioDoge with the existing Meshtastic community.
 - 🔜 **Linux AppImage + macOS .dmg** in CI — Tauri already supports these targets
 - ✅ **WebAssembly packet inspector** — `crates/radiodoge-inspector`: paste hex, get framed and decoded packets in the browser, using the app's own framing code (protocol-only `radiodoge-core` build)
 - ✅ **Gateway dashboard (v0.3.17)** — `radiodoge-cli daemon --stats-file` writes live counters (packets, relayed-in, transactions in/broadcast/failed/repeats, ACKs, balance replies, per-node RSSI/hops, recent activity); the Settings tab shows them while the app's gateway daemon runs
-- 🔜 **Multi-gateway dashboard** — aggregate several gateways' stats files or endpoints in one view
+- ✅ **Multi-gateway dashboard** — aggregate several gateways' stats files in one view (v0.3.21; HTTP endpoints still open)
 - 🔜 **Lightning over LoRa** — forward BOLT-11 invoices and HTLC state through the mesh
 
 ---
