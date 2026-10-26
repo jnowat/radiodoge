@@ -852,6 +852,116 @@ async fn send_transaction(
     Ok(msg)
 }
 
+// ── v0.3.22 — Multi-channel scanning ───────────────────────────────────────
+
+static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
+static SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Retune the board's radio only (no address change). `Ok(true)` when the
+/// board answered with a 0x21 acknowledgement.
+async fn retune_radio(state: &AppState, app: &AppHandle, s: &LoraSettings) -> Result<bool, String> {
+    let (sf, bw, cr, khz, pwr) = radiodoge_core::scan::lora_param_fields(s);
+    let pkt = radio::build_set_lora_params(&s.node_address, sf, bw, cr, khz, pwr);
+    emit_debug_traffic(app, "TX", &hex::encode(&pkt), &format!(
+        "CMD_SET_LORA_PARAMS (scan) → SF{} BW{}kHz {}MHz", sf, s.bandwidth_khz, s.frequency_mhz
+    ));
+    state
+        .serial
+        .send_and_await_reply(pkt, radio::CMD_SET_LORA_PARAMS, 1500)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Built-in scan plan for a region (`us915` or `eu868`).
+#[tauri::command]
+fn scan_plan(region: String) -> Vec<radiodoge_core::scan::ScanChannel> {
+    radiodoge_core::scan::plan(&region)
+}
+
+/// Hop across `channels`, listening `dwell_secs` on each, then return the board
+/// to the app's saved LoRa settings — always, even on cancel or error.
+/// Emits `scan-progress` before each channel.
+#[tauri::command]
+async fn scan_channels(
+    channels: Vec<radiodoge_core::scan::ScanChannel>,
+    dwell_secs: u64,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<serde_json::Value, String> {
+    use radiodoge_core::scan::{is_air_packet, ChannelResult, MAX_CHANNELS, MAX_DWELL_SECS};
+    if !state.serial.is_connected() {
+        return Err("Connect to a board first".into());
+    }
+    let fw = state.serial.get_firmware_version().await;
+    if !fw.as_deref().and_then(radio::firmware_build_number).is_some_and(|b| b >= 10) {
+        return Err("Channel scanning needs firmware v0.4.1 or newer (older boards ignore radio retuning).".into());
+    }
+    if channels.is_empty() || channels.len() > MAX_CHANNELS {
+        return Err(format!("Pick 1–{MAX_CHANNELS} channels"));
+    }
+    if let Some(bad) = channels.iter().find(|c| !c.is_valid()) {
+        return Err(format!("{} is outside the board's ranges (SF 7–12, 125/250/500 kHz, 150–960 MHz)", bad.label));
+    }
+    if SCAN_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("A scan is already running".into());
+    }
+    SCAN_CANCEL.store(false, Ordering::SeqCst);
+    let dwell = dwell_secs.clamp(3, MAX_DWELL_SECS);
+    let home = state.lora_settings.lock().await.clone();
+    let total = channels.len();
+    let mut results = Vec::with_capacity(total);
+
+    for (i, ch) in channels.iter().enumerate() {
+        if SCAN_CANCEL.load(Ordering::SeqCst) || !state.serial.is_connected() {
+            break;
+        }
+        let _ = app.emit("scan-progress", serde_json::json!({
+            "index": i, "total": total, "label": ch.label, "dwellSecs": dwell,
+        }));
+        match retune_radio(&state, &app, &ch.apply_to(&home)).await {
+            Ok(true) => {}
+            Ok(false) => {
+                results.push(serde_json::json!({ "channel": ch, "error": "board did not confirm the retune" }));
+                continue;
+            }
+            Err(e) => {
+                results.push(serde_json::json!({ "channel": ch, "error": e }));
+                continue;
+            }
+        }
+        let mut rx = state.serial.subscribe_packets();
+        let mut res = ChannelResult::default();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(dwell);
+        while tokio::time::Instant::now() < deadline && !SCAN_CANCEL.load(Ordering::SeqCst) {
+            match tokio::time::timeout(std::time::Duration::from_millis(250), rx.recv()).await {
+                Ok(Ok(p)) if is_air_packet(&p) => res.record(&p),
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                _ => {}
+            }
+        }
+        results.push(serde_json::json!({ "channel": ch, "result": res }));
+    }
+
+    let cancelled = SCAN_CANCEL.load(Ordering::SeqCst);
+    let restored = if state.serial.is_connected() {
+        retune_radio(&state, &app, &home).await.unwrap_or(false)
+    } else {
+        false
+    };
+    SCAN_RUNNING.store(false, Ordering::SeqCst);
+    let _ = app.emit("scan-progress", serde_json::json!({ "index": total, "total": total, "done": true }));
+    Ok(serde_json::json!({
+        "results": results, "cancelled": cancelled, "restored": restored,
+        "home": { "frequencyMhz": home.frequency_mhz, "spreadingFactor": home.spreading_factor, "bandwidthKhz": home.bandwidth_khz },
+    }))
+}
+
+/// Stop a running scan after the current listen slice; the board is still retuned home.
+#[tauri::command]
+fn cancel_scan() {
+    SCAN_CANCEL.store(true, Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn update_lora_settings(
     settings: LoraSettings,
@@ -2326,6 +2436,9 @@ pub fn run() {
             send_transaction,
             update_lora_settings,
             get_lora_settings,
+            scan_plan,
+            scan_channels,
+            cancel_scan,
             get_board_settings,
             set_gateway_mode,
             get_history,

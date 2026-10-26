@@ -32,6 +32,8 @@ pub mod store_forward;
 pub mod qr;
 pub mod radio;
 #[cfg(feature = "native")]
+pub mod scan;
+#[cfg(feature = "native")]
 pub mod serial;
 #[cfg(feature = "native")]
 pub mod spv;
