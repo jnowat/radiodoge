@@ -10,6 +10,7 @@
 
   import '../app.css';
   import { APP_VERSION } from '$lib/version';
+  import { restoreBackendSpec } from '$lib/settings/chainBackends';
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
 
@@ -105,6 +106,9 @@
   // ── Tauri Event Listeners ─────────────────────────────────────────────────
   onMount(() => {
     const unlisteners: Array<() => void> = [];
+
+    // Re-apply the chain-backend list saved in Settings.
+    void restoreBackendSpec();
 
     // Connection status changes from Rust backend
     listen<ConnectionStatusEvent>('connection-status', (event) => {
