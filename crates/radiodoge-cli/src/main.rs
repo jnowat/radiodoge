@@ -1269,6 +1269,40 @@ async fn cmd_broadcast(wif: &str, to: &str, amount: f64) -> Result<()> {
     Ok(())
 }
 
+fn cmd_meshtastic(cmd: MeshtasticCommands) -> Result<()> {
+    use radiodoge_core::meshtastic as mt;
+    match cmd {
+        MeshtasticCommands::Wrap { packet_hex, from, id, channel } => {
+            let pkt = hex::decode(packet_hex.trim()).context("packet must be hex")?;
+            let from = match from.strip_prefix("0x") {
+                Some(h) => u32::from_str_radix(h, 16),
+                None => from.parse(),
+            }.context("--from must be a u32")?;
+            let id = id.unwrap_or_else(|| {
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos() ^ d.as_secs() as u32).unwrap_or(1)
+            });
+            let frame = mt::wrap_radiodoge(from, id, &pkt, &channel.to_channel()?)?;
+            println!("{}", hex::encode(frame));
+        }
+        MeshtasticCommands::Decode { frame_hex, channel } => {
+            let frame = hex::decode(frame_hex.trim()).context("frame must be hex")?;
+            match mt::decode_frame(&frame, &channel.to_channel()?)? {
+                None => println!("Channel hash 0x{:02x} doesn't match this channel.", frame.get(13).copied().unwrap_or(0)),
+                Some((h, d)) => {
+                    println!("to=0x{:08x} from=0x{:08x} id={} hops={}/{} want_ack={} channel=0x{:02x}",
+                        h.to, h.from, h.id, h.hop_limit, h.hop_start, h.want_ack, h.channel_hash);
+                    println!("portnum={} payload={}", d.portnum, hex::encode(&d.payload));
+                    if d.portnum == mt::PORT_TEXT_MESSAGE {
+                        println!("text: {}", String::from_utf8_lossy(&d.payload));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1308,38 +1342,4 @@ mod tests {
             );
         }
     }
-}
-
-fn cmd_meshtastic(cmd: MeshtasticCommands) -> Result<()> {
-    use radiodoge_core::meshtastic as mt;
-    match cmd {
-        MeshtasticCommands::Wrap { packet_hex, from, id, channel } => {
-            let pkt = hex::decode(packet_hex.trim()).context("packet must be hex")?;
-            let from = match from.strip_prefix("0x") {
-                Some(h) => u32::from_str_radix(h, 16),
-                None => from.parse(),
-            }.context("--from must be a u32")?;
-            let id = id.unwrap_or_else(|| {
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.subsec_nanos() ^ d.as_secs() as u32).unwrap_or(1)
-            });
-            let frame = mt::wrap_radiodoge(from, id, &pkt, &channel.to_channel()?)?;
-            println!("{}", hex::encode(frame));
-        }
-        MeshtasticCommands::Decode { frame_hex, channel } => {
-            let frame = hex::decode(frame_hex.trim()).context("frame must be hex")?;
-            match mt::decode_frame(&frame, &channel.to_channel()?)? {
-                None => println!("Channel hash 0x{:02x} doesn't match this channel.", frame.get(13).copied().unwrap_or(0)),
-                Some((h, d)) => {
-                    println!("to=0x{:08x} from=0x{:08x} id={} hops={}/{} want_ack={} channel=0x{:02x}",
-                        h.to, h.from, h.id, h.hop_limit, h.hop_start, h.want_ack, h.channel_hash);
-                    println!("portnum={} payload={}", d.portnum, hex::encode(&d.payload));
-                    if d.portnum == mt::PORT_TEXT_MESSAGE {
-                        println!("text: {}", String::from_utf8_lossy(&d.payload));
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
