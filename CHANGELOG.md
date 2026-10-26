@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## 0.3.21 — Multi-gateway dashboard
+
+### Added
+- **Multi-gateway dashboard** — new "Gateway Fleet" card in Settings merges this PC's gateway snapshot with other gateways' `--stats-file` snapshots (e.g. a shared folder). Fleet totals, per-gateway online/stale status, a merged node table with the strongest-RSSI gateway per node, and a combined activity feed tagged by gateway.
+- New `radiodoge_core::fleet` aggregation module (5 tests) and `get_fleet_stats` command (32-file, 4 MB-per-file limits).
+
 ## 0.3.20 — GPS on Android
 
 ### Added
