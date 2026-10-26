@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use radiodoge_core::gateway_stats::{GatewayEventKind, GatewayStats};
 use radiodoge_core::{radio, spv, wallet};
 use radiodoge_core::serial::SerialManager;
 use radiodoge_core::types::{IncomingPacket, NodeAddress};
@@ -228,6 +229,10 @@ enum Commands {
         /// Serial port
         #[arg(short, long)]
         port: String,
+        /// Write a JSON snapshot of the gateway's counters here every few
+        /// seconds (the desktop app's gateway dashboard reads it)
+        #[arg(long)]
+        stats_file: Option<std::path::PathBuf>,
     },
 
     /// Query the confirmed Dogecoin balance for an address via the configured chain backends (Core RPC, then BlockCypher)
@@ -376,7 +381,7 @@ async fn main() -> Result<()> {
         Commands::SendTxHex { port, file, gateway, timeout } => cmd_send_tx_hex(&port, &file, gateway.as_deref(), timeout).await,
         Commands::SignTx { to_address, amount, out, fee } => cmd_sign_tx(&to_address, amount, &out, fee).await,
         Commands::Connect { port } => cmd_connect(&port).await,
-        Commands::Daemon { port } => cmd_daemon(&port).await,
+        Commands::Daemon { port, stats_file } => cmd_daemon(&port, stats_file).await,
         Commands::Balance { address } => cmd_balance(&address).await,
         Commands::VerifyTx { txid } => cmd_verify_tx(&txid).await,
         Commands::Broadcast { wif, to_address, amount, fee } => cmd_broadcast(&wif, &to_address, amount, fee).await,
@@ -1002,7 +1007,41 @@ async fn cmd_connect(port: &str) -> Result<()> {
 /// delivered here as one complete payload — no reassembly needed at this layer.
 ///
 /// Designed for Raspberry Pi gateway deployments.
-async fn cmd_daemon(port: &str) -> Result<()> {
+/// Shared, lock-protected gateway counters. A std mutex: every critical section
+/// is a few field updates and never awaits.
+type SharedStats = Arc<std::sync::Mutex<GatewayStats>>;
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn stats_record(stats: &SharedStats, kind: GatewayEventKind, node: &NodeAddress, detail: impl Into<String>) {
+    if let Ok(mut s) = stats.lock() {
+        s.record(kind, &node.to_display_string(), detail, unix_now());
+    }
+}
+
+/// Write the snapshot next to its destination and rename it into place, so a
+/// reader never sees half a file.
+fn write_stats_file(path: &std::path::Path, stats: &SharedStats) {
+    let json = match stats.lock() {
+        Ok(mut s) => {
+            s.updated_at = unix_now();
+            serde_json::to_vec_pretty(&*s)
+        }
+        Err(_) => return,
+    };
+    let Ok(json) = json else { return };
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, path)) {
+        log::warn!("Could not write gateway stats to {}: {}", path.display(), e);
+    }
+}
+
+async fn cmd_daemon(port: &str, stats_file: Option<std::path::PathBuf>) -> Result<()> {
     println!("🐕 RadioDoge Daemon — Gateway Mode (replaces serdog)");
     println!("Serial port: {}", port);
     println!("Press Ctrl-C to stop.\n");
@@ -1012,6 +1051,8 @@ async fn cmd_daemon(port: &str) -> Result<()> {
 
     let manager = Arc::new(SerialManager::new());
     let manager_for_ack = Arc::clone(&manager);
+    let stats: SharedStats = Arc::new(std::sync::Mutex::new(GatewayStats::new(port, unix_now())));
+    let stats_for_packets = Arc::clone(&stats);
 
     // Transactions already handled this session, keyed by txid.
     //
@@ -1040,6 +1081,9 @@ async fn cmd_daemon(port: &str) -> Result<()> {
                 .map(|d| format!("  decoded={}", d))
                 .unwrap_or_default(),
         );
+        if let Ok(mut s) = stats_for_packets.lock() {
+            s.record_packet(&pkt.source.to_display_string(), pkt.rssi, pkt.hops, unix_now());
+        }
 
         // When a signed Dogecoin transaction arrives, broadcast it to the network.
         if pkt.command == radio::CMD_DOGE_TX {
@@ -1050,6 +1094,8 @@ async fn cmd_daemon(port: &str) -> Result<()> {
                 let mgr = Arc::clone(&manager_for_ack);
                 let seen = Arc::clone(&seen_txs);
                 let source = pkt.source.clone();
+                let st = Arc::clone(&stats_for_packets);
+                stats_record(&st, GatewayEventKind::TxReceived, &source, txid.clone());
                 log::info!(
                     "GATEWAY  signed tx detected ({} bytes, txid {}) from {} — broadcasting to Dogecoin network",
                     payload_bytes.len(),
@@ -1057,7 +1103,7 @@ async fn cmd_daemon(port: &str) -> Result<()> {
                     source.to_display_string()
                 );
                 tokio::spawn(async move {
-                    daemon_broadcast_and_ack(raw_hex, txid, mgr, source, seen).await;
+                    daemon_broadcast_and_ack(raw_hex, txid, mgr, source, seen, st).await;
                 });
             }
         }
@@ -1072,9 +1118,11 @@ async fn cmd_daemon(port: &str) -> Result<()> {
             if !addr.is_empty() {
                 let mgr = Arc::clone(&manager_for_ack);
                 let source = pkt.source.clone();
+                let st = Arc::clone(&stats_for_packets);
+                stats_record(&st, GatewayEventKind::BalanceRequest, &source, "");
                 log::info!("GATEWAY  balance request from {} for {}", source.to_display_string(), addr);
                 tokio::spawn(async move {
-                    daemon_fetch_and_send_balance(addr, mgr, source).await;
+                    daemon_fetch_and_send_balance(addr, mgr, source, st).await;
                 });
             }
         }
@@ -1086,9 +1134,15 @@ async fn cmd_daemon(port: &str) -> Result<()> {
 
     let addr = manager.refresh_node_address(1500).await;
     log::info!("Connected — node address: {}", addr.to_display_string());
+    if let Ok(mut s) = stats.lock() {
+        s.gateway_address = Some(addr.to_display_string());
+    }
 
     if let Some(fw) = manager.ensure_firmware_version().await {
         log::info!("Board firmware: {}", fw);
+        if let Ok(mut s) = stats.lock() {
+            s.firmware = Some(fw.clone());
+        }
         if !radio::firmware_supports_multipart(Some(&fw)) {
             log::warn!(
                 "This board predates firmware v0.4.2 (FW{}). It cannot relay a transaction \
@@ -1113,8 +1167,23 @@ async fn cmd_daemon(port: &str) -> Result<()> {
 
     log::info!("Gateway ready — monitoring for signed Dogecoin transactions");
 
+    if let Some(path) = stats_file.clone() {
+        log::info!("Writing gateway stats to {}", path.display());
+        let st = Arc::clone(&stats);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(3));
+            loop {
+                tick.tick().await;
+                write_stats_file(&path, &st);
+            }
+        });
+    }
+
     // Run until Ctrl-C
     tokio::signal::ctrl_c().await.context("Failed to listen for Ctrl-C")?;
+    if let Some(path) = stats_file.as_deref() {
+        write_stats_file(path, &stats);
+    }
 
     log::info!("Shutdown signal received — disconnecting");
     manager.disconnect().await.ok();
@@ -1153,12 +1222,16 @@ async fn daemon_broadcast_and_ack(
     mgr: Arc<SerialManager>,
     source: NodeAddress,
     seen: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+    stats: SharedStats,
 ) {
     // A transaction this gateway already put on the network only needs its
     // acknowledgement re-sent — the sender may simply not have heard the first.
     if let Some(known) = seen.lock().await.get(&txid).cloned() {
         log::info!("GATEWAY  txid={} already broadcast this session — re-sending ACK", known);
-        daemon_send_tx_ack(&known, &mgr, &source).await;
+        if let Ok(mut s) = stats.lock() {
+            s.record_duplicate(unix_now());
+        }
+        daemon_send_tx_ack(&known, &mgr, &source, &stats).await;
         return;
     }
 
@@ -1181,7 +1254,8 @@ async fn daemon_broadcast_and_ack(
                 }
                 log::info!("GATEWAY  broadcast OK  txid={}", network_txid);
                 seen.lock().await.insert(txid.clone(), network_txid.clone());
-                daemon_send_tx_ack(&network_txid, &mgr, &source).await;
+                stats_record(&stats, GatewayEventKind::TxBroadcast, &source, network_txid.clone());
+                daemon_send_tx_ack(&network_txid, &mgr, &source, &stats).await;
                 return;
             }
             Err(e) => {
@@ -1192,7 +1266,8 @@ async fn daemon_broadcast_and_ack(
                         txid
                     );
                     seen.lock().await.insert(txid.clone(), txid.clone());
-                    daemon_send_tx_ack(&txid, &mgr, &source).await;
+                    stats_record(&stats, GatewayEventKind::TxBroadcast, &source, format!("{} (already on network)", txid));
+                    daemon_send_tx_ack(&txid, &mgr, &source, &stats).await;
                     return;
                 }
                 log::warn!("GATEWAY  broadcast attempt {}/3 failed: {}", attempt + 1, msg);
@@ -1200,6 +1275,7 @@ async fn daemon_broadcast_and_ack(
         }
     }
     log::error!("GATEWAY  broadcast failed after 3 attempts for txid={}", txid);
+    stats_record(&stats, GatewayEventKind::TxFailed, &source, txid);
 }
 
 /// Radio a `TX_ACK:<txid>` back to the node that sent the transaction.
@@ -1207,11 +1283,15 @@ async fn daemon_broadcast_and_ack(
 /// The full 64-hex-character txid is included — `"TX_ACK:"` + txid is 71 bytes,
 /// well inside a single packet — so the sender can actually look it up and
 /// verify inclusion.
-async fn daemon_send_tx_ack(txid: &str, mgr: &Arc<SerialManager>, source: &NodeAddress) {
+async fn daemon_send_tx_ack(txid: &str, mgr: &Arc<SerialManager>, source: &NodeAddress, stats: &SharedStats) {
     let gateway_addr = mgr.get_node_address().await;
     let ack_pkt = radio::build_message(&gateway_addr, source, &format!("TX_ACK:{}", txid));
-    if let Err(e) = mgr.send_raw(ack_pkt).await {
-        log::warn!("GATEWAY  ACK send failed: {}", e);
+    match mgr.send_raw(ack_pkt).await {
+        Ok(()) => stats_record(stats, GatewayEventKind::AckSent, source, txid),
+        Err(e) => {
+            log::warn!("GATEWAY  ACK send failed: {}", e);
+            stats_record(stats, GatewayEventKind::AckFailed, source, e.to_string());
+        }
     }
 }
 
@@ -1221,6 +1301,7 @@ async fn daemon_fetch_and_send_balance(
     address: String,
     mgr: Arc<SerialManager>,
     source: NodeAddress,
+    stats: SharedStats,
 ) {
     match wallet::fetch_balance(&address).await {
         Ok(koinus) => {
@@ -1231,12 +1312,18 @@ async fn daemon_fetch_and_send_balance(
             let gateway_addr = mgr.get_node_address().await;
             let msg = format!("BAL:{}", koinus);
             let pkt = radio::build_message(&gateway_addr, &source, &msg);
-            if let Err(e) = mgr.send_raw(pkt).await {
-                log::warn!("GATEWAY  balance reply send failed: {}", e);
+            match mgr.send_raw(pkt).await {
+                // The dashboard shows the amount, never the address asked about.
+                Ok(()) => stats_record(&stats, GatewayEventKind::BalanceReplied, &source, format!("{:.8} DOGE", koinus as f64 / 1e8)),
+                Err(e) => {
+                    log::warn!("GATEWAY  balance reply send failed: {}", e);
+                    stats_record(&stats, GatewayEventKind::BalanceFailed, &source, e.to_string());
+                }
             }
         }
         Err(e) => {
             log::warn!("GATEWAY  balance fetch failed for {}: {}", address, e);
+            stats_record(&stats, GatewayEventKind::BalanceFailed, &source, e.to_string());
         }
     }
 }

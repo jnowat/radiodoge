@@ -1,6 +1,6 @@
 [package]
 name = "radiodoge-cli"
-version = "0.3.16"
+version = "0.3.17"
 description = "RadioDoge CLI — Rust replacement for RadioDogeSharp (C#) and serdog (C)"
 authors = ["RadioDoge Contributors"]
 license = "MIT"
@@ -20,3 +20,4 @@ anyhow         = { workspace = true }
 log            = { workspace = true }
 env_logger     = { workspace = true }
 hex            = { workspace = true }
+serde_json     = { workspace = true }

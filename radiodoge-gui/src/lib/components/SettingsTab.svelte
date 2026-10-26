@@ -17,6 +17,7 @@
   import { bridge } from '$lib/device/connection-bridge';
   import DogeSpinner from './DogeSpinner.svelte';
   import ChainBackendsCard from './ChainBackendsCard.svelte';
+  import GatewayDashboard from './GatewayDashboard.svelte';
 
   // ── Platform detection ────────────────────────────────────────────────────
   // Use null as "not yet resolved" to prevent fetchMac() from taking the wrong
@@ -817,6 +818,10 @@
         <div style="margin-top: 8px; color: var(--doge-muted); font-size: 0.78rem;" role="status">ℹ️ {daemonNote}</div>
       {/if}
     </div>
+
+    {#if connection.gatewayOnline}
+      <GatewayDashboard />
+    {/if}
 
     <!-- ── v0.3.16 — BLE Advertising toggle ──────────────────────────────── -->
     <div class="card-doge" aria-label="BLE advertising toggle">

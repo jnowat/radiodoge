@@ -8,6 +8,21 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
 
+## 0.3.17 — 📊 Gateway Dashboard
+
+### Added
+- **Gateway dashboard** (Settings → Gateway Mode, shown while the gateway daemon runs): uptime, packets heard
+  and how many came through relays, transactions received / broadcast / failed and repeats answered with a re-ACK,
+  ACKs radioed, balance replies, a per-node table (packets, transactions, last RSSI, hops, last heard) and a
+  recent-activity feed. Polls every 3 s; flags a stalled or exited daemon.
+- `radiodoge-cli daemon --stats-file PATH` writes those counters as JSON every 3 s (atomic replace) and once on
+  shutdown. The app passes it automatically and removes the previous run's file first.
+- `radiodoge-core::gateway_stats` — the counters as plain, unit-tested data (event feed capped at 50, node table
+  at 64, least recently heard dropped first).
+- Tauri command `get_gateway_stats`.
+
+### Privacy
+- Balance events record the amount only, never the address that was asked about.
 ## [Unreleased] — WebAssembly packet inspector
 
 ### Added
