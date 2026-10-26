@@ -13,15 +13,28 @@
 //! - `radiodoge-gui` (Tauri 2 desktop GUI)
 //! - `radiodoge-cli` (headless CLI replacing RadioDogeSharp and serdog)
 //! - Future Android / embedded targets
+//!
+//! Building with `default-features = false` keeps only [`radio`] and [`types`]
+//! (no Tokio, serial, crypto or HTTP), which is what the WebAssembly packet
+//! inspector uses.
 
+#[cfg(feature = "native")]
 pub mod backend;
+#[cfg(feature = "native")]
 pub mod fleet;
+#[cfg(feature = "native")]
 pub mod gateway_stats;
+#[cfg(feature = "native")]
 pub mod geo;
+#[cfg(feature = "native")]
 pub mod store_forward;
+#[cfg(feature = "native")]
 pub mod qr;
 pub mod radio;
+#[cfg(feature = "native")]
 pub mod serial;
+#[cfg(feature = "native")]
 pub mod spv;
 pub mod types;
+#[cfg(feature = "native")]
 pub mod wallet;
