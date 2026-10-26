@@ -17,6 +17,7 @@
 #include "Images/sendingDogeCoin.h"
 #include "Images/receivingDogeCoin.h"
 #include "esp_mac.h"
+#include "driver/sx126x.h"  // v0.4.4 — sync-word registers for raw LoRa mode
 
 // Forward-declare the local node address global so setupBLE() (defined inside the
 // #if ENABLE_BLE block near the top) can access its members before the variable's
@@ -227,6 +228,10 @@ uint8_t  lora_coding_rate      = LORA_CODINGRATE;
 // v0.4.x — over-the-air single-packet header: [type, flags, src(3), dst(3)] = 8 bytes.
 #define SINGLE_PACKET_HEADER_SIZE 8
 #define BUFFER_SIZE 256  // Define the payload size here
+// v0.4.4 — raw LoRa mode (see CMD_RAW_TX / CMD_RAW_RX_MODE)
+#define RAW_PROFILE_LEN 12
+#define RAW_RX_DEFAULT_TIMEOUT_S 600
+#define RAW_RX_MAX_TIMEOUT_S 3600
 #define CONTROL_SIZE 8
 #define SERIAL_TERMINATOR 255
 #define SENDER_ADDRESS_OFFSET 2
@@ -341,7 +346,9 @@ struct PendingRequest {
 // radio::MIN_MULTIPART_FIRMWARE (11) is the build that frames a host→board
 // multipart sequence correctly, so only from 11 onward will a host split a
 // transaction that does not fit in one packet.
-#define FIRMWARE_VERSION 11  // v0.4.2
+// radio::MIN_RAW_LORA_FIRMWARE (12) adds raw LoRa TX/RX (0x2B/0x2C/0x2D), used
+// by the host's Meshtastic bridge.
+#define FIRMWARE_VERSION 12  // v0.4.4
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -487,6 +494,9 @@ void setup() {
   RadioEvents.RxTimeout = OnRxTimeout;
 
   Radio.Init(&RadioEvents);
+  // v0.4.4 — remember the sync word the stack configured so raw mode can restore it.
+  SX126xReadRegisters(REG_LR_SYNCWORD, defaultSyncRegs, 2);
+  defaultSyncCaptured = true;
   applyLoRaRadioConfig();
 
   delay(100);
@@ -590,6 +600,7 @@ void loop() {
   // buffered and never read, so BLE was receive-only.
   ProcessBleCommands();
 
+  checkRawRxTimeout();  // v0.4.4
   CommandAndControlLoop();
 }
 
@@ -993,7 +1004,7 @@ void saveLoRaConfigurationQuiet(uint8_t region, uint8_t community, uint8_t node)
 bool isDesktopCommandByte(uint8_t cmdByte) {
   return cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
       || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
-      || cmdByte == 0x27 || cmdByte == 0x28;
+      || cmdByte == 0x27 || cmdByte == 0x28 || cmdByte == 0x2B || cmdByte == 0x2C;
 }
 
 // Total packet length for a desktop command sent host -> board, or 0 when the
@@ -1005,6 +1016,7 @@ uint8_t desktopCommandLength(uint8_t cmdByte) {
     case 0x20: case 0x22: case 0x26: case 0x27: return 8;   // header only
     case 0x23: case 0x24: case 0x28:            return 9;   // header + 1 flag byte
     case 0x21:                                  return 16;  // header + 8 param bytes
+    case 0x2C:                                  return 8 + 1 + RAW_PROFILE_LEN + 2;  // enable + profile + timeout
     default:                                    return 0;   // variable length
   }
 }
@@ -1022,6 +1034,98 @@ uint8_t desktopCommandLength(uint8_t cmdByte) {
 // it did before this change.
 bool gatewayForwardingEnabled() {
   return gateway_mode;
+}
+
+// ─── v0.4.4 — Raw LoRa mode (CMD_RAW_TX 0x2B, CMD_RAW_RX_MODE 0x2C) ────────────
+//
+// Lets the host send and hear LoRa frames that are NOT RadioDoge packets — e.g.
+// Meshtastic frames, which use their own sync word, preamble and modem preset.
+//
+// Default behaviour is unchanged: nothing here runs unless the host asks. Raw TX
+// retunes for one frame and immediately restores the RadioDoge radio config. Raw
+// RX is volatile (never written to NVS), expires on its own (default 10 min, max
+// 1 h) and is exited automatically before any normal RadioDoge transmission, so a
+// board can never be left stranded on a foreign channel.
+//
+// Raw profile, 12 bytes:
+//   [sync, sf, bw_idx, cr(1..4 or 5..8), freq_khz u32 BE, power, preamble u16 BE, reserved]
+bool loRaParamsAreValid(uint32_t freq_hz, uint8_t sf, uint8_t bw, uint8_t cr, int8_t power);
+
+struct RawLoRaProfile {
+  uint8_t  sync;
+  uint8_t  sf, bw, cr;
+  uint32_t freq_hz;
+  int8_t   power;
+  uint16_t preamble;
+};
+
+bool rawRxActive = false;
+bool rawTxInProgress = false;
+unsigned long rawRxDeadline = 0;
+RawLoRaProfile rawRxProfile;
+uint8_t defaultSyncRegs[2] = {0x14, 0x24};  // captured from the radio at boot
+bool defaultSyncCaptured = false;
+
+bool parseRawProfile(const uint8_t* p, RawLoRaProfile& out) {
+  out.sync = p[0];
+  out.sf = p[1];
+  out.bw = p[2];
+  out.cr = p[3];
+  if (out.cr >= 5 && out.cr <= 8) out.cr -= 4;
+  uint32_t khz = ((uint32_t)p[4] << 24) | ((uint32_t)p[5] << 16) | ((uint32_t)p[6] << 8) | p[7];
+  out.freq_hz = khz * 1000UL;
+  out.power = (int8_t)p[8];
+  out.preamble = ((uint16_t)p[9] << 8) | p[10];
+  if (out.preamble < 6 || out.preamble > 64) return false;
+  return loRaParamsAreValid(out.freq_hz, out.sf, out.bw, out.cr, out.power);
+}
+
+// SX126x stores the 1-byte LoRa sync word as two nibble-expanded register bytes:
+// 0x34 -> 0x34 0x44, 0x12 -> 0x14 0x24, Meshtastic 0x2B -> 0x24 0xB4.
+void writeSyncRegs(const uint8_t regs[2]) {
+  uint8_t r[2] = {regs[0], regs[1]};
+  SX126xWriteRegisters(REG_LR_SYNCWORD, r, 2);
+}
+
+void applyRawProfile(const RawLoRaProfile& p) {
+  Radio.Sleep();
+  Radio.SetChannel(p.freq_hz);
+  Radio.SetTxConfig(MODEM_LORA, p.power, 0, p.bw, p.sf, p.cr, p.preamble,
+                    LORA_FIX_LENGTH_PAYLOAD_ON, true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
+  Radio.SetRxConfig(MODEM_LORA, p.bw, p.sf, p.cr, 0, p.preamble, LORA_SYMBOL_TIMEOUT,
+                    LORA_FIX_LENGTH_PAYLOAD_ON, 0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
+  uint8_t regs[2] = {(uint8_t)((p.sync & 0xF0) | 0x04), (uint8_t)(((p.sync & 0x0F) << 4) | 0x04)};
+  writeSyncRegs(regs);
+}
+
+void applyLoRaRadioConfig();  // defined below
+
+void exitRawRxMode(const char* why) {
+  if (!rawRxActive) return;
+  rawRxActive = false;
+  applyLoRaRadioConfig();
+  addLog(String("[RAW] Raw RX mode off (") + why + ")");
+}
+
+// Forward one received frame to the host:
+//   [0x2D, 0x00, local r/c/n, 0xFF x3, rssi i16 BE, snr i8, len, data...]
+void forwardRawRx(const uint8_t* data, uint16_t len, int16_t rssiV, int8_t snrV) {
+  const uint16_t maxData = BUFFER_SIZE - 12;
+  bool truncated = len > maxData;
+  if (truncated) len = maxData;
+  uint8_t frame[BUFFER_SIZE];
+  frame[0] = 0x2D; frame[1] = truncated ? 0x10 : 0x00;
+  frame[2] = local.region; frame[3] = local.community; frame[4] = local.node;
+  frame[5] = 0xFF; frame[6] = 0xFF; frame[7] = 0xFF;
+  frame[8] = (uint8_t)((uint16_t)rssiV >> 8); frame[9] = (uint8_t)rssiV;
+  frame[10] = (uint8_t)snrV; frame[11] = (uint8_t)len;
+  memcpy(frame + 12, data, len);
+  Serial.write(frame, 12 + len);
+  bleSend(frame, 12 + len);
+}
+
+void checkRawRxTimeout() {
+  if (rawRxActive && (long)(millis() - rawRxDeadline) >= 0) exitRawRxMode("timeout");
 }
 
 // ─── v0.4.1 — Runtime LoRa radio reconfiguration (CMD_SET_LORA_PARAMS 0x21) ───
@@ -1045,6 +1149,8 @@ void applyLoRaRadioConfig() {
                     lora_coding_rate, 0, LORA_PREAMBLE_LENGTH,
                     LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON,
                     0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
+  // v0.4.4 — put back the boot-time sync word in case raw mode changed it.
+  if (defaultSyncCaptured) writeSyncRegs(defaultSyncRegs);
   Radio.Rx(0);  // back to continuous receive
   isLoRaIdle = true;
 }
@@ -1987,6 +2093,8 @@ void OnTxTimeout(void) {
 // Returns true if TxDone was seen, false on TxTimeout or if the radio never
 // reported completion within LORA_TX_TIMEOUT_MS.
 bool SendLoRaAndWait(uint8_t *buffer, uint8_t length) {
+  // v0.4.4 — a normal RadioDoge send must never go out on a raw (foreign) profile.
+  if (rawRxActive && !rawTxInProgress) exitRawRxMode("RadioDoge TX");
   // Never start a transmission on top of one still in progress.
   uint32_t waitStart = millis();
   while (loRaTxPending && (millis() - waitStart) < LORA_TX_TIMEOUT_MS) {
@@ -2038,6 +2146,13 @@ void OnRxDone(uint8_t *payload, uint16_t messageSize, int16_t rssiMeasured, int8
   if (messageSize > BUFFER_SIZE - 1) {
     addLog("[LoRa] Oversized RX packet (" + String(messageSize) + " bytes) - truncating");
     messageSize = BUFFER_SIZE - 1;
+  }
+  // v0.4.4 — in raw RX mode every frame goes straight to the host, untouched by
+  // RadioDoge parsing (it is not a RadioDoge packet).
+  if (rawRxActive) {
+    forwardRawRx(payload, messageSize, rssiMeasured, snr);
+    isLoRaIdle = true;  // main loop re-arms Rx(0) on the raw profile
+    return;
   }
   rxSize = (int16_t)messageSize;
   memcpy(rxPacket, payload, messageSize);
@@ -3669,6 +3784,68 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
       uint8_t reply[8] = {0x21, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
       Serial.write(reply, 8);
       bleSend(reply, 8);
+      break;
+    }
+
+    // v0.4.4 — CMD_RAW_TX (0x2B): transmit one raw LoRa frame on a given profile.
+    // Payload: profile(12) + frame bytes. Reply: header + [status 1=sent 0=fail].
+    // The RadioDoge radio config (or the active raw RX profile) is restored after.
+    case 0x2B: {
+      RawLoRaProfile p;
+      uint8_t status = 0;
+      if (extraLen > RAW_PROFILE_LEN && parseRawProfile(extraPayload, p)) {
+        uint8_t frame[BUFFER_SIZE];
+        uint8_t n = extraLen - RAW_PROFILE_LEN;
+        memcpy(frame, extraPayload + RAW_PROFILE_LEN, n);
+        rawTxInProgress = true;
+        applyRawProfile(p);
+        status = SendLoRaAndWait(frame, n) ? 1 : 0;
+        rawTxInProgress = false;
+        if (rawRxActive) { applyRawProfile(rawRxProfile); Radio.Rx(0); }
+        else applyLoRaRadioConfig();
+        addLog("[RAW] TX " + String(n) + " bytes sync 0x" + String(p.sync, HEX) +
+               (status ? " ok" : " FAILED"));
+      } else {
+        addLog("[RAW] Rejected raw TX (bad profile or empty frame)");
+        Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+        bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+        break;
+      }
+      uint8_t reply[9] = {0x2B, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF, status};
+      Serial.write(reply, 9);
+      bleSend(reply, 9);
+      break;
+    }
+
+    // v0.4.4 — CMD_RAW_RX_MODE (0x2C): [enable, profile(12), timeout_s u16 BE].
+    // enable=1 listens on the profile and forwards every frame as 0x2D; enable=0
+    // (or the timeout) restores normal RadioDoge receive. Never persisted.
+    // Reply: header + [active].
+    case 0x2C: {
+      if (extraLen >= 1 + RAW_PROFILE_LEN + 2 && extraPayload[0] == 1) {
+        RawLoRaProfile p;
+        if (!parseRawProfile(extraPayload + 1, p)) {
+          addLog("[RAW] Rejected raw RX profile");
+          Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+          bleSend(hostNACK, HOST_ACK_NACK_SIZE);
+          break;
+        }
+        uint16_t t = ((uint16_t)extraPayload[1 + RAW_PROFILE_LEN] << 8) | extraPayload[2 + RAW_PROFILE_LEN];
+        if (t == 0) t = RAW_RX_DEFAULT_TIMEOUT_S;
+        if (t > RAW_RX_MAX_TIMEOUT_S) t = RAW_RX_MAX_TIMEOUT_S;
+        rawRxProfile = p;
+        rawRxActive = true;
+        rawRxDeadline = millis() + (unsigned long)t * 1000UL;
+        applyRawProfile(p);
+        Radio.Rx(0);
+        isLoRaIdle = false;
+        addLog("[RAW] Raw RX mode on, sync 0x" + String(p.sync, HEX) + ", " + String(t) + " s");
+      } else {
+        exitRawRxMode("host");
+      }
+      uint8_t reply[9] = {0x2C, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF, (uint8_t)(rawRxActive ? 1 : 0)};
+      Serial.write(reply, 9);
+      bleSend(reply, 9);
       break;
     }
 
