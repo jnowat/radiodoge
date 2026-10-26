@@ -15,6 +15,7 @@
 //! - Future Android / embedded targets
 
 pub mod backend;
+pub mod gateway_stats;
 pub mod qr;
 pub mod radio;
 pub mod serial;

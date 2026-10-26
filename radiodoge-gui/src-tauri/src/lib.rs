@@ -1086,8 +1086,23 @@ async fn start_gateway(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| cli_name.to_string()); // fall back to PATH
 
+    // The daemon writes its counters here for the gateway dashboard. Remove the
+    // previous run's snapshot so the dashboard never shows stale numbers.
+    let stats_path = gateway_stats_path(&app);
+    if let Some(ref p) = stats_path {
+        if let Some(dir) = p.parent() {
+            let _ = tokio::fs::create_dir_all(dir).await;
+        }
+        let _ = tokio::fs::remove_file(p).await;
+    }
+    let mut daemon_args: Vec<String> = vec!["daemon".into(), "-p".into(), port.clone()];
+    if let Some(ref p) = stats_path {
+        daemon_args.push("--stats-file".into());
+        daemon_args.push(p.to_string_lossy().into_owned());
+    }
+
     let child = tokio::process::Command::new(&cli_path)
-        .args(["daemon", "-p", &port])
+        .args(&daemon_args)
         // Without this the daemon outlives the app: closing the window would
         // leave an orphan holding the serial port, and the next launch could not
         // open the board at all.
@@ -1135,6 +1150,41 @@ async fn start_gateway(
     );
     log::info!("Gateway daemon started on port {}", port);
     Ok(())
+}
+
+/// Where the gateway daemon writes its dashboard snapshot.
+fn gateway_stats_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("gateway-stats.json"))
+}
+
+/// Gateway dashboard: the running daemon's latest counters.
+///
+/// `running` reflects the daemon process this app started; `stats` is `None`
+/// until the daemon has written its first snapshot (a few seconds after start).
+/// A daemon that died on its own reports `running: false` while the app still
+/// shows Stop, which reclaims the port.
+#[tauri::command]
+async fn get_gateway_stats(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<serde_json::Value, String> {
+    let running = {
+        let mut gp = state.gateway_process.lock().await;
+        match gp.as_mut().map(|c| c.try_wait()) {
+            Some(Ok(None)) => true,
+            // Exited (or unknowable). Leave the handle and the owned port alone so
+            // Stop still reclaims the serial port; the dashboard says it stopped.
+            _ => false,
+        }
+    };
+    let stats = match gateway_stats_path(&app) {
+        Some(p) => match tokio::fs::read(&p).await {
+            Ok(bytes) => serde_json::from_slice::<radiodoge_core::gateway_stats::GatewayStats>(&bytes).ok(),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    Ok(serde_json::json!({ "running": running, "stats": stats }))
 }
 
 /// v0.3.6 — Stop the background gateway daemon.
@@ -2098,6 +2148,7 @@ pub fn run() {
             // ── Desktop serial (existing) ─────────────────────────────────
             list_ports,
             list_ports_detailed,
+            get_gateway_stats,
             connect_port,
             disconnect_port,
             is_connected,
