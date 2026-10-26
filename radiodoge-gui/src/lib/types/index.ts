@@ -134,6 +134,21 @@ export interface NeighborEntry {
   address: NodeAddress;
   rssi: number;
   lastSeen: number; // Unix seconds
+  /** v0.3.19 — Last position the node shared over the mesh. */
+  position?: GeoPosition;
+  positionAt?: number; // Unix seconds
+}
+
+/** v0.3.19 — A shared GPS position (WGS-84). */
+export interface GeoPosition {
+  lat: number;
+  lon: number;
+  accuracyM?: number;
+}
+
+export function mapUrl(p: GeoPosition): string {
+  const lat = p.lat.toFixed(5), lon = p.lon.toFixed(5);
+  return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}`;
 }
 
 /** v0.3.6 — Transaction history entry (last 50, persisted to local JSON). */

@@ -537,16 +537,32 @@ impl SerialManager {
                                         .unwrap_or_default()
                                         .as_secs();
                                     let src = &packet.source;
+                                    let shared_pos = if packet.command == radio::CMD_MESSAGE
+                                        || packet.command == radio::CMD_BROADCAST
+                                    {
+                                        hex::decode(&packet.payload_hex)
+                                            .ok()
+                                            .and_then(|b| String::from_utf8(b).ok())
+                                            .and_then(|t| crate::geo::Position::from_message(&t))
+                                    } else {
+                                        None
+                                    };
                                     if src.region != 0xFF && src.community != 0xFF && src.node != 0xFF {
                                         let mut nbrs = neighbors_clone.lock().await;
                                         if let Some(existing) = nbrs.iter_mut().find(|n| n.address == *src) {
                                             existing.rssi = packet.rssi;
                                             existing.last_seen = now;
+                                            if shared_pos.is_some() {
+                                                existing.position = shared_pos;
+                                                existing.position_at = Some(now);
+                                            }
                                         } else {
                                             nbrs.push(crate::types::NeighborEntry {
                                                 address: src.clone(),
                                                 rssi: packet.rssi,
                                                 last_seen: now,
+                                                position: shared_pos,
+                                                position_at: shared_pos.map(|_| now),
                                             });
                                             // Keep last 20 neighbors
                                             if nbrs.len() > 20 {
