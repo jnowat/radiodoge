@@ -136,7 +136,7 @@ Rock-solid against real hardware, and now on your phone.
 Bridge RadioDoge with the existing Meshtastic community.
 
 - ✅ **Meshtastic packet encoding** — wrap RadioDoge payloads in Meshtastic protobuf so standard nodes can relay them (v0.3.23; CLI `meshtastic wrap/decode`)
-- 🔜 **Node discovery** — scan for nodes on the same channel and render a network map
+- 🔨 **Node discovery** _(PR #44, awaiting hardware test)_ — scan for nodes on the same channel and render a network map
 - 🔜 **Bridge mode** — `radiodoge-cli daemon` transparently bridges RadioDoge ↔ Meshtastic _(encoding ready in v0.3.23; needs a firmware raw-TX/RX command)_
 - ✅ **Multi-channel scanning** — hop across frequencies/SFs to reach different Meshtastic presets (v0.3.22)
 - ✅ **GPS location embedding** — POS: position broadcasts + neighbor positions (v0.3.19 desktop, v0.3.20 Android)
@@ -234,8 +234,7 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
     `is_default` and `length`, and the gateway endpoint reports `has_password`. The RPC password is write-only —
     the web UI leaves the field blank with a placeholder showing whether one is saved, and submitting it blank
     keeps the stored value rather than erasing it.
-  - 🔜 *Route authentication itself is still open.* The remaining work is a guard on all 40 handlers; it is not
-    done here because it cannot be compile- or hardware-tested in the review environment, and a mistake locks
+  - 🔨 *Route authentication is in PR #40, awaiting hardware validation.* It adds a guard on all 40 handlers and stays unmerged until it is tested on a board, because a mistake locks
     the operator out of their own board.
 - ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
   crate version via clap's `version` attribute, so it always matches the package.
