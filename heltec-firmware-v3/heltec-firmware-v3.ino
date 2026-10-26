@@ -427,6 +427,9 @@ int16_t rxSize;
 int8_t lastSnr = 0;      // v0.3.6 — for OLED status cycle
 bool isLoRaIdle = true;
 bool needToSendACK = false;
+// Node discovery: extra random delay before ACKing a broadcast PING, so every
+// node in range does not answer on top of the others.
+uint16_t ackJitterMs = 0;
 
 // v0.4.2 — True from the moment Radio.Send() is called until TxDone or
 // TxTimeout fires.
@@ -1013,7 +1016,8 @@ void saveLoRaConfigurationQuiet(uint8_t region, uint8_t community, uint8_t node)
 bool isDesktopCommandByte(uint8_t cmdByte) {
   return cmdByte == 0x10 || cmdByte == 0x11 || cmdByte == 0x20 || cmdByte == 0x21
       || cmdByte == 0x22 || cmdByte == 0x23 || cmdByte == 0x24 || cmdByte == 0x26
-      || cmdByte == 0x27 || cmdByte == 0x28 || cmdByte == 0x2B || cmdByte == 0x2C;
+      || cmdByte == 0x27 || cmdByte == 0x28 || cmdByte == 0x2B || cmdByte == 0x2C
+      || cmdByte == 0x2E;
 }
 
 // Total packet length for a desktop command sent host -> board, or 0 when the
@@ -1022,7 +1026,8 @@ bool isDesktopCommandByte(uint8_t cmdByte) {
 // path — has no inter-packet delay to lean on.
 uint8_t desktopCommandLength(uint8_t cmdByte) {
   switch (cmdByte) {
-    case 0x20: case 0x22: case 0x26: case 0x27: return 8;   // header only
+    case 0x20: case 0x22: case 0x26: case 0x27:
+    case 0x2E:                                  return 8;   // header only (DISCOVER)
     case 0x23: case 0x24: case 0x28:            return 9;   // header + 1 flag byte
     case 0x21:                                  return 16;  // header + 8 param bytes
     case 0x2C:                                  return 8 + 1 + RAW_PROFILE_LEN + 2;  // enable + profile + timeout
@@ -2033,7 +2038,8 @@ void RawSerialMessageSendAndReceive() {
 void CommandAndControlLoop() {
   if (needToSendACK) {
     // For now we will delay before sending an ACK (debug purposes)
-    delay(2000);
+    delay(2000 + ackJitterMs);
+    ackJitterMs = 0;
     isLoRaIdle = false;
     needToSendACK = false;
     SendACK(dest);
@@ -3946,6 +3952,19 @@ void HandleDesktopCommand(uint8_t cmdByte, uint8_t flags, const uint8_t* hdrRest
       break;
     }
 
+    // CMD_DISCOVER (0x2E): transmit a PING to the broadcast address. Nodes with
+    // discovery support ACK it (after a random jitter); each ACK reaches the
+    // host as CMD_RECEIVED_ACK (0x29) with the responder as source.
+    case 0x2E: {
+      SetDestinationAsBroadcast();
+      SendPing(dest);
+      addLog("[LoRa] Discovery: broadcast PING sent");
+      uint8_t reply[8] = {0x2E, 0x00, local.region, local.community, local.node, 0xFF, 0xFF, 0xFF};
+      Serial.write(reply, 8);
+      bleSend(reply, 8);
+      break;
+    }
+
     // v0.3.8 — CMD_GET_MAC (0x27): Report the WiFi station MAC address (6 bytes).
     case 0x27: {
       uint8_t mac[6] = {0};
@@ -4585,6 +4604,13 @@ void ParseReceivedMessage() {
       DisplayBroadcastMessage(String(tempBuf), senderAddress);
       ProcessMultipartPacket();
       return; // Exit after processing multipart broadcast
+    } else if (mType == PING) {
+      // Node discovery: answer a broadcast PING like a direct one, but after a
+      // random 0-3 s jitter so responders do not collide.
+      ReceivedPing();
+      dest = senderAddress;
+      ackJitterMs = (uint16_t)random(0, 3000);
+      needToSendACK = true;
     } else {
       // Regular broadcast
       SetSenderAddress();

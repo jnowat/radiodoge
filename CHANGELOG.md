@@ -9,7 +9,21 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
+_Waiting on hardware validation before merge: firmware REST route authentication (#40)._
+
+## [0.3.36] - 2026-10-26
+
+### Added
+- **Node discovery.** New host→board command `CMD_DISCOVER` (**0x2E**): the board transmits a PING to the broadcast address. Firmware now answers a broadcast PING with an ACK after a random 0–3 s jitter so responders do not collide; each ACK reaches the host as `RECEIVED_ACK` and lands in the neighbor table.
+- Core: `radio::build_discover`, `SerialManager::discover_nodes(listen)`, `serial::heard_since`; Tauri `discover_nodes`.
+- Mesh tab: **📡 Scan network** button and a radial **network map**. Unknown RSSI (ACK notifications) shows as "n/a".
+- CLI: `radiodoge-cli discover -p PORT [--listen SECS]`.
+
+### Fixed
+- Discovery was originally numbered 0x2B, which FW12 already uses for `CMD_RAW_TX` (bridge mode); renumbered to 0x2E in core, firmware and PROTOCOL.md.
+- `discover` now reads the board's real address first instead of printing the 10.0.1 default.
+
+Hardware-tested on two Heltec V3 boards (10.0.1 ↔ 10.0.2): each side discovered the other.
 
 ## [0.3.35] - 2026-10-26
 

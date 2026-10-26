@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
         }
         Commands::Receive { port, timeout } => cmd_receive(&port, timeout).await,
         Commands::Ping { port } => cmd_ping(&port).await,
+        Commands::Discover { port, listen } => cmd_discover(&port, listen).await,
         Commands::Info { port, expect } => cmd_info(&port, expect.as_deref()).await,
         Commands::SetAddress { port, address } => cmd_set_address(&port, &address).await,
         Commands::Message { port, to, text, listen } => cmd_message(&port, &to, &text, listen).await,
@@ -602,6 +603,27 @@ async fn cmd_info(port: &str, expect: Option<&str>) -> Result<()> {
         }
         println!("✅ address matches {}", w.to_display_string());
     }
+    Ok(())
+}
+
+/// Broadcast a discovery PING and list the nodes that answer.
+async fn cmd_discover(port: &str, listen: u64) -> Result<()> {
+    let listen = listen.clamp(1, 30);
+    let manager = open_board(port).await?;
+    let me = manager.get_node_address().await;
+    println!("📡 Discovering from {} (listening {} s)...", me.to_display_string(), listen);
+    let found = manager.discover_nodes(std::time::Duration::from_secs(listen)).await?;
+    if found.is_empty() {
+        println!("No nodes answered. Nodes need firmware with discovery support and the same LoRa settings.");
+    } else {
+        println!("{:<14} {:>9}", "NODE", "RSSI");
+        for n in &found {
+            let rssi = if n.rssi == 0 { "n/a".to_string() } else { format!("{} dBm", n.rssi) };
+            println!("{:<14} {:>9}", n.address.to_display_string(), rssi);
+        }
+        println!("{} node(s) found", found.len());
+    }
+    manager.disconnect().await.ok();
     Ok(())
 }
 
