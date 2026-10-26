@@ -11,6 +11,23 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.39] - 2026-10-26
+
+### Notes
+- First real transaction over LoRa: a 1 DOGE test self-send (226 bytes, 2 frames) went from sender `10.0.2` to gateway `10.0.1` on FW13, was acknowledged with TX_ACK about 1.1 s after it went on air, and was broadcast by the gateway daemon. txid `4268f62b3869e1a829ba7aecc699f1ffd34b198bf034c642e8442e0a5307f9ca`.
+
+## [0.3.38] - 2026-10-26
+
+### Added
+- Signal strength on over-the-air ACKs. Firmware FW13 reports a heard ACK as `RECEIVED_ACK_SIGNAL` (`0x2F`, header plus RSSI and SNR) instead of the bare `0x29`. The host folds it back into `RECEIVED_ACK` with the real RSSI, so `lora-ping` prints the ACK's dBm and `discover` and the neighbor table show a signal instead of `n/a`. Hosts still accept the 8-byte `0x29` from older firmware.
+
+## [0.3.37] - 2026-10-26
+
+### Changed
+- `docs/HARDWARE_SESSION.md`: the gateway is now `10.0.1` (the firmware default) and the sender `10.0.2`, with the matching `hw-session.ps1 -AddrA/-AddrB` call and a "one board per PC" table for running the steps by hand on two machines.
+
+Hardware session on two Heltec V3 boards (FW12): flash, identity, USB and LoRa pings both ways, node discovery both ways and balance over LoRa through the `10.0.1` gateway all passed. Nothing was broadcast.
+
 ## [0.3.36] - 2026-10-26
 
 ### Added

@@ -187,6 +187,7 @@ board originates.
 | `0x28` | `BLE_TOGGLE` | host→board | Enable/disable BLE advertising |
 | `0x29` | `RECEIVED_ACK` | board→host | The board heard an over-the-air ACK |
 | `0x2A` | `RECEIVED_PING` | board→host | The board heard an over-the-air Ping |
+| `0x2F` | `RECEIVED_ACK_SIGNAL` | board→host | FW13: an over-the-air ACK with signal, `[header, rssi i16 BE, snr i8]`. Replaces `0x29` from the board; the host folds it into `RECEIVED_ACK` |
 | `0x2E` | `DISCOVER` | host→board | Transmit a broadcast PING (echoed as an 8-byte header). Discovery-capable nodes ACK it after a random 0–3 s jitter; each ACK arrives as `0x29` |
 
 See the [Roadmap → Known Limitations](../ROADMAP.md#-known-limitations--in-progress) for commands whose
@@ -207,6 +208,7 @@ which prevents packet-boundary drift when several replies arrive in one read:
 | `ADDR_CONFLICT` | 8 | none |
 | `SET_NODE_ADDRS` | 8 | none (ACK) |
 | `RECEIVED_ACK` | 8 | none |
+| `RECEIVED_ACK_SIGNAL` | 11 | rssi i16 BE, snr i8 |
 | `RECEIVED_PING` | 8 | none |
 | `SET_GATEWAY` | 9 | 1 byte — gateway mode |
 | `WIFI_TOGGLE` | 9 | 1 byte — WiFi enabled |

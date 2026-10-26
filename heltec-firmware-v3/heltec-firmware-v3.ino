@@ -357,7 +357,8 @@ struct PendingRequest {
 // transaction that does not fit in one packet.
 // radio::MIN_RAW_LORA_FIRMWARE (12) adds raw LoRa TX/RX (0x2B/0x2C/0x2D), used
 // by the host's Meshtastic bridge.
-#define FIRMWARE_VERSION 12  // v0.4.4
+// 13 reports over-the-air ACKs as RECEIVED_ACK_SIGNAL (0x2F) with RSSI/SNR.
+#define FIRMWARE_VERSION 13
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -2264,11 +2265,13 @@ void GetLocalAddress() {
 void ReceivedACK() {
   SetSenderAddress();
   DisplayRXMessage("ACK", senderAddress);
-  // Notify host: CMD_RECEIVED_ACK (0x29), standard 8-byte header, src = ACK sender
-  uint8_t ackMsg[8] = {0x29, 0x00,
-                       senderAddress.region, senderAddress.community, senderAddress.node,
-                       0xFF, 0xFF, 0xFF};
-  Serial.write(ackMsg, 8);
+  // Notify host: CMD_RECEIVED_ACK_SIGNAL (0x2F), standard 8-byte header, src = ACK
+  // sender, then the RSSI (i16 BE) and SNR (i8) the ACK was heard at.
+  uint8_t ackMsg[11] = {0x2F, 0x00,
+                        senderAddress.region, senderAddress.community, senderAddress.node,
+                        0xFF, 0xFF, 0xFF,
+                        (uint8_t)((uint16_t)rssi >> 8), (uint8_t)rssi, (uint8_t)lastSnr};
+  Serial.write(ackMsg, 11);
 }
 
 // Indicate to the host that a ping was received and display it on the screen

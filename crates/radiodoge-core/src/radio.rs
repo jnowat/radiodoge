@@ -58,6 +58,7 @@ pub const CMD_RECEIVED_PING: u8 = 0x2A;       // v0.4.0: Board-initiated: over-t
 pub const CMD_RAW_TX: u8 = 0x2B;              // v0.4.4 (FW12): transmit one raw LoRa frame on an explicit profile
 pub const CMD_RAW_RX_MODE: u8 = 0x2C;         // v0.4.4 (FW12): enter/leave volatile raw receive mode
 pub const CMD_RAW_RX: u8 = 0x2D;              // v0.4.4 (FW12): board-initiated raw frame received in raw mode
+pub const CMD_RECEIVED_ACK_SIGNAL: u8 = 0x2F; // FW13: board-initiated ACK with signal: header + rssi i16 BE + snr i8. The host folds it into CMD_RECEIVED_ACK.
 pub const CMD_DISCOVER: u8 = 0x2E;            // Node discovery: board transmits a broadcast PING; every node in range ACKs
 
 // ─── Firmware legacy serial enum ─────────────────────────────────────────────
@@ -293,6 +294,7 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         CMD_GET_BATTERY     => Some(10), // header + 2 bytes (voltage_mv big-endian)
         CMD_GET_MAC         => Some(14), // header + 6 bytes (MAC address)
         CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
+        CMD_RECEIVED_ACK_SIGNAL => Some(11), // header + rssi i16 BE + snr i8
         CMD_RECEIVED_ACK    => Some(8),  // header only; src = remote node that sent the ACK
         CMD_RECEIVED_PING   => Some(8),  // header only; src = remote node that sent the Ping
         CMD_RAW_TX          => Some(9),  // header + 1 byte (status: 1 = sent)
@@ -524,6 +526,7 @@ pub fn is_known_command(byte: u8) -> bool {
             | CMD_GET_MAC
             | CMD_BLE_TOGGLE
             | CMD_RECEIVED_ACK
+            | CMD_RECEIVED_ACK_SIGNAL
             | CMD_RECEIVED_PING
             | CMD_RAW_TX
             | CMD_RAW_RX_MODE
@@ -1106,8 +1109,20 @@ pub fn parse_incoming(buf: &[u8], rssi: i16) -> Option<IncomingPacket> {
         return None;
     }
 
-    let command = buf[0];
+    let mut command = buf[0];
     let hops = hops_from_flags(buf[1]);
+    let mut rssi = rssi;
+    let mut buf = buf;
+    // FW13 reports an over-the-air ACK with the signal it was heard at. Fold it
+    // into a plain RECEIVED_ACK so every consumer keeps matching on 0x29.
+    if command == CMD_RECEIVED_ACK_SIGNAL {
+        if buf.len() < SINGLE_HDR_LEN + 3 {
+            return None;
+        }
+        rssi = i16::from_be_bytes([buf[SINGLE_HDR_LEN], buf[SINGLE_HDR_LEN + 1]]);
+        command = CMD_RECEIVED_ACK;
+        buf = &buf[..SINGLE_HDR_LEN];
+    }
 
     let source = NodeAddress::new(buf[2], buf[3], buf[4]);
     let destination = NodeAddress::new(buf[5], buf[6], buf[7]);
@@ -1436,6 +1451,16 @@ mod tests {
     /// parse_incoming.  Without this, the first packet's payload_hex includes
     /// the raw bytes of every subsequent packet.
     #[test]
+    fn test_ack_signal_folds_into_received_ack() {
+        let pkt = [CMD_RECEIVED_ACK_SIGNAL, 0, 10, 0, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xB5, 0x07];
+        assert_eq!(exact_packet_len(CMD_RECEIVED_ACK_SIGNAL), Some(pkt.len()));
+        let p = parse_incoming(&pkt, 0).expect("parses");
+        assert_eq!((p.command, p.rssi, p.payload_hex.as_str()), (CMD_RECEIVED_ACK, -75, ""));
+        assert_eq!(p.source, NodeAddress::new(10, 0, 2));
+        assert!(parse_incoming(&pkt[..9], 0).is_none());
+    }
+
+    #[test]
     fn test_parse_incoming_does_not_bleed_into_next_packet() {
         let src = test_src();
         let dst = test_dst();
@@ -1579,7 +1604,7 @@ mod tests {
             CMD_GET_FIRMWARE_VERSION, CMD_SET_LORA_PARAMS, CMD_GET_SETTINGS,
             CMD_SET_GATEWAY, CMD_WIFI_TOGGLE, CMD_ADDR_CONFLICT, CMD_GET_BATTERY,
             CMD_GET_MAC, CMD_BLE_TOGGLE, CMD_RECEIVED_ACK, CMD_RECEIVED_PING,
-            CMD_RAW_TX, CMD_RAW_RX_MODE, CMD_RAW_RX,
+            CMD_RECEIVED_ACK_SIGNAL, CMD_RAW_TX, CMD_RAW_RX_MODE, CMD_RAW_RX,
             CMD_DISCOVER,
         ] {
             assert!(is_known_command(cmd), "CMD 0x{:02X} must be recognised", cmd);
