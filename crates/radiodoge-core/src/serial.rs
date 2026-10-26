@@ -335,8 +335,6 @@ impl SerialManager {
             // When the last byte arrived; variable-length frames are only framed
             // after the line has been quiet for UNBOUNDED_FRAME_QUIET.
             let mut last_rx = std::time::Instant::now();
-            const UNBOUNDED_FRAME_QUIET: Duration = Duration::from_millis(40);
-            const STALE_PARTIAL_FRAME: Duration = Duration::from_millis(250);
 
             loop {
                 if token.is_cancelled() {
@@ -413,61 +411,14 @@ impl SerialManager {
                         // If the first byte cannot start a packet, discard it and re-sync.
                         // This prevents stale firmware text output (e.g. Serial.println debug)
                         // from being misinterpreted as packet headers.
-                        while !accumulator.is_empty() {
-                            // Drop any run of noise in one shift rather than a
-                            // byte at a time (see radio::resync_offset).
-                            let skip = radio::resync_offset(&accumulator);
-                            if skip > 0 {
-                                accumulator.drain(..skip);
-                                continue;
-                            }
-                            if accumulator.len() < radio::SINGLE_HDR_LEN {
-                                break;
-                            }
-                            // Pre-compute the exact byte span for this packet so that
-                            // parse_incoming receives only the bytes belonging to it.
-                            // Without this, back-to-back packets in the accumulator
-                            // cause next-packet bytes to appear in payload_hex.
-                            // Mirrors the equivalent logic in mobile_push_bytes (lib.rs).
-                            let cmd = accumulator[0];
-                            if radio::is_unbounded_frame(cmd, &accumulator)
-                                && accumulator.len() < radio::SINGLE_HDR_LEN + radio::MAX_SINGLE_PAYLOAD_LEN
-                                && last_rx.elapsed() < UNBOUNDED_FRAME_QUIET
-                            {
-                                break; // more of this frame may still be in flight
-                            }
-                            let packet_len = match radio::frame_packet_len(cmd, &accumulator) {
-                                Some(n) => n,
-                                // Not enough bytes yet for a complete packet — leave the
-                                // accumulator untouched and wait for the next serial read.
-                                // Truncating here (the old `.min(accumulator.len())`) emitted
-                                // a short packet and left its tail to be misparsed as a new one.
-                                //
-                                // …unless the line has gone quiet: then the "partial frame" is
-                                // junk (a stray byte that happens to look like a fixed-length
-                                // command), and waiting for its tail would glue it to the next
-                                // real packet and misframe everything after it. Drop the head
-                                // byte and resync instead.
-                                None if last_rx.elapsed() > STALE_PARTIAL_FRAME => {
-                                    log::debug!("dropping stale partial frame head 0x{:02X} ({} bytes buffered)", cmd, accumulator.len());
-                                    accumulator.drain(..1);
-                                    continue;
-                                }
-                                None => break,
-                            };
+                        while let Some(frame) = take_frame(&mut accumulator, last_rx.elapsed()) {
                             let now_secs = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs();
-                            let ingested = radio::ingest_packet(
-                                &accumulator[..packet_len],
-                                0,
-                                &mut reassembler,
-                                now_secs,
-                            );
-                            // Consume the frame either way — a multipart fragment
-                            // has been absorbed even though it yields no packet yet.
-                            accumulator.drain(..packet_len);
+                            // A multipart fragment is absorbed by the reassembler
+                            // even though it yields no packet yet.
+                            let ingested = radio::ingest_packet(&frame, 0, &mut reassembler, now_secs);
                             if let Some(packet) = ingested {
                                 // Update stats
                                 {
@@ -487,37 +438,19 @@ impl SerialManager {
                                 if packet.command == radio::CMD_GET_FIRMWARE_VERSION
                                     && now_millis() < firmware_query_until_clone.load(Ordering::Relaxed)
                                 {
-                                    if let Ok(bytes) = hex::decode(&packet.payload_hex) {
-                                        if let Ok(ver) = String::from_utf8(bytes) {
-                                            let ver = ver.trim_matches('\0').trim().to_string();
-                                            if !ver.is_empty() {
-                                                *firmware_version_clone.lock().await = Some(ver);
-                                            }
-                                        }
+                                    if let Some(ver) = parse_firmware_version(&packet.payload_hex) {
+                                        *firmware_version_clone.lock().await = Some(ver);
                                     }
                                 }
 
                                 // v0.3.6 — Parse CMD_GET_SETTINGS (0x22) responses.
                                 // Payload: [region, community, node, gateway_mode_byte, wifi_enabled_byte(v0.3.7)]
                                 if packet.command == radio::CMD_GET_SETTINGS {
-                                    if let Ok(payload_bytes) = hex::decode(&packet.payload_hex) {
-                                        if payload_bytes.len() >= 4 {
-                                            let addr = NodeAddress::new(
-                                                payload_bytes[0],
-                                                payload_bytes[1],
-                                                payload_bytes[2],
-                                            );
-                                            let gw = payload_bytes[3] != 0;
-                                            let wifi = payload_bytes.get(4).map(|&b| b != 0).unwrap_or(true);
-                                            if addr != NodeAddress::broadcast() {
-                                                *node_address_clone.lock().await = addr.clone();
-                                            }
-                                            *board_settings_clone.lock().await = Some(BoardSettings {
-                                                node_address: addr,
-                                                gateway_mode: gw,
-                                                wifi_enabled: wifi,
-                                            });
+                                    if let Some(settings) = parse_settings_payload(&packet.payload_hex) {
+                                        if settings.node_address != NodeAddress::broadcast() {
+                                            *node_address_clone.lock().await = settings.node_address.clone();
                                         }
+                                        *board_settings_clone.lock().await = Some(settings);
                                     }
                                 }
 
@@ -529,25 +462,15 @@ impl SerialManager {
 
                                 // v0.3.8 — CMD_GET_BATTERY (0x26): board reports battery voltage in mV
                                 if packet.command == radio::CMD_GET_BATTERY {
-                                    if let Ok(payload_bytes) = hex::decode(&packet.payload_hex) {
-                                        if payload_bytes.len() >= 2 {
-                                            let mv = u16::from_be_bytes([payload_bytes[0], payload_bytes[1]]);
-                                            *battery_mv_clone.lock().await = Some(mv);
-                                        }
+                                    if let Some(mv) = parse_battery_mv(&packet.payload_hex) {
+                                        *battery_mv_clone.lock().await = Some(mv);
                                     }
                                 }
 
                                 // v0.3.8 — CMD_GET_MAC (0x27): board reports its MAC address (6 bytes)
                                 if packet.command == radio::CMD_GET_MAC {
-                                    if let Ok(payload_bytes) = hex::decode(&packet.payload_hex) {
-                                        if payload_bytes.len() >= 6 {
-                                            let mac = format!(
-                                                "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                                                payload_bytes[0], payload_bytes[1], payload_bytes[2],
-                                                payload_bytes[3], payload_bytes[4], payload_bytes[5]
-                                            );
-                                            *board_mac_clone.lock().await = Some(mac);
-                                        }
+                                    if let Some(mac) = parse_mac(&packet.payload_hex) {
+                                        *board_mac_clone.lock().await = Some(mac);
                                     }
                                 }
 
@@ -1003,6 +926,93 @@ impl SerialManager {
     }
 }
 
+/// A variable-length frame is only cut once the line has been quiet this long.
+const UNBOUNDED_FRAME_QUIET: Duration = Duration::from_millis(40);
+/// A buffered partial fixed-length frame older than this is junk, not a frame in flight.
+const STALE_PARTIAL_FRAME: Duration = Duration::from_millis(250);
+
+/// Take the next complete frame off the front of the serial accumulator.
+///
+/// `quiet_for` is how long since the last byte arrived. Returns `None` when
+/// more bytes are needed. Noise before a frame is dropped (see
+/// `radio::resync_offset`), and a stale partial frame head is discarded so it
+/// cannot glue itself to the next real packet.
+fn take_frame(accumulator: &mut Vec<u8>, quiet_for: Duration) -> Option<Vec<u8>> {
+    while !accumulator.is_empty() {
+        let skip = radio::resync_offset(accumulator);
+        if skip > 0 {
+            accumulator.drain(..skip);
+            continue;
+        }
+        if accumulator.len() < radio::SINGLE_HDR_LEN {
+            return None;
+        }
+        // Exact byte span for this packet, so back-to-back packets never
+        // leak into each other's payload. Mirrors mobile_push_bytes (GUI lib.rs).
+        let cmd = accumulator[0];
+        if radio::is_unbounded_frame(cmd, accumulator)
+            && accumulator.len() < radio::SINGLE_HDR_LEN + radio::MAX_SINGLE_PAYLOAD_LEN
+            && quiet_for < UNBOUNDED_FRAME_QUIET
+        {
+            return None; // more of this frame may still be in flight
+        }
+        match radio::frame_packet_len(cmd, accumulator) {
+            Some(n) => return Some(accumulator.drain(..n).collect()),
+            None if quiet_for > STALE_PARTIAL_FRAME => {
+                log::debug!(
+                    "dropping stale partial frame head 0x{:02X} ({} bytes buffered)",
+                    cmd,
+                    accumulator.len()
+                );
+                accumulator.drain(..1);
+            }
+            None => return None,
+        }
+    }
+    None
+}
+
+/// `CMD_GET_FIRMWARE_VERSION` payload → trimmed version string.
+fn parse_firmware_version(payload_hex: &str) -> Option<String> {
+    let ver = String::from_utf8(hex::decode(payload_hex).ok()?).ok()?;
+    let ver = ver.trim_matches('\0').trim().to_string();
+    (!ver.is_empty()).then_some(ver)
+}
+
+/// `CMD_GET_SETTINGS` payload: `[region, community, node, gateway, wifi(v0.3.7+)]`.
+fn parse_settings_payload(payload_hex: &str) -> Option<BoardSettings> {
+    let b = hex::decode(payload_hex).ok()?;
+    if b.len() < 4 {
+        return None;
+    }
+    Some(BoardSettings {
+        node_address: NodeAddress::new(b[0], b[1], b[2]),
+        gateway_mode: b[3] != 0,
+        wifi_enabled: b.get(4).map(|&x| x != 0).unwrap_or(true),
+    })
+}
+
+/// `CMD_GET_BATTERY` payload: big-endian millivolts.
+fn parse_battery_mv(payload_hex: &str) -> Option<u16> {
+    let b = hex::decode(payload_hex).ok()?;
+    (b.len() >= 2).then(|| u16::from_be_bytes([b[0], b[1]]))
+}
+
+/// `CMD_GET_MAC` payload: 6 bytes → `AA:BB:CC:DD:EE:FF`.
+fn parse_mac(payload_hex: &str) -> Option<String> {
+    let b = hex::decode(payload_hex).ok()?;
+    if b.len() < 6 {
+        return None;
+    }
+    Some(
+        b[..6]
+            .iter()
+            .map(|x| format!("{:02X}", x))
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
+}
+
 impl Default for SerialManager {
     fn default() -> Self {
         Self::new()
@@ -1059,5 +1069,139 @@ pub async fn record_neighbor(neighbors: &TokioMutex<Vec<NeighborEntry>>, packet:
             nbrs.sort_by_key(|b| std::cmp::Reverse(b.last_seen));
             nbrs.truncate(20);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Frame parsing over mock serial bytes — no hardware involved.
+    use super::*;
+
+    const QUIET: Duration = Duration::from_millis(0);
+    const SETTLED: Duration = Duration::from_millis(100);
+    const STALE: Duration = Duration::from_millis(400);
+
+    fn a() -> NodeAddress {
+        NodeAddress::new(1, 2, 3)
+    }
+    fn b() -> NodeAddress {
+        NodeAddress::new(4, 5, 6)
+    }
+
+    fn drain_all(acc: &mut Vec<u8>, quiet: Duration) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Some(f) = take_frame(acc, quiet) {
+            out.push(f);
+        }
+        out
+    }
+
+    #[test]
+    fn back_to_back_fixed_frames_split_exactly() {
+        let ping = radio::build_ping(&a(), &b());
+        let addr = radio::build_get_node_addr(&a());
+        let mut acc = [ping.clone(), addr.clone()].concat();
+        assert_eq!(drain_all(&mut acc, QUIET), vec![ping, addr]);
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn empty_accumulator_yields_nothing() {
+        let mut acc = Vec::new();
+        assert_eq!(take_frame(&mut acc, SETTLED), None);
+    }
+
+    #[test]
+    fn partial_frame_waits_for_its_tail() {
+        let ping = radio::build_ping(&a(), &b());
+        let mut acc = ping[..5].to_vec();
+        assert_eq!(take_frame(&mut acc, QUIET), None);
+        assert_eq!(acc.len(), 5, "partial frame must be kept, not truncated");
+        acc.extend_from_slice(&ping[5..]);
+        assert_eq!(take_frame(&mut acc, QUIET), Some(ping));
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn frame_split_across_many_reads_reassembles() {
+        let ping = radio::build_ping(&a(), &b());
+        let mut acc = Vec::new();
+        let mut got = Vec::new();
+        for byte in &ping {
+            acc.push(*byte);
+            got.extend(drain_all(&mut acc, QUIET));
+        }
+        assert_eq!(got, vec![ping]);
+    }
+
+    #[test]
+    fn stale_partial_frame_head_is_dropped_not_glued() {
+        let ping = radio::build_ping(&a(), &b());
+        let mut acc = ping[..5].to_vec();
+        assert_eq!(take_frame(&mut acc, STALE), None);
+        assert!(acc.len() < 5, "stale head byte must be discarded");
+    }
+
+    #[test]
+    fn variable_length_message_waits_for_quiet_line() {
+        let msg = radio::build_message(&a(), &b(), "much wow");
+        let mut acc = msg.clone();
+        assert_eq!(take_frame(&mut acc, QUIET), None, "may still be in flight");
+        assert_eq!(acc.len(), msg.len());
+        assert_eq!(take_frame(&mut acc, SETTLED), Some(msg));
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn debug_text_before_a_frame_is_skipped() {
+        let ping = radio::build_ping(&a(), &b());
+        let mut acc = b"\r\n".to_vec();
+        acc.extend_from_slice(&ping);
+        let frames = drain_all(&mut acc, SETTLED);
+        assert_eq!(frames.last(), Some(&ping));
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn multipart_parts_frame_individually() {
+        let payload = vec![0xABu8; 300];
+        let parts = radio::build_multipart_packets(&a(), &b(), radio::CMD_DOGE_TX, &payload);
+        assert!(parts.len() > 1);
+        let mut acc = parts.concat();
+        assert_eq!(drain_all(&mut acc, QUIET), parts);
+    }
+
+    #[test]
+    fn parses_firmware_version_payload() {
+        let hex = hex::encode(b"RadioDoge NV3FW12\0\0");
+        assert_eq!(parse_firmware_version(&hex).as_deref(), Some("RadioDoge NV3FW12"));
+        assert_eq!(parse_firmware_version(&hex::encode(b"\0 ")), None);
+        assert_eq!(parse_firmware_version("zz"), None);
+    }
+
+    #[test]
+    fn parses_settings_payload() {
+        let s = parse_settings_payload("0102030100").unwrap();
+        assert_eq!(s.node_address, NodeAddress::new(1, 2, 3));
+        assert!(s.gateway_mode);
+        assert!(!s.wifi_enabled);
+        // Pre-v0.3.7 firmware omits the wifi byte: default on.
+        assert!(parse_settings_payload("01020300").unwrap().wifi_enabled);
+        assert!(parse_settings_payload("010203").is_none());
+    }
+
+    #[test]
+    fn parses_battery_and_mac() {
+        assert_eq!(parse_battery_mv("0F3C"), Some(3900));
+        assert_eq!(parse_battery_mv("0F"), None);
+        assert_eq!(parse_mac("a1b2c3d4e5f6").as_deref(), Some("A1:B2:C3:D4:E5:F6"));
+        assert_eq!(parse_mac("a1b2c3"), None);
+    }
+
+    #[test]
+    fn heltec_usb_ids_are_recognised() {
+        assert!(is_likely_heltec_vid_pid(CP210X_VID, CP210X_PID));
+        assert!(is_likely_heltec_vid_pid(CH340_VID, CH340_PID));
+        assert!(!is_likely_heltec_vid_pid(0xDEAD, 0xBEEF));
     }
 }
