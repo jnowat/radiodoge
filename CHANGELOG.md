@@ -7,6 +7,19 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+
+## [Unreleased] — Fee estimation
+
+### Added
+- **Network fee estimation.** When no fee is given, signing now pays the chain backends' current rate (Core
+  `estimatesmartfee 6`, BlockCypher `medium_fee_per_kb`, Blockbook `/estimatefee/6`) per started kB — never
+  below the recommended 0.01 DOGE/kB introduced in #39, and falling back to it if no backend answers or the
+  reported rate is implausible (> 10 DOGE/kB). Applies to the desktop app, mobile send and every CLI signing
+  command (`send --wif`, `sign-tx`, `broadcast`); an explicit `--fee` / fee box still wins.
+- Send tab: with the fee box empty, shows the fee the send will pay (rate and estimated size).
+- CLI: `radiodoge-cli fee [--from D… --amount N]` prints the rate and the fee a send would pay.
+- Core: `backend::fee_rate_from` / `fetch_fee_rate`, `wallet::network_fee_rate`, `estimate_fee`,
+  `estimate_fee_for`, `fee_for_size`, `p2pkh_tx_size`, `build_signed_transaction_at_rate`; Tauri `estimate_fee`.
 ## [Unreleased] — Windows app overhaul
 
 ### Changed — GUI layout and navigation

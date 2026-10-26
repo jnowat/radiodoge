@@ -8,7 +8,7 @@
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
-  import type { ParsedPayment } from '$lib/types';
+  import type { FeeEstimate, ParsedPayment } from '$lib/types';
   import DogeSpinner from './DogeSpinner.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   interface Props {
@@ -19,7 +19,7 @@
   let toAddress = $state('');
   let amountDoge = $state('');
   let memo = $state('');
-  let feeDoge = $state('');  // empty = recommended (0.01 DOGE per started kB)
+  let feeDoge = $state('');  // empty = network-estimated rate (min 0.01 DOGE per started kB)
   let isSending = $state(false);
   let reviewing = $state(false);
   let success = $state<string | null>(null);
@@ -86,6 +86,34 @@
   });
 
   /** True only when ALL conditions are met — including a loaded wallet. */
+  // ── Fee estimation ──────────────────────────────────────────────────────
+  // Show what an empty fee box will pay: the backends' current rate, floored
+  // at 0.01 DOGE per started kB (debounced; display only).
+  let feeEstimate = $state<FeeEstimate | null>(null);
+  let feeEstimating = $state(false);
+  let feeError = $state<string | null>(null);
+
+  $effect(() => {
+    const address = wallet.address;
+    const amount = parseFloat(amountDoge);
+    feeEstimate = null;
+    feeError = null;
+    if (!wallet.isGenerated || !address || !(amount > 0)) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      feeEstimating = true;
+      try {
+        const est = await invoke<FeeEstimate>('estimate_fee', { fromAddress: address, amountDoge: amount });
+        if (!cancelled) feeEstimate = est;
+      } catch (e) {
+        if (!cancelled) feeError = String(e);
+      } finally {
+        if (!cancelled) feeEstimating = false;
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+  });
+
   const canSend = $derived(() =>
     connection.isConnected &&
     wallet.isGenerated &&
@@ -402,11 +430,23 @@
           type="number"
           min="0"
           step="0.01"
-          placeholder="0.01 / kB (recommended)"
+          placeholder="auto (network rate)"
           class="input-doge"
           style="max-width: 190px; font-family: var(--font-mono); text-align: right;"
         />
       </div>
+      {#if !feeDoge.trim()}
+        <p style="margin: 4px 0 0; font-size: 0.72rem; color: var(--doge-muted); text-align: right;">
+          {#if feeEstimating}
+            Estimating network fee…
+          {:else if feeEstimate}
+            Will pay ≈ <span style="font-family: var(--font-mono); color: var(--doge-text);">{feeEstimate.feeDoge.toFixed(8)} DOGE</span>
+            ({(feeEstimate.rateKoinusPerKb / 1e8).toFixed(4)} DOGE/kB, ~{feeEstimate.sizeBytes} B)
+          {:else if feeError}
+            <span title={feeError}>Network estimate unavailable — 0.01 DOGE per kB will be used.</span>
+          {/if}
+        </p>
+      {/if}
       {#if !isValidFee()}
         <p style="margin: 4px 0 0; font-size: 0.75rem; color: var(--doge-red);">⚠️ Fee must be 0 or more DOGE</p>
       {/if}

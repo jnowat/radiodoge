@@ -45,7 +45,7 @@ export interface TransactionRequest {
   amountDoge: number;
   memo?: string;
   fromPrivateKeyWif?: string;
-  /** Network fee in DOGE; omit for the recommended 0.01 DOGE per started kB. */
+  /** Network fee in DOGE; omit for the network-estimated rate (min 0.01 DOGE per started kB). */
   feeDoge?: number;
 }
 
@@ -238,4 +238,12 @@ export const DOGE_PHRASES = [
 
 export function randomDogephrase(): string {
   return DOGE_PHRASES[Math.floor(Math.random() * DOGE_PHRASES.length)];
+}
+
+/** Result of the `estimate_fee` command. */
+export interface FeeEstimate {
+  feeDoge: number;
+  rateKoinusPerKb: number;
+  inputs: number;
+  sizeBytes: number;
 }

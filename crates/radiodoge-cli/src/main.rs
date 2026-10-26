@@ -93,7 +93,7 @@ enum Commands {
         #[arg(short, long)]
         wif: Option<String>,
 
-        /// Network fee in DOGE when signing with --wif (default: 0.01 DOGE per started kB)
+        /// Network fee in DOGE when signing with --wif (default: current network rate from the chain backends, never below 0.01 DOGE per started kB)
         #[arg(long)]
         fee: Option<f64>,
     },
@@ -194,7 +194,7 @@ enum Commands {
         amount: f64,
         #[arg(short, long)]
         out: String,
-        /// Fee in DOGE (default: 0.01 DOGE per started kB, Dogecoin Core's recommended rate)
+        /// Fee in DOGE (default: current network rate from the chain backends, never below 0.01 DOGE per started kB)
         #[arg(long)]
         fee: Option<f64>,
     },
@@ -274,9 +274,19 @@ enum Commands {
         #[arg(short, long)]
         amount: f64,
 
-        /// Network fee in DOGE (default: 0.01 DOGE per started kB)
+        /// Network fee in DOGE (default: current network rate from the chain backends, never below 0.01 DOGE per started kB)
         #[arg(long)]
         fee: Option<f64>,
+    },
+
+    /// Show the current network fee rate, and the fee a send would pay
+    Fee {
+        /// Sender address; with --amount, estimate the fee for that send
+        #[arg(long)]
+        from: Option<String>,
+        /// Amount in DOGE (requires --from)
+        #[arg(short, long, requires = "from")]
+        amount: Option<f64>,
     },
 }
 
@@ -370,7 +380,24 @@ async fn main() -> Result<()> {
         Commands::Balance { address } => cmd_balance(&address).await,
         Commands::VerifyTx { txid } => cmd_verify_tx(&txid).await,
         Commands::Broadcast { wif, to_address, amount, fee } => cmd_broadcast(&wif, &to_address, amount, fee).await,
+        Commands::Fee { from, amount } => cmd_fee(from.as_deref(), amount).await,
     }
+}
+
+async fn cmd_fee(from: Option<&str>, amount: Option<f64>) -> Result<()> {
+    let rate = wallet::network_fee_rate().await;
+    println!("Network fee rate: {:.8} DOGE per started kB", rate as f64 / 1e8);
+    if let (Some(addr), Some(amt)) = (from, amount) {
+        if !wallet::is_valid_address(addr) {
+            anyhow::bail!("Invalid Dogecoin address: {}", addr);
+        }
+        let est = wallet::estimate_fee(addr, amt).await?;
+        println!(
+            "Sending {:.8} DOGE from {}: ~{} B, {} input(s), fee {:.8} DOGE",
+            amt, addr, est.size_bytes, est.inputs, est.fee_doge
+        );
+    }
+    Ok(())
 }
 
 // ─── Command Implementations ─────────────────────────────────────────────────
