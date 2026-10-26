@@ -15,6 +15,7 @@
   --doge-card-hover: #1E1E1E;
   --doge-border:  #2A2A2A;
   --doge-border-active: #3A3A3A;
+  --doge-nav:     #0D0D0D;
 
   /* Accent / status */
   --doge-neon:    #00FF88;
@@ -40,6 +41,7 @@
   --doge-card-hover: #F0F0F0;
   --doge-border:     #DDDDDD;
   --doge-border-active: #BBBBBB;
+  --doge-nav:        #FAFAF7;
   --doge-text:       #1A1A1A;
   --doge-muted:      #666666;
   --doge-subtle:     #AAAAAA;

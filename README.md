@@ -255,15 +255,23 @@ BIN=./target/release/radiodoge-cli
 | `radiodoge-cli wallet import-wif <WIF>` | Import a wallet from a WIF key (starts with `Q`) |
 | `radiodoge-cli wallet validate <ADDRESS>` | Check whether an address is a valid Dogecoin address |
 | `radiodoge-cli ping -p <PORT>` | Ping the Heltec and report round-trip time |
-| `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub. Payloads over 192 bytes are split into multipart frames on firmware v0.4.2+; on older firmware the send is refused — [see the size gate](docs/PROTOCOL.md#host--board-multipart) |
+| `radiodoge-cli send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>] [--fee <DOGE>]` | Send over LoRa. With `-w`, signs a real P2PKH tx first; without it, sends a gateway-signed stub. Payloads over 192 bytes are split into multipart frames on firmware v0.4.2+; on older firmware the send is refused — [see the size gate](docs/PROTOCOL.md#host--board-multipart) |
 | `radiodoge-cli receive -p <PORT> [-T <SECS>]` | Listen for incoming packets (`-T 0` = forever; default 30 s) |
 | `radiodoge-cli connect <PORT>` | Interactive REPL (`port` is positional, no `-p`) |
 | `radiodoge-cli balance -a <ADDRESS>` | Query a confirmed balance via your Core node, falling back to BlockCypher ([backends](docs/BACKENDS.md)) |
-| `radiodoge-cli broadcast -w <WIF> -t <ADDR> -a <DOGE>` | Sign **and** broadcast straight to the network over the internet |
+| `radiodoge-cli broadcast -w <WIF> -t <ADDR> -a <DOGE> [--fee <DOGE>]` | Sign **and** broadcast straight to the network over the internet |
+| `radiodoge-cli set-address -p <PORT> <a.b.c>` | Set the board's LoRa node address (e.g. `10.0.2`) |
+| `radiodoge-cli lora-ping -p <PORT> -t <a.b.c>` | Ping another board over the air and wait for its ACK |
+| `radiodoge-cli message -p <PORT> -t <a.b.c> "<TEXT>" [-T <SECS>]` | Send a text message over LoRa (long text is split into multipart frames); `-T` listens for replies |
+| `radiodoge-cli lora-balance -p <PORT> -a <ADDR> [-g <a.b.c>]` | Ask a LoRa gateway for a balance (broadcast to any gateway by default) |
+| `radiodoge-cli sign-tx -t <ADDR> -a <DOGE> -o <FILE> [--fee <DOGE>]` | Sign a transaction to a hex file **without** broadcasting (key from `RADIODOGE_WIF` or `RADIODOGE_MNEMONIC_FILE`) |
+| `radiodoge-cli send-tx-hex -p <PORT> -f <FILE> [-g <a.b.c>]` | Radio a pre-signed hex transaction to a gateway and wait for its `TX_ACK` |
 | `radiodoge-cli daemon -p <PORT>` | Run as a headless gateway (replaces `serdog`) |
 
-Add `--backends`, `--rpc-url`, `--rpc-user`, `--rpc-cookie` to choose where chain data comes from (see [docs/BACKENDS.md](docs/BACKENDS.md)). Add `-v`/`--verbose` to any command for debug logging (or set `RUST_LOG=debug`). A fixed network fee of
-**1 DOGE** is added on top of the amount for `send --wif` and `broadcast`, so the total debit is `amount + 1`.
+Add `--backends`, `--rpc-url`, `--rpc-user`, `--rpc-cookie` to choose where chain data comes from (see [docs/BACKENDS.md](docs/BACKENDS.md)). Add `-v`/`--verbose` to any command for debug logging (or set `RUST_LOG=debug`). The network fee for
+`send --wif`, `broadcast` and `sign-tx` defaults to **0.01 DOGE per started kB** (minimum 0.01 DOGE — a typical
+one-input transaction is ~225 bytes, so 0.01 DOGE), Dogecoin Core's recommended rate and well above its 0.001 DOGE/kB
+minimum relay fee. Override it with `--fee <DOGE>`. The fee is added on top of the amount.
 
 ```bash
 # Examples

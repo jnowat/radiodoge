@@ -8,8 +8,9 @@
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
-  import type { ParsedPayment } from '$lib/types';
+  import type { FeeEstimate, ParsedPayment } from '$lib/types';
   import DogeSpinner from './DogeSpinner.svelte';
+  import ConfirmDialog from './ConfirmDialog.svelte';
   interface Props {
     onTriggerConfetti: () => void;
   }
@@ -18,7 +19,9 @@
   let toAddress = $state('');
   let amountDoge = $state('');
   let memo = $state('');
+  let feeDoge = $state('');  // empty = network-estimated rate (min 0.01 DOGE per started kB)
   let isSending = $state(false);
+  let reviewing = $state(false);
   let success = $state<string | null>(null);
   let error = $state<string | null>(null);
 
@@ -75,14 +78,69 @@
     return !isNaN(n) && n > 0;
   });
 
+  /** Empty fee means "recommended"; otherwise a non-negative number. */
+  const isValidFee = $derived(() => {
+    if (!feeDoge.trim()) return true;
+    const n = parseFloat(feeDoge);
+    return !isNaN(n) && n >= 0;
+  });
+
   /** True only when ALL conditions are met — including a loaded wallet. */
+  // ── Fee estimation ──────────────────────────────────────────────────────
+  // Show what an empty fee box will pay: the backends' current rate, floored
+  // at 0.01 DOGE per started kB (debounced; display only).
+  let feeEstimate = $state<FeeEstimate | null>(null);
+  let feeEstimating = $state(false);
+  let feeError = $state<string | null>(null);
+
+  $effect(() => {
+    const address = wallet.address;
+    const amount = parseFloat(amountDoge);
+    feeEstimate = null;
+    feeError = null;
+    if (!wallet.isGenerated || !address || !(amount > 0)) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      feeEstimating = true;
+      try {
+        const est = await invoke<FeeEstimate>('estimate_fee', { fromAddress: address, amountDoge: amount });
+        if (!cancelled) feeEstimate = est;
+      } catch (e) {
+        if (!cancelled) feeError = String(e);
+      } finally {
+        if (!cancelled) feeEstimating = false;
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+  });
+
   const canSend = $derived(() =>
     connection.isConnected &&
     wallet.isGenerated &&
     isValidAddress() &&
     isValidAmount() &&
+    isValidFee() &&
     !isSending
   );
+
+  /** Fees above this look like a typo (the recommended fee is ~0.01 DOGE). */
+  const HIGH_FEE_DOGE = 1;
+
+  function shortAddr(a: string) {
+    return a.length > 16 ? `${a.slice(0, 8)}…${a.slice(-6)}` : a;
+  }
+
+  /** Step 1: open the review dialog. Nothing is signed until the user confirms. */
+  function reviewTransaction() {
+    if (!canSend()) return;
+    error = null;
+    reviewing = true;
+  }
+
+  async function confirmSend() {
+    reviewing = false;
+    await sendTransaction();
+  }
 
   async function sendTransaction() {
     // Cancel any pending form-clear timer so a new transaction doesn't wipe
@@ -116,6 +174,7 @@
           amountDoge: parseFloat(amountDoge),
           memo: memo.trim() || undefined,
           fromPrivateKeyWif: wallet.privateKeyWif || undefined,
+          feeDoge: feeDoge.trim() ? parseFloat(feeDoge) : undefined,
         }
       });
 
@@ -364,14 +423,38 @@
         font-size: 0.78rem;
         color: var(--doge-muted);
       ">
-        <span>Network fee</span>
-        <span style="font-family: var(--font-mono); color: var(--doge-text);">1.00000000 DOGE (fixed)</span>
+        <label for="send-fee">Network fee (DOGE)</label>
+        <input
+          id="send-fee"
+          bind:value={feeDoge}
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="auto (network rate)"
+          class="input-doge"
+          style="max-width: 190px; font-family: var(--font-mono); text-align: right;"
+        />
       </div>
+      {#if !feeDoge.trim()}
+        <p style="margin: 4px 0 0; font-size: 0.72rem; color: var(--doge-muted); text-align: right;">
+          {#if feeEstimating}
+            Estimating network fee…
+          {:else if feeEstimate}
+            Will pay ≈ <span style="font-family: var(--font-mono); color: var(--doge-text);">{feeEstimate.feeDoge.toFixed(8)} DOGE</span>
+            ({(feeEstimate.rateKoinusPerKb / 1e8).toFixed(4)} DOGE/kB, ~{feeEstimate.sizeBytes} B)
+          {:else if feeError}
+            <span title={feeError}>Network estimate unavailable — 0.01 DOGE per kB will be used.</span>
+          {/if}
+        </p>
+      {/if}
+      {#if !isValidFee()}
+        <p style="margin: 4px 0 0; font-size: 0.75rem; color: var(--doge-red);">⚠️ Fee must be 0 or more DOGE</p>
+      {/if}
     {/if}
 
     <!-- Send button -->
     <button
-      onclick={sendTransaction}
+      onclick={reviewTransaction}
       disabled={!canSend()}
       class="btn-doge"
       title={
@@ -465,3 +548,39 @@
     Very decentralize. Much wow.
   </div>
 </div>
+
+<ConfirmDialog
+  open={reviewing}
+  title="Review transaction"
+  confirmLabel="Sign & send over LoRa"
+  onConfirm={confirmSend}
+  onCancel={() => (reviewing = false)}
+>
+  <dl class="review">
+    <dt>From</dt>
+    <dd class="mono" title={wallet.address}>{shortAddr(wallet.address ?? '')}</dd>
+    <dt>To</dt>
+    <dd class="mono">{toAddress.trim()}</dd>
+    <dt>Amount</dt>
+    <dd><strong>{parseFloat(amountDoge || '0')} DOGE</strong></dd>
+    <dt>Network fee</dt>
+    <dd>{feeDoge.trim() ? `${parseFloat(feeDoge)} DOGE` : 'Recommended (≈0.01 DOGE)'}</dd>
+    {#if memo.trim()}
+      <dt>Memo</dt>
+      <dd>{memo.trim()}</dd>
+    {/if}
+  </dl>
+  {#if feeDoge.trim() && parseFloat(feeDoge) >= HIGH_FEE_DOGE}
+    <p class="warn" role="alert">⚠️ That fee is far above the ~0.01 DOGE a normal transaction needs. Double-check it.</p>
+  {/if}
+  <p class="note">Dogecoin transactions can't be reversed once a gateway broadcasts them.</p>
+</ConfirmDialog>
+
+<style>
+  .review { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 0.85rem; }
+  .review dt { color: var(--doge-muted); }
+  .review dd { margin: 0; overflow-wrap: anywhere; }
+  .mono { font-family: var(--font-mono); font-size: 0.8rem; }
+  .warn { margin: 12px 0 0; color: var(--doge-orange); font-size: 0.8rem; }
+  .note { margin: 12px 0 0; color: var(--doge-muted); font-size: 0.75rem; }
+</style>

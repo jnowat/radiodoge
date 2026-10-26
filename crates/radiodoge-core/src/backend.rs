@@ -416,6 +416,39 @@ pub async fn tx_status_from(b: &Backend, txid: &str) -> Result<TxStatus> {
     }
 }
 
+/// Current network fee rate in koinus per 1000 bytes, from one backend.
+///
+/// Core uses `estimatesmartfee 6`; BlockCypher reports `medium_fee_per_kb` on
+/// the chain endpoint; Blockbook answers `/estimatefee/6` in DOGE/kB.
+pub async fn fee_rate_from(b: &Backend) -> Result<u64> {
+    let doge_per_kb = |v: &serde_json::Value| -> Option<u64> {
+        let f = match v {
+            serde_json::Value::String(s) => s.parse::<f64>().ok()?,
+            other => other.as_f64()?,
+        };
+        (f.is_finite() && f > 0.0).then(|| (f * 1e8).round() as u64)
+    };
+    match b {
+        Backend::Core { url, auth } => {
+            let v = rpc(url, auth, "estimatesmartfee", serde_json::json!([6])).await?;
+            v.get("feerate").and_then(doge_per_kb)
+                .ok_or_else(|| anyhow!("Core has no fee estimate yet (not enough recent blocks)"))
+        }
+        Backend::BlockCypher { base, token } => {
+            let url = bc_url(base, "", token, "");
+            let v = http_json(client()?.get(&url), "Fee estimate").await?;
+            v.get("medium_fee_per_kb").and_then(|x| x.as_u64()).filter(|r| *r > 0)
+                .ok_or_else(|| anyhow!("BlockCypher response has no medium_fee_per_kb"))
+        }
+        Backend::Blockbook { base } => {
+            let url = format!("{}/estimatefee/6", base.trim_end_matches('/'));
+            let v = http_json(client()?.get(&url), "Fee estimate").await?;
+            v.get("result").and_then(doge_per_kb)
+                .ok_or_else(|| anyhow!("Blockbook returned no usable fee estimate"))
+        }
+    }
+}
+
 // ─── Fallback over the configured list ───────────────────────────────────────
 
 /// Run `op` against each backend in order and return the first success.
@@ -460,6 +493,11 @@ pub async fn broadcast(raw_hex: &str) -> Result<String> {
 pub async fn fetch_tx_status(txid: &str) -> Result<TxStatus> {
     let bs = configured_backends()?;
     with_fallback(&bs, "Transaction lookup", |b| async move { tx_status_from(&b, txid).await }).await
+}
+
+pub async fn fetch_fee_rate() -> Result<u64> {
+    let bs = configured_backends()?;
+    with_fallback(&bs, "Fee estimate", |b| async move { fee_rate_from(&b).await }).await
 }
 
 #[cfg(test)]
@@ -553,6 +591,26 @@ mod tests {
         assert!(reqs[0].starts_with("GET /addrs/D/balance?token=tok "));
         assert!(reqs[1].contains("unspentOnly=true"));
         assert!(reqs[2].starts_with("POST /txs/push?token=tok") && reqs[2].contains(r#"{"tx":"0100"}"#));
+    }
+
+    #[tokio::test]
+    async fn fee_rate_all_backends() {
+        let (url, h) = mock(vec![
+            (200, r#"{"name":"DOGE.main","medium_fee_per_kb":1500000}"#),
+            (200, r#"{"result":"0.02"}"#),
+            (200, r#"{"result":{"feerate":0.03,"blocks":6},"error":null,"id":"radiodoge"}"#),
+            (200, r#"{"result":{"errors":["Insufficient data"],"blocks":0},"error":null,"id":"radiodoge"}"#),
+        ]).await;
+        let bc = Backend::BlockCypher { base: url.clone(), token: None };
+        assert_eq!(fee_rate_from(&bc).await.unwrap(), 1_500_000);
+        let bb = Backend::Blockbook { base: url.clone() };
+        assert_eq!(fee_rate_from(&bb).await.unwrap(), 2_000_000);
+        let core = Backend::Core { url: url.clone(), auth: RpcAuth::None };
+        assert_eq!(fee_rate_from(&core).await.unwrap(), 3_000_000);
+        assert!(fee_rate_from(&core).await.is_err());
+        let reqs = h.await.unwrap();
+        assert!(reqs[1].starts_with("GET /estimatefee/6 "));
+        assert!(reqs[2].contains("estimatesmartfee"));
     }
 
     #[tokio::test]
