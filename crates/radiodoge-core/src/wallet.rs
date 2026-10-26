@@ -190,8 +190,73 @@ pub fn encode_transaction_payload(
 
 // ─── Real P2PKH transaction signing + broadcast ───────────────────────────────
 
-/// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
-pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
+/// Minimum transaction fee: 0.01 DOGE, the recommended fee for a transaction
+/// of up to 1 kB. Larger transactions pay [`recommended_fee_doge`] for their
+/// size; callers that sign should use [`build_signed_transaction_with_fee`].
+pub const DEFAULT_TX_FEE_DOGE: f64 = 0.01;
+
+/// Dogecoin Core's recommended relay/wallet fee rate: 0.01 DOGE per kB
+/// (1.14.4+ policy; the hard minimum relay fee is 0.001 DOGE/kB).
+pub const RECOMMENDED_FEE_PER_KB_KOINUS: u64 = 1_000_000;
+
+/// Fee for a transaction of `size_bytes` at [`RECOMMENDED_FEE_PER_KB_KOINUS`],
+/// charged per started kilobyte (so never less than 0.01 DOGE), in DOGE.
+pub fn recommended_fee_doge(size_bytes: usize) -> f64 {
+    let kb = size_bytes.div_ceil(1000).max(1) as u64;
+    (kb * RECOMMENDED_FEE_PER_KB_KOINUS) as f64 / 1e8
+}
+
+/// Sign a transaction paying the current network fee rate (see
+/// [`network_fee_rate`]; never below the recommended 0.01 DOGE per started kB)
+/// for its actual size.
+///
+/// Signs once at the one-kilobyte fee, then re-signs with a larger fee if the
+/// result is bigger than that fee covers (more inputs → more bytes). Returns
+/// the raw transaction and the fee paid, in DOGE.
+pub async fn build_signed_transaction_auto_fee(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+) -> Result<(Vec<u8>, f64)> {
+    let rate = network_fee_rate().await;
+    build_signed_transaction_at_rate(from_wif, to_address, amount_doge, rate).await
+}
+
+/// [`build_signed_transaction_auto_fee`] at an explicit rate (koinus per
+/// started kB, floored at the recommended rate).
+pub async fn build_signed_transaction_at_rate(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+    rate_koinus_per_kb: u64,
+) -> Result<(Vec<u8>, f64)> {
+    let fee_at = |size: usize| fee_for_size(rate_koinus_per_kb, size) as f64 / 1e8;
+    let mut fee = fee_at(0);
+    for _ in 0..4 {
+        let raw = build_signed_transaction(from_wif, to_address, amount_doge, fee).await?;
+        let needed = fee_at(raw.len());
+        if needed <= fee + 1e-9 {
+            return Ok((raw, fee));
+        }
+        fee = needed;
+    }
+    anyhow::bail!("fee did not converge for {} DOGE", amount_doge)
+}
+
+/// Sign with an explicit fee (`Some`, in DOGE) or the size-based recommended
+/// fee (`None`, see [`build_signed_transaction_auto_fee`]). Returns the raw
+/// transaction and the fee it pays, in DOGE.
+pub async fn build_signed_transaction_with_fee(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+    fee_doge: Option<f64>,
+) -> Result<(Vec<u8>, f64)> {
+    match fee_doge {
+        Some(f) => Ok((build_signed_transaction(from_wif, to_address, amount_doge, f).await?, f)),
+        None => build_signed_transaction_auto_fee(from_wif, to_address, amount_doge).await,
+    }
+}
 
 /// Blocks a coinbase output must age before it can be spent.
 ///
@@ -295,7 +360,8 @@ fn sighash_preimage(
 /// (largest first), builds inputs and outputs (including change), signs each
 /// input with SIGHASH_ALL.
 ///
-/// Pass `wallet::DEFAULT_TX_FEE_DOGE` (1.0) for the fee.
+/// `fee_doge` is paid exactly as given; use [`build_signed_transaction_with_fee`]
+/// with `None` to pay the size-based recommended fee instead.
 /// To broadcast the result call `wallet::broadcast_raw_tx(&hex::encode(&tx))`.
 pub async fn build_signed_transaction(
     from_wif: &str,
@@ -451,9 +517,8 @@ pub async fn build_signed_transaction(
 
 // ─── Fee estimation ──────────────────────────────────────────────────────────
 
-/// Floor for estimated fees: 0.01 DOGE per kB, Dogecoin Core's recommended
-/// minimum relay/wallet rate. Estimates below this may not propagate.
-pub const MIN_FEE_RATE_KOINUS_PER_KB: u64 = 1_000_000;
+/// Floor for estimated fee rates (same as [`RECOMMENDED_FEE_PER_KB_KOINUS`]).
+pub const MIN_FEE_RATE_KOINUS_PER_KB: u64 = RECOMMENDED_FEE_PER_KB_KOINUS;
 
 /// Ceiling for an *automatic* fee. A backend reporting something absurd must
 /// never silently cost the user more than this; above it the app falls back
@@ -466,11 +531,30 @@ pub fn p2pkh_tx_size(inputs: usize, outputs: usize) -> usize {
     10 + 148 * inputs + 34 * outputs
 }
 
-/// Fee in koinus for `size_bytes` at `rate` koinus/kB, rounded up, never
-/// below the minimum relay rate.
+/// Fee in koinus for `size_bytes` at `rate` koinus per *started* kB (the same
+/// rounding as [`recommended_fee_doge`]), never below the recommended rate.
 pub fn fee_for_size(rate_koinus_per_kb: u64, size_bytes: usize) -> u64 {
     let rate = rate_koinus_per_kb.max(MIN_FEE_RATE_KOINUS_PER_KB);
-    (rate as u128 * size_bytes as u128).div_ceil(1000) as u64
+    let kb = size_bytes.div_ceil(1000).max(1) as u64;
+    kb.saturating_mul(rate)
+}
+
+/// Current network fee rate (koinus/kB) from the configured backends, floored
+/// at the recommended rate. Falls back to the recommended rate if no backend
+/// answers, and refuses rates that would push a 1 kB tx past
+/// [`MAX_AUTO_FEE_DOGE`].
+pub async fn network_fee_rate() -> u64 {
+    match crate::backend::fetch_fee_rate().await {
+        Ok(r) if (r as f64 / 1e8) <= MAX_AUTO_FEE_DOGE => r.max(MIN_FEE_RATE_KOINUS_PER_KB),
+        Ok(r) => {
+            log::warn!("Ignoring implausible network fee rate {} koinus/kB", r);
+            MIN_FEE_RATE_KOINUS_PER_KB
+        }
+        Err(e) => {
+            log::info!("Fee estimate unavailable ({}); using the recommended rate", e);
+            MIN_FEE_RATE_KOINUS_PER_KB
+        }
+    }
 }
 
 /// Result of [`estimate_fee`].
@@ -516,7 +600,7 @@ pub async fn estimate_fee(from_address: &str, amount_doge: f64) -> Result<FeeEst
     if !amount_doge.is_finite() || amount_doge <= 0.0 {
         anyhow::bail!("Invalid send amount: {}", amount_doge);
     }
-    let rate = crate::backend::fetch_fee_rate().await?;
+    let rate = crate::backend::fetch_fee_rate().await?.max(MIN_FEE_RATE_KOINUS_PER_KB);
     let values: Vec<u64> = crate::backend::fetch_utxos(from_address)
         .await?
         .into_iter()
@@ -1007,14 +1091,16 @@ mod tests {
     fn fee_sizing_and_floor() {
         use super::*;
         assert_eq!(p2pkh_tx_size(1, 2), 226);
-        // Below-floor rate is raised to 0.01 DOGE/kB: 226 B -> 226_000 koinus.
-        assert_eq!(fee_for_size(10, 226), 226_000);
-        // Rounds up.
-        assert_eq!(fee_for_size(1_000_001, 1), 1_001);
+        // Below-floor rate is raised to 0.01 DOGE per started kB.
+        assert_eq!(fee_for_size(10, 226), 1_000_000);
+        assert_eq!(fee_for_size(0, 0), 1_000_000);
+        // Rounds up to whole kB, matching recommended_fee_doge.
+        assert_eq!(fee_for_size(2_000_000, 1001), 4_000_000);
+        assert_eq!(fee_for_size(MIN_FEE_RATE_KOINUS_PER_KB, 1001) as f64 / 1e8, recommended_fee_doge(1001));
         let e = estimate_fee_for(vec![5_000_000, 200_000_000], 100_000_000, 2_000_000).unwrap();
         assert_eq!(e.inputs, 1);
         assert_eq!(e.size_bytes, 226);
-        assert!((e.fee_doge - 0.00452).abs() < 1e-12);
+        assert!((e.fee_doge - 0.02).abs() < 1e-12);
         // Needs both coins.
         let e = estimate_fee_for(vec![60_000_000, 60_000_000], 100_000_000, 0).unwrap();
         assert_eq!(e.inputs, 2);
@@ -1267,5 +1353,17 @@ mod tests {
             "the description must say what was not checked: {}",
             desc
         );
+    }
+}
+
+#[cfg(test)]
+mod fee_tests {
+    use super::recommended_fee_doge;
+    #[test]
+    fn per_started_kb_with_minimum() {
+        assert_eq!(recommended_fee_doge(0), 0.01);
+        assert_eq!(recommended_fee_doge(226), 0.01);
+        assert_eq!(recommended_fee_doge(1000), 0.01);
+        assert_eq!(recommended_fee_doge(1001), 0.02);
     }
 }

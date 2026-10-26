@@ -599,18 +599,18 @@ async fn get_balance(address: String) -> Result<f64, String> {
     Ok(koinus as f64 / 1e8)
 }
 
-/// Validate a fee chosen in the UI; `None` means the fixed default.
-fn resolve_fee(fee_doge: Option<f64>) -> Result<f64, String> {
+/// Validate a fee typed in the UI. `None` = let core pick the network rate.
+fn resolve_fee(fee_doge: Option<f64>) -> Result<Option<f64>, String> {
     match fee_doge {
-        None => Ok(wallet::DEFAULT_TX_FEE_DOGE),
-        Some(f) if f.is_finite() && f > 0.0 && f <= wallet::MAX_AUTO_FEE_DOGE => Ok(f),
-        Some(f) => Err(format!("Invalid fee {} DOGE (must be > 0 and <= {} DOGE)", f, wallet::MAX_AUTO_FEE_DOGE)),
+        None => Ok(None),
+        Some(f) if f.is_finite() && (0.0..=wallet::MAX_AUTO_FEE_DOGE).contains(&f) => Ok(Some(f)),
+        Some(f) => Err(format!("Invalid fee {} DOGE (must be 0 to {} DOGE)", f, wallet::MAX_AUTO_FEE_DOGE)),
     }
 }
 
 /// Estimate the network fee for sending `amount_doge` from `from_address`
-/// using the configured backends' current fee rate. The UI falls back to the
-/// fixed 1 DOGE fee when this fails.
+/// using the configured backends' current fee rate (display only; signing
+/// with no explicit fee recomputes it).
 #[tauri::command]
 async fn estimate_fee(from_address: String, amount_doge: f64) -> Result<wallet::FeeEstimate, String> {
     if !wallet::is_valid_address(&from_address) {
@@ -719,7 +719,7 @@ async fn send_transaction(
 
     // Build payload: real signed transaction when WIF is available, legacy stub otherwise.
     let payload = if let Some(ref wif) = tx.from_private_key_wif {
-        wallet::build_signed_transaction(
+        wallet::build_signed_transaction_with_fee(
             wif,
             &tx.to_address,
             tx.amount_doge,
@@ -727,6 +727,7 @@ async fn send_transaction(
         )
         .await
         .map_err(|e| format!("Transaction signing failed: {}", e))?
+        .0
     } else {
         wallet::encode_transaction_payload(
             &tx.to_address,
@@ -1913,7 +1914,7 @@ async fn mobile_build_tx_packets(
     let dst = NodeAddress::broadcast();
 
     let payload = if let Some(ref wif) = tx.from_private_key_wif {
-        wallet::build_signed_transaction(
+        wallet::build_signed_transaction_with_fee(
             wif,
             &tx.to_address,
             tx.amount_doge,
@@ -1921,6 +1922,7 @@ async fn mobile_build_tx_packets(
         )
         .await
         .map_err(|e| format!("Transaction signing failed: {}", e))?
+        .0
     } else {
         wallet::encode_transaction_payload(
             &tx.to_address,

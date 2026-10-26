@@ -18,6 +18,7 @@
   let toAddress = $state('');
   let amountDoge = $state('');
   let memo = $state('');
+  let feeDoge = $state('');  // empty = network-estimated rate (min 0.01 DOGE per started kB)
   let isSending = $state(false);
   let success = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -75,18 +76,20 @@
     return !isNaN(n) && n > 0;
   });
 
+  /** Empty fee means "recommended"; otherwise a non-negative number. */
+  const isValidFee = $derived(() => {
+    if (!feeDoge.trim()) return true;
+    const n = parseFloat(feeDoge);
+    return !isNaN(n) && n >= 0;
+  });
+
   /** True only when ALL conditions are met — including a loaded wallet. */
   // ── Fee estimation ──────────────────────────────────────────────────────
-  // Ask the chain backends for the current fee rate whenever the amount or
-  // wallet changes (debounced). On failure keep the fixed 1 DOGE default.
-  const DEFAULT_FEE_DOGE = 1;
+  // Show what an empty fee box will pay: the backends' current rate, floored
+  // at 0.01 DOGE per started kB (debounced; display only).
   let feeEstimate = $state<FeeEstimate | null>(null);
   let feeEstimating = $state(false);
   let feeError = $state<string | null>(null);
-  let useEstimatedFee = $state(true);
-  const effectiveFee = $derived(() =>
-    useEstimatedFee && feeEstimate ? feeEstimate.feeDoge : DEFAULT_FEE_DOGE
-  );
 
   $effect(() => {
     const address = wallet.address;
@@ -114,6 +117,7 @@
     wallet.isGenerated &&
     isValidAddress() &&
     isValidAmount() &&
+    isValidFee() &&
     !isSending
   );
 
@@ -149,7 +153,7 @@
           amountDoge: parseFloat(amountDoge),
           memo: memo.trim() || undefined,
           fromPrivateKeyWif: wallet.privateKeyWif || undefined,
-          feeDoge: effectiveFee(),
+          feeDoge: feeDoge.trim() ? parseFloat(feeDoge) : undefined,
         }
       });
 
@@ -398,23 +402,33 @@
         font-size: 0.78rem;
         color: var(--doge-muted);
       ">
-        <span>Network fee</span>
-        <span style="display: flex; align-items: center; gap: 10px;">
-          {#if feeEstimating}
-            <span>estimating…</span>
-          {:else if feeEstimate}
-            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;" title="Uncheck to pay the fixed 1 DOGE fee instead">
-              <input type="checkbox" bind:checked={useEstimatedFee} />
-              estimated ({(feeEstimate.rateKoinusPerKb / 1e8).toFixed(4)} DOGE/kB, {feeEstimate.sizeBytes} B)
-            </label>
-          {:else if feeError}
-            <span title={feeError}>estimate unavailable</span>
-          {/if}
-          <span style="font-family: var(--font-mono); color: var(--doge-text);">
-            {effectiveFee().toFixed(8)} DOGE{useEstimatedFee && feeEstimate ? '' : ' (default)'}
-          </span>
-        </span>
+        <label for="send-fee">Network fee (DOGE)</label>
+        <input
+          id="send-fee"
+          bind:value={feeDoge}
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="auto (network rate)"
+          class="input-doge"
+          style="max-width: 190px; font-family: var(--font-mono); text-align: right;"
+        />
       </div>
+      {#if !feeDoge.trim()}
+        <p style="margin: 4px 0 0; font-size: 0.72rem; color: var(--doge-muted); text-align: right;">
+          {#if feeEstimating}
+            Estimating network fee…
+          {:else if feeEstimate}
+            Will pay ≈ <span style="font-family: var(--font-mono); color: var(--doge-text);">{feeEstimate.feeDoge.toFixed(8)} DOGE</span>
+            ({(feeEstimate.rateKoinusPerKb / 1e8).toFixed(4)} DOGE/kB, ~{feeEstimate.sizeBytes} B)
+          {:else if feeError}
+            <span title={feeError}>Network estimate unavailable — 0.01 DOGE per kB will be used.</span>
+          {/if}
+        </p>
+      {/if}
+      {#if !isValidFee()}
+        <p style="margin: 4px 0 0; font-size: 0.75rem; color: var(--doge-red);">⚠️ Fee must be 0 or more DOGE</p>
+      {/if}
     {/if}
 
     <!-- Send button -->

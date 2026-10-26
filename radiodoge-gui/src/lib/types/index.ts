@@ -45,7 +45,7 @@ export interface TransactionRequest {
   amountDoge: number;
   memo?: string;
   fromPrivateKeyWif?: string;
-  /** Network fee in DOGE; omitted = fixed 1 DOGE default. */
+  /** Network fee in DOGE; omit for the network-estimated rate (min 0.01 DOGE per started kB). */
   feeDoge?: number;
 }
 

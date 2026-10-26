@@ -132,7 +132,7 @@ pub struct TransactionRequest {
     pub memo: Option<String>,
     /// Sender's WIF private key (from generated wallet)
     pub from_private_key_wif: Option<String>,
-    /// Network fee in DOGE. `None` uses `wallet::DEFAULT_TX_FEE_DOGE`.
+    /// Network fee in DOGE. `None` pays the network-estimated rate (never below 0.01 DOGE per started kB).
     #[serde(default)]
     pub fee_doge: Option<f64>,
 }
