@@ -136,7 +136,7 @@ Rock-solid against real hardware, and now on your phone.
 Bridge RadioDoge with the existing Meshtastic community.
 
 - 🔜 **Meshtastic packet encoding** — wrap RadioDoge payloads in Meshtastic protobuf so standard nodes can relay them
-- 🔜 **Node discovery** — scan for nodes on the same channel and render a network map
+- ✅ **Node discovery** — `CMD_DISCOVER` (0x2B) broadcasts a PING that discovery-capable firmware ACKs after a random jitter; Mesh tab *Scan network* button and radial network map, `radiodoge-cli discover`. *ACK notifications carry no RSSI yet.*
 - 🔜 **Bridge mode** — `radiodoge-cli daemon` transparently bridges RadioDoge ↔ Meshtastic
 - 🔜 **Multi-channel scanning** — hop across frequencies/SFs to reach different Meshtastic presets
 - 🔜 **GPS location embedding** — sender coordinates in packets for disaster-response positioning

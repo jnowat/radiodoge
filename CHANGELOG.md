@@ -7,6 +7,18 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+
+## [Unreleased] — Node discovery
+
+### Added
+- **Node discovery.** New host→board command `CMD_DISCOVER` (0x2B): the board transmits a PING to the broadcast
+  address. Firmware now answers a broadcast PING with an ACK after a random 0–3 s jitter (so responders do not
+  collide); each ACK reaches the host as `RECEIVED_ACK` and lands in the neighbor table.
+- Core: `radio::build_discover`, `SerialManager::discover_nodes(listen)`, `serial::heard_since`; Tauri `discover_nodes`.
+- Mesh tab: **📡 Scan network** button and a radial **network map** (this node in the centre, distance by RSSI,
+  nodes found by the last scan ringed). Unknown RSSI (ACK notifications) shows as "n/a" on the outer ring.
+- CLI: `radiodoge-cli discover -p PORT [--listen SECS]`.
+
 ## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
 > Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.

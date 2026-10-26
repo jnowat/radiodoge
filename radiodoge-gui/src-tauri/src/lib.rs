@@ -1233,6 +1233,14 @@ async fn set_wifi_enabled(
     Ok(confirmed)
 }
 
+/// Node discovery: broadcast a PING and return the nodes that answered within
+/// `listen_ms` (clamped to 1–30 s; default 6 s), strongest first.
+#[tauri::command]
+async fn discover_nodes(state: State<'_, AppState>, listen_ms: Option<u64>) -> Result<Vec<NeighborEntry>, String> {
+    let ms = listen_ms.unwrap_or(6000).clamp(1000, 30_000);
+    state.serial.discover_nodes(std::time::Duration::from_millis(ms)).await.map_err(|e| e.to_string())
+}
+
 /// v0.3.7 — Return recently heard mesh neighbors.
 #[tauri::command]
 async fn get_neighbors(state: State<'_, AppState>) -> Result<Vec<NeighborEntry>, String> {
@@ -2126,6 +2134,7 @@ pub fn run() {
             set_connection_type,
             set_wifi_enabled,
             get_neighbors,
+            discover_nodes,
             get_addr_conflict,
             clear_addr_conflict,
             query_battery,

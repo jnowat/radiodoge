@@ -116,6 +116,18 @@ enum Commands {
         port: String,
     },
 
+    /// Discover nodes on the current channel (broadcast PING, list who ACKs)
+    ///
+    /// Example: radiodoge-cli discover -p COM3 --listen 8
+    Discover {
+        /// Serial port
+        #[arg(short, long)]
+        port: String,
+        /// Seconds to listen for answers (1-30)
+        #[arg(long, default_value_t = 6)]
+        listen: u64,
+    },
+
     /// Interactive REPL — replaces RadioDogeSharp's menu-driven interface
     ///
     /// Type 'help' at the prompt for available commands.
@@ -263,6 +275,7 @@ async fn main() -> Result<()> {
         }
         Commands::Receive { port, timeout } => cmd_receive(&port, timeout).await,
         Commands::Ping { port } => cmd_ping(&port).await,
+        Commands::Discover { port, listen } => cmd_discover(&port, listen).await,
         Commands::Connect { port } => cmd_connect(&port).await,
         Commands::Daemon { port } => cmd_daemon(&port).await,
         Commands::Balance { address } => cmd_balance(&address).await,
@@ -455,6 +468,31 @@ async fn cmd_receive(port: &str, timeout_secs: u64) -> Result<()> {
     }
 
     println!("\n🐕 Done receiving. Disconnecting...");
+    manager.disconnect().await.ok();
+    Ok(())
+}
+
+/// Broadcast a discovery PING and list the nodes that answer.
+async fn cmd_discover(port: &str, listen: u64) -> Result<()> {
+    let listen = listen.clamp(1, 30);
+    println!("🐕 Connecting to {} ...", port);
+    let manager = Arc::new(SerialManager::new());
+    let on_packet = Arc::new(|_: IncomingPacket| {});
+    manager.connect(port, on_packet).await
+        .with_context(|| format!("Failed to open serial port {}", port))?;
+    let me = manager.get_node_address().await;
+    println!("📡 Discovering from {} (listening {} s)...", me.to_display_string(), listen);
+    let found = manager.discover_nodes(std::time::Duration::from_secs(listen)).await?;
+    if found.is_empty() {
+        println!("No nodes answered. Nodes need firmware with discovery support and the same LoRa settings.");
+    } else {
+        println!("{:<14} {:>9}", "NODE", "RSSI");
+        for n in &found {
+            let rssi = if n.rssi == 0 { "n/a".to_string() } else { format!("{} dBm", n.rssi) };
+            println!("{:<14} {:>9}", n.address.to_display_string(), rssi);
+        }
+        println!("{} node(s) found", found.len());
+    }
     manager.disconnect().await.ok();
     Ok(())
 }

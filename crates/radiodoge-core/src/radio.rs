@@ -55,6 +55,7 @@ pub const CMD_GET_MAC: u8 = 0x27;              // v0.3.8: Query board MAC addres
 pub const CMD_BLE_TOGGLE: u8 = 0x28;          // v0.3.16: Enable/disable BLE advertising (persists to NVS)
 pub const CMD_RECEIVED_ACK: u8 = 0x29;        // v0.4.0: Board-initiated: over-the-air ACK received from remote node
 pub const CMD_RECEIVED_PING: u8 = 0x2A;       // v0.4.0: Board-initiated: over-the-air Ping received from remote node
+pub const CMD_DISCOVER: u8 = 0x2B;            // Node discovery: board transmits a broadcast PING; every node in range ACKs
 
 // ─── Firmware legacy serial enum ─────────────────────────────────────────────
 //
@@ -157,6 +158,17 @@ pub fn build_get_firmware_version(src: &NodeAddress) -> Vec<u8> {
 /// Build a PING packet to check if the device is alive.
 pub fn build_ping(src: &NodeAddress, dst: &NodeAddress) -> Vec<u8> {
     build_header(CMD_PING, FLAG_STANDARD, src, dst)
+}
+
+/// Build a DISCOVER command (CMD 0x2B).
+///
+/// The board answers with an 8-byte echo and transmits a PING to the
+/// broadcast address. Firmware with discovery support ACKs a broadcast PING
+/// after a random 0–3 s jitter, and each ACK reaches the host as
+/// [`CMD_RECEIVED_ACK`] with the responder as source, which updates the
+/// neighbor table. Older firmware ignores the command.
+pub fn build_discover(src: &NodeAddress) -> Vec<u8> {
+    build_header(CMD_DISCOVER, FLAG_STANDARD, src, &NodeAddress::broadcast())
 }
 
 /// Build a text MESSAGE packet.
@@ -273,6 +285,7 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
         CMD_RECEIVED_ACK    => Some(8),  // header only; src = remote node that sent the ACK
         CMD_RECEIVED_PING   => Some(8),  // header only; src = remote node that sent the Ping
+        CMD_DISCOVER        => Some(8),  // header only (echo)
 
         // The firmware's legacy result code: `[0xFE, 1, ACK|NAK]`, three bytes,
         // not a desktop packet at all. A gateway board emits one every time it
@@ -500,6 +513,7 @@ pub fn is_known_command(byte: u8) -> bool {
             | CMD_BLE_TOGGLE
             | CMD_RECEIVED_ACK
             | CMD_RECEIVED_PING
+            | CMD_DISCOVER
             | LEGACY_HARDWARE_INFO
             | 0x62
             | 0x64
@@ -1120,6 +1134,7 @@ fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
         }
         CMD_RECEIVED_ACK  => Some("📨 ACK received".to_string()),
         CMD_RECEIVED_PING => Some("🏓 Ping received".to_string()),
+        CMD_DISCOVER      => Some("📡 Discovery ping sent".to_string()),
         _ => None,
     }
 }
@@ -1149,6 +1164,16 @@ mod tests {
 
     fn test_src() -> NodeAddress { NodeAddress::new(10, 0, 1) }
     fn test_dst() -> NodeAddress { NodeAddress::new(10, 0, 2) }
+
+    #[test]
+    fn test_build_discover() {
+        let p = build_discover(&test_src());
+        assert_eq!(p.len(), 8);
+        assert_eq!(p[0], CMD_DISCOVER);
+        assert_eq!(&p[5..8], &[0xFF, 0xFF, 0xFF]);
+        assert!(looks_like_packet_start(&p));
+        assert_eq!(frame_packet_len(CMD_DISCOVER, &p), Some(8));
+    }
 
     #[test]
     fn test_build_ping() {
@@ -1347,6 +1372,7 @@ mod tests {
             CMD_GET_FIRMWARE_VERSION, CMD_SET_LORA_PARAMS, CMD_GET_SETTINGS,
             CMD_SET_GATEWAY, CMD_WIFI_TOGGLE, CMD_ADDR_CONFLICT, CMD_GET_BATTERY,
             CMD_GET_MAC, CMD_BLE_TOGGLE, CMD_RECEIVED_ACK, CMD_RECEIVED_PING,
+            CMD_DISCOVER,
         ] {
             assert!(is_known_command(cmd), "CMD 0x{:02X} must be recognised", cmd);
         }
@@ -2030,6 +2056,7 @@ mod tests {
             (CMD_GET_SETTINGS,    13),
             (CMD_GET_BATTERY,     10),
             (CMD_GET_MAC,         14),
+            (CMD_DISCOVER,        8),
         ];
         for (cmd, expected) in fixed {
             assert_eq!(
