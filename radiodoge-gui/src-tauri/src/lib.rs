@@ -1316,6 +1316,34 @@ async fn get_neighbors(state: State<'_, AppState>) -> Result<Vec<NeighborEntry>,
     Ok(state.serial.get_neighbors().await)
 }
 
+/// v0.3.19 — Broadcast this node's GPS position to the mesh as `POS:lat,lon[,acc]`.
+///
+/// Only ever sent when the user asks. LoRa traffic is unencrypted, so the
+/// position is readable by anyone in range.
+#[tauri::command]
+async fn share_position(
+    lat: f64,
+    lon: f64,
+    accuracy_m: Option<f64>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let acc = accuracy_m
+        .filter(|a| a.is_finite() && *a >= 0.0)
+        .map(|a| a.round().min(u32::MAX as f64) as u32);
+    let pos = radiodoge_core::geo::Position::new(lat, lon, acc)
+        .ok_or_else(|| "Latitude must be −90…90 and longitude −180…180".to_string())?;
+    if !state.serial.is_connected() {
+        return Err("Connect to a board first".into());
+    }
+    let local = state.serial.get_node_address().await;
+    let text = pos.to_message();
+    let pkt = radio::build_broadcast(&local, &text);
+    emit_debug_traffic(&app, "TX", &hex::encode(&pkt), &format!("CMD_MESSAGE → broadcast {}", pos.describe()));
+    state.serial.send_raw(pkt).await.map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
 /// v0.3.7 — Whether the board has reported a duplicate node address.
 #[tauri::command]
 async fn get_addr_conflict(state: State<'_, AppState>) -> Result<bool, String> {
@@ -2206,6 +2234,7 @@ pub fn run() {
             set_connection_type,
             set_wifi_enabled,
             get_neighbors,
+            share_position,
             get_addr_conflict,
             clear_addr_conflict,
             query_battery,

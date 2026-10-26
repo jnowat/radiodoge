@@ -187,6 +187,12 @@ pub struct NeighborEntry {
     pub rssi: i16,
     /// Unix timestamp (seconds) of last heard packet
     pub last_seen: u64,
+    /// Last position this node shared (`POS:` message), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<crate::geo::Position>,
+    /// Unix seconds when `position` arrived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_at: Option<u64>,
 }
 
 /// v0.3.6 — Transaction history entry (kept in app-local JSON, last 50 entries).

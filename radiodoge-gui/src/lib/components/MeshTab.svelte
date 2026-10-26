@@ -1,7 +1,9 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { connection, setNeighbors, setAddrConflict } from '$lib/stores/connection.svelte';
-  import { nodeAddressToString } from '$lib/types';
+  import { open } from '@tauri-apps/plugin-shell';
+  import { nodeAddressToString, mapUrl, type NeighborEntry, type GeoPosition } from '$lib/types';
+  import ShareLocation from './ShareLocation.svelte';
 
   let isRefreshing = $state(false);
   let lastRefreshed = $state<number | null>(null);
@@ -10,11 +12,13 @@
     if (!connection.isConnected) return;
     isRefreshing = true;
     try {
-      const nbrs = await invoke<{ address: { region: number; community: number; node: number }; rssi: number; lastSeen: number }[]>('get_neighbors');
+      const nbrs = await invoke<NeighborEntry[]>('get_neighbors');
       setNeighbors(nbrs.map(n => ({
         address: n.address,
         rssi: n.rssi,
         lastSeen: n.lastSeen,
+        position: n.position,
+        positionAt: n.positionAt,
       })));
       lastRefreshed = Date.now();
     } catch (e) {
@@ -27,6 +31,10 @@
   async function dismissConflict() {
     await invoke('clear_addr_conflict').catch(() => {});
     setAddrConflict(false);
+  }
+
+  function fmtPos(p: GeoPosition): string {
+    return `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}${p.accuracyM != null ? ` ±${p.accuracyM} m` : ''}`;
   }
 
   function rssiQuality(rssi: number): string {
@@ -149,6 +157,7 @@
             <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Signal</th>
             <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">RSSI</th>
             <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Last Heard</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: 0.75rem; color: var(--doge-muted); font-weight: 600;">Position</th>
           </tr>
         </thead>
         <tbody>
@@ -160,6 +169,14 @@
               <td style="padding: 10px 14px; font-size: 0.8rem;">{rssiQuality(nbr.rssi)}</td>
               <td style="padding: 10px 14px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--doge-muted);">{nbr.rssi} dBm</td>
               <td style="padding: 10px 14px; font-size: 0.8rem; color: var(--doge-muted);">{relativeTime(nbr.lastSeen)}</td>
+              <td style="padding: 10px 14px; font-size: 0.78rem;">
+                {#if nbr.position}
+                  <button class="maplink" title="Open in OpenStreetMap{nbr.positionAt ? ` · shared ${relativeTime(nbr.positionAt)}` : ''}"
+                    onclick={() => open(mapUrl(nbr.position!)).catch(() => {})}>📍 {fmtPos(nbr.position)}</button>
+                {:else}
+                  <span style="color: var(--doge-muted);">—</span>
+                {/if}
+              </td>
             </tr>
           {/each}
         </tbody>
@@ -181,5 +198,14 @@
         {connection.neighbors.length} neighbor{connection.neighbors.length !== 1 ? 's' : ''} heard
       </div>
     </div>
+    <ShareLocation />
   {/if}
 </div>
+
+<style>
+  .maplink {
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--doge-blue); font-family: var(--font-mono); font-size: 0.78rem; text-align: left;
+  }
+  .maplink:hover { text-decoration: underline; }
+</style>

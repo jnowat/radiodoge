@@ -9,6 +9,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## 0.3.19 — GPS position sharing
+
+### Added
+- **GPS position sharing** — opt-in "Share my location" card on the Mesh tab broadcasts `POS:lat,lon,acc` messages (manual entry or device geolocation, OSM preview, unencrypted-LoRa warning).
+- Received `POS:` messages decode to a readable 📍 position; neighbors table gains a Position column with a map link.
+- New `radiodoge_core::geo` module (validation, encode/decode, distance) with tests.
+
 ## 0.3.18 — 📦 Store-and-Forward Gateway
 
 ### Added

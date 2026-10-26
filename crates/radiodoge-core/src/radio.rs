@@ -1051,6 +1051,10 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
                         return format!("💰 Balance: {:.8} DOGE", koinus as f64 / 1e8);
                     }
                 }
+                // Shared GPS position: "POS:lat,lon[,acc]"
+                if let Some(pos) = crate::geo::Position::from_message(text) {
+                    return pos.describe();
+                }
                 // Gateway TX acknowledgement: "TX_ACK:{txid}"
                 if let Some(txid) = text.strip_prefix("TX_ACK:") {
                     return format!("✅ TX confirmed: txid={}", txid);
