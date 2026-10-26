@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RadioDoge Packet Inspector</title>
+<style>
+  :root { --bg:#14120f; --card:#1e1b16; --border:#3a3428; --yellow:#f5c542; --text:#f4f1ea; --muted:#a39b8b; --mono: ui-monospace, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { margin:0 0 4px; font-size:1.35rem; } h1 span { color:var(--yellow); }
+  p.sub { margin:0 0 18px; color:var(--muted); font-size:.85rem; }
+  textarea { width:100%; min-height:120px; background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:12px; font:13px var(--mono); resize:vertical; }
+  .row { display:flex; gap:10px; margin:10px 0 18px; flex-wrap:wrap; align-items:center; }
+  button { background:var(--yellow); color:#1a1a1a; border:0; border-radius:8px; padding:8px 16px; font-weight:700; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--yellow); border:1px solid var(--border); font-weight:500; }
+  .status { color:var(--muted); font-size:.82rem; } .err { color:#ef4444; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); vertical-align:top; font-size:.82rem; }
+  th { color:var(--muted); font-weight:600; background:rgba(255,255,255,.02); }
+  td.mono { font-family:var(--mono); word-break:break-all; } td.cmd { color:var(--yellow); font-weight:700; white-space:nowrap; }
+  tr.noise td { color:var(--muted); font-style:italic; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🐕 RadioDoge <span>Packet Inspector</span></h1>
+  <p class="sub">Paste a hex dump of RadioDoge serial or LoRa bytes. It is decoded locally in your browser (WebAssembly, the same framing code the app uses); nothing is uploaded.</p>
+  <textarea id="hex" spellcheck="false" placeholder="02 00 0a 00 01 0a 00 02  04 00 0a 00 01 ff ff ff 6d 75 63 68 20 77 6f 77"></textarea>
+  <div class="row">
+    <button id="go">Decode</button>
+    <button id="ex" class="ghost">Load example</button>
+    <span id="status" class="status">Loading decoder…</span>
+  </div>
+  <table id="out" hidden>
+    <thead><tr><th>Offset</th><th>Len</th><th>Command</th><th>Hops</th><th>From</th><th>To</th><th>Decoded</th><th>Payload</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</main>
+<script type="module">
+  import init, { inspect_hex } from './pkg/radiodoge_inspector.js';
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const status = $('status');
+  try { await init(); status.textContent = 'Ready.'; }
+  catch (e) { status.innerHTML = '<span class="err">Decoder failed to load — build it first (see README).</span>'; throw e; }
+
+  function run() {
+    const r = JSON.parse(inspect_hex($('hex').value));
+    const body = $('out').querySelector('tbody');
+    body.innerHTML = '';
+    if (r.error) { status.innerHTML = `<span class="err">${esc(r.error)}</span>`; $('out').hidden = true; return; }
+    const rows = [
+      ...r.frames.map(f => ({ at: f.offset, html: `<tr><td>${f.offset}</td><td>${f.length}</td>
+        <td class="cmd">0x${f.command.toString(16).padStart(2,'0').toUpperCase()} ${esc(f.commandName)}${f.multipart ? ' · multipart' : ''}</td>
+        <td>${f.hops ?? '—'}</td><td class="mono">${esc(f.source ?? '—')}</td><td class="mono">${esc(f.destination ?? '—')}</td>
+        <td>${esc(f.decoded ?? '')}</td><td class="mono">${esc(f.payloadHex)}</td></tr>` })),
+      ...r.noise.map(n => ({ at: n.offset, html: `<tr class="noise"><td>${n.offset}</td><td>${n.length}</td><td colspan="6">skipped — not a packet start</td></tr>` })),
+    ].sort((a, b) => a.at - b.at);
+    body.innerHTML = rows.map(x => x.html).join('');
+    $('out').hidden = rows.length === 0;
+    status.textContent = `${r.frames.length} packet(s)` + (r.noise.length ? `, ${r.noise.length} noise run(s)` : '') + (r.trailing ? `, ${r.trailing} trailing byte(s) incomplete` : '');
+  }
+  $('go').onclick = run;
+  $('ex').onclick = () => { $('hex').value = 'fe 01 06\n02 00 0a 00 01 0a 00 02\n04 00 0a 00 01 ff ff ff 6d 75 63 68 20 77 6f 77'; run(); };
+  $('hex').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
+</script>
+</body>
+</html>

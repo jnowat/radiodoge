@@ -7,6 +7,18 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+
+## [Unreleased] — WebAssembly packet inspector
+
+### Added
+- **`crates/radiodoge-inspector`** — decode RadioDoge packets from a hex dump in the browser (`www/index.html`,
+  WebAssembly) or natively (`inspect`, `inspect_hex`). Cuts the input into packets with the same
+  `frame_packet_len` / `resync_offset` the serial loop uses and shows command, hops, addresses, payload and the
+  app's decoded text; noise and incomplete trailing bytes are reported.
+- `radiodoge-core` gains a default `native` feature. With `default-features = false` only `radio` and `types`
+  build (no Tokio, serial, crypto or HTTP), which makes the protocol usable from wasm32. `radio::decode_payload`
+  is now public. Existing users are unaffected.
+
 ## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
 > Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.
