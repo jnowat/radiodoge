@@ -25,6 +25,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed — Windows packaging
 - Window title `RadioDoge`, default 1280×820, minimum 760×560 (the sidebar collapses below 860 px).
 - Installer metadata: publisher, homepage, NSIS installer icon, per-user NSIS install (no admin prompt).
+## [Unreleased] - Dependency security updates
+
+### Security
+- Bumped `rustls` 0.23.45 -> 0.23.46, `rustls-webpki` 0.103.15 -> 0.103.16, `webpki-roots` 1.0.9 -> 1.0.11 and `tokio` 1.53.2 -> 1.54.1 (Cargo.lock only). Clears RUSTSEC-2026-0347/0348/0349 and related rustls advisories, RUSTSEC-2026-0381/0382 and the tokio unsoundness warning RUSTSEC-2026-0386. `cargo audit` now reports 0 vulnerabilities (7 allowed unmaintained/unsound warnings in transitive GTK/zbus/lru deps remain).
 
 ## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
