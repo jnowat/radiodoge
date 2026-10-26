@@ -3586,7 +3586,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radiodoge-cli"
-version = "0.3.29"
+version = "0.3.30"
 dependencies = [
  "anyhow",
  "clap",
@@ -3600,7 +3600,7 @@ dependencies = [
 
 [[package]]
 name = "radiodoge-core"
-version = "0.3.29"
+version = "0.3.30"
 dependencies = [
  "aes",
  "anyhow",
@@ -3620,30 +3620,23 @@ dependencies = [
  "serde_json",
  "serialport",
  "sha2",
- "thiserror 1.0.69",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
 name = "radiodoge-gui"
-version = "0.3.29"
+version = "0.3.30"
 dependencies = [
- "anyhow",
- "bs58",
  "env_logger",
  "hex",
  "image",
  "log",
  "radiodoge-core",
- "rand 0.8.8",
- "ripemd",
  "rqrr",
- "secp256k1",
  "serde",
  "serde_json",
  "serialport",
- "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-blec",
@@ -3651,9 +3644,7 @@ dependencies = [
  "tauri-plugin-os",
  "tauri-plugin-serialplugin",
  "tauri-plugin-shell",
- "thiserror 1.0.69",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
