@@ -1,6 +1,6 @@
 {
   "name": "radiodoge-gui",
-  "version": "0.3.24",
+  "version": "0.3.25",
   "engines": {
     "node": ">=20.0.0"
   },
