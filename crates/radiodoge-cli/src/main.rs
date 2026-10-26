@@ -609,11 +609,7 @@ async fn cmd_info(port: &str, expect: Option<&str>) -> Result<()> {
 /// Broadcast a discovery PING and list the nodes that answer.
 async fn cmd_discover(port: &str, listen: u64) -> Result<()> {
     let listen = listen.clamp(1, 30);
-    println!("🐕 Connecting to {} ...", port);
-    let manager = Arc::new(SerialManager::new());
-    let on_packet = Arc::new(|_: IncomingPacket| {});
-    manager.connect(port, on_packet).await
-        .with_context(|| format!("Failed to open serial port {}", port))?;
+    let manager = open_board(port).await?;
     let me = manager.get_node_address().await;
     println!("📡 Discovering from {} (listening {} s)...", me.to_display_string(), listen);
     let found = manager.discover_nodes(std::time::Duration::from_secs(listen)).await?;

@@ -1351,7 +1351,7 @@ async fn set_wifi_enabled(
 #[tauri::command]
 async fn discover_nodes(state: State<'_, AppState>, listen_ms: Option<u64>) -> Result<Vec<NeighborEntry>, String> {
     let ms = listen_ms.unwrap_or(6000).clamp(1000, 30_000);
-    state.serial.discover_nodes(std::time::Duration::from_millis(ms)).await.map_err(|e| e.to_string())
+    state.serial.discover_nodes(std::time::Duration::from_millis(ms)).await.map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.3.7 — Return recently heard mesh neighbors.
