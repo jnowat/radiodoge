@@ -1193,6 +1193,85 @@ async fn get_gateway_stats(
     Ok(serde_json::json!({ "running": running, "stats": stats }))
 }
 
+/// v0.3.21 — Multi-gateway dashboard.
+///
+/// Reads this app's own daemon snapshot plus every extra stats file the user
+/// added (other gateways writing `--stats-file` into a shared folder), and
+/// returns each source's status alongside the merged fleet summary.
+#[tauri::command]
+async fn get_fleet_stats(paths: Vec<String>, app: AppHandle) -> Result<serde_json::Value, String> {
+    use radiodoge_core::fleet::{aggregate, is_online, FleetMember};
+    use radiodoge_core::gateway_stats::GatewayStats;
+    const MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+    let mut sources: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
+    if let Some(p) = gateway_stats_path(&app) {
+        sources.push(("This PC".into(), Some(p)));
+    }
+    for raw in paths.iter().take(32) {
+        let t = raw.trim();
+        if !t.is_empty() {
+            sources.push((String::new(), Some(std::path::PathBuf::from(t))));
+        }
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut members = Vec::new();
+    let mut rows = Vec::new();
+    let mut used = std::collections::HashSet::new();
+    for (i, (fixed, path)) in sources.into_iter().enumerate() {
+        let Some(path) = path else { continue };
+        let read = async {
+            let meta = tokio::fs::metadata(&path).await.map_err(|e| e.to_string())?;
+            if meta.len() > MAX_BYTES {
+                return Err("file is larger than 4 MB".to_string());
+            }
+            let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+            serde_json::from_slice::<GatewayStats>(&bytes).map_err(|e| format!("not a stats file: {e}"))
+        }
+        .await;
+        let is_local = i == 0 && fixed == "This PC";
+        let base = if !fixed.is_empty() {
+            fixed
+        } else if let Ok(s) = &read {
+            s.gateway_address.clone().unwrap_or_else(|| {
+                path.file_stem().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "gateway".into())
+            })
+        } else {
+            path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "gateway".into())
+        };
+        let mut label = base.clone();
+        let mut n = 2;
+        while !used.insert(label.clone()) {
+            label = format!("{base} #{n}");
+            n += 1;
+        }
+        match read {
+            Ok(stats) => {
+                rows.push(serde_json::json!({
+                    "label": label, "path": path.to_string_lossy(), "local": is_local,
+                    "ok": true, "online": is_online(&stats, now), "updatedAt": stats.updated_at,
+                    "port": stats.port, "address": stats.gateway_address,
+                    "packetsHeard": stats.packets_heard, "txBroadcast": stats.tx_broadcast,
+                    "txFailed": stats.tx_failed,
+                    "outbox": stats.outbox_broadcasts + stats.outbox_replies,
+                }));
+                members.push(FleetMember { label, stats });
+            }
+            // A missing local snapshot just means this PC is not running a gateway.
+            Err(_) if is_local => {}
+            Err(e) => rows.push(serde_json::json!({
+                "label": label, "path": path.to_string_lossy(), "local": false, "ok": false, "error": e,
+            })),
+        }
+    }
+    let summary = aggregate(&members, now);
+    Ok(serde_json::json!({ "now": now, "gateways": rows, "summary": summary }))
+}
+
 /// v0.3.6 — Stop the background gateway daemon.
 ///
 /// Reconnects to the port the daemon was given, if the app was the one that
@@ -2204,6 +2283,7 @@ pub fn run() {
             list_ports,
             list_ports_detailed,
             get_gateway_stats,
+            get_fleet_stats,
             connect_port,
             disconnect_port,
             is_connected,

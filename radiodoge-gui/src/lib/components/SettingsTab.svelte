@@ -17,6 +17,7 @@
   import { bridge } from '$lib/device/connection-bridge';
   import DogeSpinner from './DogeSpinner.svelte';
   import GatewayDashboard from './GatewayDashboard.svelte';
+  import FleetDashboard from './FleetDashboard.svelte';
 
   // ── Platform detection ────────────────────────────────────────────────────
   // Use null as "not yet resolved" to prevent fetchMac() from taking the wrong
@@ -817,6 +818,10 @@
 
     {#if connection.gatewayOnline}
       <GatewayDashboard />
+    {/if}
+
+    {#if !isAndroidPlatform}
+      <FleetDashboard />
     {/if}
 
     <!-- ── v0.3.16 — BLE Advertising toggle ──────────────────────────────── -->

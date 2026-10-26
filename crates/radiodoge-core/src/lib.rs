@@ -15,6 +15,7 @@
 //! - Future Android / embedded targets
 
 pub mod backend;
+pub mod fleet;
 pub mod gateway_stats;
 pub mod geo;
 pub mod store_forward;
