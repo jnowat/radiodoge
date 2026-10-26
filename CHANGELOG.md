@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.30] - 2026-10-26
+
+### Removed
+- Dependency hygiene: dropped crates the desktop app declared but never used (`secp256k1`, `sha2`, `ripemd`, `bs58`, `rand`, `tokio-util`, `thiserror`, `anyhow`; wallet crypto lives in `radiodoge-core`) and the unused `thiserror` from `radiodoge-core` and the workspace.
+
 ## [0.3.29] - 2026-10-26
 
 ### Added

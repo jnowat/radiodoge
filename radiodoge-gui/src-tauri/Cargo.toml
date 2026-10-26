@@ -1,6 +1,6 @@
 [package]
 name = "radiodoge-gui"
-version = "0.3.29"
+version = "0.3.30"
 description = "RadioDoge — Wireless P2P Dogecoin Over LoRa (Tauri 2 GUI)"
 authors = ["RadioDoge Contributors"]
 license = "MIT"
@@ -51,18 +51,11 @@ serde_json = "1"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["full"] }
 
 # Serial port communication (cross-platform, Android-ready via serialport-android later)
 serialport = "4"
 
-# Pure Rust Dogecoin cryptography — no FFI to libdogecoin needed
-# Dogecoin uses the same secp256k1 curve as Bitcoin
-secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
-sha2 = "0.10"
-ripemd = "0.1"
-bs58 = { version = "0.5", features = ["check"] }
-rand = "0.8"
+# Wallet cryptography lives in radiodoge-core; only hex encoding is needed here.
 hex = "0.4"
 
 # v0.4.0 — QR code scanning for the recipient field.
@@ -71,10 +64,6 @@ hex = "0.4"
 # webview including WebKitGTK where BarcodeDetector is unavailable.
 rqrr = "0.7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-
-# Error handling
-thiserror = "1"
-anyhow = "1"
 
 # Logging
 log = "0.4"
