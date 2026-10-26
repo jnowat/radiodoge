@@ -34,6 +34,8 @@ pub mod radio;
 #[cfg(feature = "native")]
 pub mod scan;
 #[cfg(feature = "native")]
+pub mod meshtastic;
+#[cfg(feature = "native")]
 pub mod serial;
 #[cfg(feature = "native")]
 pub mod spv;

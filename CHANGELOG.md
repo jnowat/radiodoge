@@ -13,6 +13,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## 0.3.23 — Meshtastic packet encoding
+
+### Added
+- **Meshtastic packet encoding** (`radiodoge-core::meshtastic`): builds and parses Meshtastic's on-air frame, including the 16-byte header (to/from/id, hop flags, channel hash, next hop, relay), AES-128/256-CTR channel encryption with Meshtastic's nonce and PSK rules (default "AQ==" key), and the `Data` protobuf (portnum and payload; unknown fields skipped). RadioDoge packets are wrapped as `PRIVATE_APP` (256) broadcasts so standard nodes relay them untouched. Verified against the known LongFast channel hash (8). 5 tests.
+- `radiodoge-cli meshtastic wrap <hex>` / `decode <hex>`: offline tools to build and inspect frames (`--channel`, `--key`, `--from`, `--id`).
+
+### Notes
+- Bridge mode (actually sending and receiving these frames) still needs a firmware raw-TX/RX command and the radio on a Meshtastic preset (see Channel scan → Meshtastic LongFast). The ROADMAP keeps it open.
+
 ## 0.3.22 — Multi-channel scanning
 
 ### Added

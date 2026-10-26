@@ -1,6 +1,6 @@
 [package]
 name = "radiodoge-core"
-version = "0.3.22"
+version = "0.3.23"
 description = "RadioDoge core library — protocol, wallet, and serial for all Rust targets"
 authors = ["RadioDoge Contributors"]
 license = "MIT"
@@ -38,6 +38,10 @@ ripemd     = { version = "0.1", optional = true }
 bs58       = { version = "0.5", features = ["check"], optional = true }
 rand       = { version = "0.8", optional = true }
 hex        = "0.4"
+
+# Meshtastic interop — AES-CTR channel encryption
+aes        = "0.8"
+ctr        = "0.9"
 
 # HTTP client for UTXO fetching and transaction broadcast
 reqwest          = { workspace = true, optional = true }
