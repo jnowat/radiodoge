@@ -39,6 +39,7 @@ pub mod meshtastic;
 pub mod serial;
 #[cfg(feature = "native")]
 pub mod spv;
+pub mod tx_reply;
 pub mod types;
 #[cfg(feature = "native")]
 pub mod wallet;

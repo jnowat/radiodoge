@@ -135,6 +135,21 @@ pub struct TransactionRequest {
     /// Network fee in DOGE. `None` pays the network-estimated rate (never below 0.01 DOGE per started kB).
     #[serde(default)]
     pub fee_doge: Option<f64>,
+    /// Radio a signed transaction even if the same txid went out within
+    /// `tx_reply::RESEND_GUARD_SECS` (the duplicate-broadcast guard).
+    #[serde(default)]
+    pub allow_resend: bool,
+}
+
+/// What `send_transaction` hands back to the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendOutcome {
+    pub message: String,
+    /// Txid of a signed transaction (absent for the legacy unsigned stub).
+    pub txid: Option<String>,
+    pub explorer_url: Option<String>,
+    pub frames: usize,
 }
 
 /// An incoming LoRa packet captured by the receive loop.

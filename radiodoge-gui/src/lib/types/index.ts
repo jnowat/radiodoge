@@ -47,6 +47,16 @@ export interface TransactionRequest {
   fromPrivateKeyWif?: string;
   /** Network fee in DOGE; omit for the network-estimated rate (min 0.01 DOGE per started kB). */
   feeDoge?: number;
+  /** Bypass the duplicate-broadcast guard for this one send. */
+  allowResend?: boolean;
+}
+
+/** What `send_transaction` returns. */
+export interface SendOutcome {
+  message: string;
+  txid?: string | null;
+  explorerUrl?: string | null;
+  frames: number;
 }
 
 /** Rich information about a serial port, including USB device details. */
