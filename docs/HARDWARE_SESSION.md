@@ -7,8 +7,12 @@ and never broadcasts a transaction.
 
 | Board | Role    | Node address | Port (example) |
 |-------|---------|--------------|----------------|
-| A     | sender  | `10.0.1`     | `COM3`         |
-| B     | gateway | `10.0.2`     | `COM4`         |
+| A     | sender  | `10.0.2`     | `COM3`         |
+| B     | gateway | `10.0.1`     | `COM4`         |
+
+The gateway is `10.0.1` (the firmware default, so a freshly flashed gateway needs no
+`set-address`); every sender gets its own address from `10.0.2` up. The script takes
+the addresses as parameters (`-AddrA 10.0.2 -AddrB 10.0.1`).
 
 ## Before plugging in
 
@@ -24,7 +28,7 @@ and never broadcasts a transaction.
 ## Run
 
 ```powershell
-pwsh -File scripts\hw-session.ps1 -PortA COM3 -PortB COM4 `
+pwsh -File scripts\hw-session.ps1 -PortA COM3 -PortB COM4 -AddrA 10.0.2 -AddrB 10.0.1 `
   -BalanceAddress <test wallet address> -DryRunTo <recipient> -Amount 1
 ```
 
@@ -37,14 +41,27 @@ Each step that touches a board prompts first; `-Yes` skips the prompts and
 | 0 | Ports present | `radiodoge-cli ports` | both COM ports listed |
 | 1 | Flash app only | `esptool --chip esp32s3 --port P --baud 921600 write-flash 0x10000 heltec-firmware-v3.ino.bin` | esptool exit 0. **Never** the merged image — it erases NVS (license, node address) |
 | 2 | Identity | `radiodoge-cli info -p P --expect 10.0.x` | address matches; firmware ≥ FW12 shows `raw LoRa: yes` |
-| 3 | USB + LoRa ping | `ping -p P`, `lora-ping -p A -t 10.0.2` and back | PONG, then `✅ ACK after … ms` both ways |
+| 3 | USB + LoRa ping | `ping -p P`, `lora-ping -p A -t 10.0.1` and back | PONG, then `✅ ACK after … ms` both ways |
 | 4 | Gateway up | `daemon -p B --stats-file …` (background) | process still running after 6 s |
-| 5 | Balance over LoRa | `lora-balance -p A -a D… -g 10.0.2` | `💰 Gateway 10.0.2 reports …` |
+| 5 | Balance over LoRa | `lora-balance -p A -a D… -g 10.0.1` | `💰 Gateway 10.0.1 reports …` |
 | 6 | Dry-run sign | `sign-tx -t D… -a 1 -o dryrun.hex` | `✅ Signed (NOT broadcast)` + txid |
+
+### One board per PC
+
+`hw-session.ps1` expects both boards on one PC. With one board per machine
+(for example a gateway PC and a sender PC, each board on its own `COM3`), run
+the steps by hand on each machine:
+
+| Machine | Steps |
+|---------|-------|
+| Gateway PC (`10.0.1`) | 1 flash, 2 `info -p COM3 --expect 10.0.1`, 3 `lora-ping -p COM3 -t 10.0.2`, 4 `daemon -p COM3 --stats-file …` |
+| Sender PC (`10.0.2`)  | 1 flash, 2 `info -p COM3 --expect 10.0.2`, 3 `lora-ping -p COM3 -t 10.0.1`, 5 `lora-balance -p COM3 -a D… -g 10.0.1`, 6 `sign-tx` |
+
+`discover -p COM3` on either side should list the other node.
 
 Fixes for common failures:
 
-- Wrong address → `radiodoge-cli set-address -p P 10.0.1` (persisted in NVS), rerun with `-SkipFlash`.
+- Wrong address → `radiodoge-cli set-address -p P 10.0.x` (persisted in NVS), rerun with `-SkipFlash`.
 - No LoRa ACK → both boards on the same frequency/SF (Settings tab or `info`), antennas on, boards > 1 m apart.
 - No balance reply → gateway needs internet; check `daemon-*.err` in the session folder.
 
@@ -55,7 +72,7 @@ broadcasts:
 
 ```powershell
 radiodoge-cli daemon -p COM4                       # gateway, leave running
-radiodoge-cli send-tx-hex -p COM3 -f <dryrun.hex> -g 10.0.2
+radiodoge-cli send-tx-hex -p COM3 -f <dryrun.hex> -g 10.0.1
 ```
 
 The sender shows `[n/4]` progress (radio, frames, reply), then one of:
