@@ -324,3 +324,77 @@ impl ConnectionStatusEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! These types are the IPC contract with the TypeScript front end
+    //! (`radiodoge-gui/src/lib/types/index.ts`). A renamed field breaks the GUI
+    //! silently at runtime, so pin the wire names here.
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn node_address_display_and_defaults() {
+        assert_eq!(NodeAddress::new(10, 0, 2).to_display_string(), "10.0.2");
+        assert_eq!(NodeAddress::default(), NodeAddress::default_local());
+        assert_eq!(NodeAddress::broadcast().to_display_string(), "255.255.255");
+    }
+
+    #[test]
+    fn transaction_request_accepts_minimal_gui_payload() {
+        // Older front ends send neither feeDoge nor allowResend.
+        let tx: TransactionRequest = serde_json::from_value(json!({
+            "toAddress": "Dtest", "amountDoge": 1.5, "memo": null, "fromPrivateKeyWif": null
+        }))
+        .unwrap();
+        assert_eq!(tx.amount_doge, 1.5);
+        assert!(tx.fee_doge.is_none());
+        assert!(!tx.allow_resend, "duplicate guard must be on unless asked");
+    }
+
+    #[test]
+    fn transaction_request_reads_camel_case_options() {
+        let tx: TransactionRequest = serde_json::from_value(json!({
+            "toAddress": "Dtest", "amountDoge": 2.0, "feeDoge": 0.02, "allowResend": true
+        }))
+        .unwrap();
+        assert_eq!(tx.fee_doge, Some(0.02));
+        assert!(tx.allow_resend);
+    }
+
+    #[test]
+    fn send_outcome_uses_camel_case() {
+        let v = serde_json::to_value(SendOutcome {
+            message: "ok".into(),
+            txid: Some("ab".into()),
+            explorer_url: Some("u".into()),
+            frames: 3,
+        })
+        .unwrap();
+        assert_eq!(v["explorerUrl"], "u");
+        assert_eq!(v["frames"], 3);
+    }
+
+    #[test]
+    fn lora_settings_round_trip() {
+        let s = LoraSettings::default();
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["spreadingFactor"], 7);
+        assert_eq!(v["nodeAddress"]["region"], 10);
+        let back: LoraSettings = serde_json::from_value(v).unwrap();
+        assert_eq!(back.coding_rate, "4/5");
+    }
+
+    #[test]
+    fn connection_status_constructors() {
+        let c = ConnectionStatusEvent::connected(
+            "COM3",
+            NodeAddress::default_local(),
+            Some("FW12".into()),
+        );
+        assert_eq!(c.status, "connected");
+        assert_eq!(c.port.as_deref(), Some("COM3"));
+        assert_eq!(ConnectionStatusEvent::disconnected().status, "disconnected");
+        assert!(ConnectionStatusEvent::error("boom").message.unwrap().contains("boom"));
+    }
+}

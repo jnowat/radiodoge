@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.32] - 2026-10-26
+
+### Added
+- Tests pinning the GUI↔backend IPC contract in `radiodoge-core::types` (camelCase wire names, `feeDoge`/`allowResend` defaults, `SendOutcome`, `LoraSettings` round trip, connection-status constructors).
+
 ## [0.3.31] - 2026-10-26
 
 ### Changed
