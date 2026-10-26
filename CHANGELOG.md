@@ -61,10 +61,77 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Privacy
 - Balance events record the amount only, never the address that was asked about.
+## [Unreleased] — WebAssembly packet inspector
+
+### Added
+- **`crates/radiodoge-inspector`** — decode RadioDoge packets from a hex dump in the browser (`www/index.html`,
+  WebAssembly) or natively (`inspect`, `inspect_hex`). Cuts the input into packets with the same
+  `frame_packet_len` / `resync_offset` the serial loop uses and shows command, hops, addresses, payload and the
+  app's decoded text; noise and incomplete trailing bytes are reported.
+- `radiodoge-core` gains a default `native` feature. With `default-features = false` only `radio` and `types`
+  build (no Tokio, serial, crypto or HTTP), which makes the protocol usable from wasm32. `radio::decode_payload`
+  is now public. Existing users are unaffected.
+## [Unreleased] — Fee estimation
+
+### Added
+- **Network fee estimation.** When no fee is given, signing now pays the chain backends' current rate (Core
+  `estimatesmartfee 6`, BlockCypher `medium_fee_per_kb`, Blockbook `/estimatefee/6`) per started kB — never
+  below the recommended 0.01 DOGE/kB introduced in #39, and falling back to it if no backend answers or the
+  reported rate is implausible (> 10 DOGE/kB). Applies to the desktop app, mobile send and every CLI signing
+  command (`send --wif`, `sign-tx`, `broadcast`); an explicit `--fee` / fee box still wins.
+- Send tab: with the fee box empty, shows the fee the send will pay (rate and estimated size).
+- CLI: `radiodoge-cli fee [--from D… --amount N]` prints the rate and the fee a send would pay.
+- Core: `backend::fee_rate_from` / `fetch_fee_rate`, `wallet::network_fee_rate`, `estimate_fee`,
+  `estimate_fee_for`, `fee_for_size`, `p2pkh_tx_size`, `build_signed_transaction_at_rate`; Tauri `estimate_fee`.
+## [Unreleased] — Windows app overhaul
+
+### Changed — GUI layout and navigation
+- Navigation is now a grouped left sidebar (Device / Wallet / App) on wide windows, with a live device-status card
+  (connection state, port, node address, signal, gateway/daemon/firmware chips) that opens the Connect panel.
+  Narrow windows and Android keep a compact top icon bar. Tabs that need a board are real disabled buttons
+  (keyboard- and screen-reader-friendly) with visible focus rings.
+- The footer version comes from `package.json` instead of a hard-coded string.
+
+### Added
+- **Settings → Chain backends**: pick Core / BlockCypher / Blockbook (or a custom list with URLs) for balances and
+  broadcasts; validated by `set_chain_backends`, saved locally and re-applied at startup.
+- **Send review dialog**: sending now opens a confirmation showing from/to/amount/fee/memo, warns about fees of
+  1 DOGE or more, and only signs after you confirm.
+
+### Changed — Windows packaging
+- Window title `RadioDoge`, default 1280×820, minimum 760×560 (the sidebar collapses below 860 px).
+- Installer metadata: publisher, homepage, NSIS installer icon, per-user NSIS install (no admin prompt).
+## [Unreleased] - Dependency security updates
+
+### Security
+- Bumped `rustls` 0.23.45 -> 0.23.46, `rustls-webpki` 0.103.15 -> 0.103.16, `webpki-roots` 1.0.9 -> 1.0.11 and `tokio` 1.53.2 -> 1.54.1 (Cargo.lock only). Clears RUSTSEC-2026-0347/0348/0349 and related rustls advisories, RUSTSEC-2026-0381/0382 and the tokio unsoundness warning RUSTSEC-2026-0386. `cargo audit` now reports 0 vulnerabilities (7 allowed unmaintained/unsound warnings in transitive GTK/zbus/lru deps remain).
 
 ## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
 > Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.
+
+### Changed — network fee: 0.01 DOGE per started kB (was a fixed 1 DOGE)
+- `send --wif`, `broadcast`, `sign-tx` and the GUI Send tab (desktop and Android) paid a flat **1 DOGE** per
+  transaction — about 100× Dogecoin Core's recommended rate for a typical ~225-byte transaction. They now pay
+  **0.01 DOGE per started kB** (minimum 0.01 DOGE; Core's minimum relay fee is 0.001 DOGE/kB): the transaction is
+  signed once, and re-signed with a larger fee if its size needs it.
+- Override with `--fee <DOGE>` on the CLI, or the new **Network fee** field in the Send tab (`feeDoge` on
+  `TransactionRequest`; leave empty for the recommended fee).
+- Core: `wallet::recommended_fee_doge`, `build_signed_transaction_auto_fee`, `build_signed_transaction_with_fee`;
+  `DEFAULT_TX_FEE_DOGE` is now 0.01.
+
+### Added — two-board LoRa tools (CLI)
+- `set-address`, `lora-ping` (over-the-air ping, waits for the ACK), `message` (multipart for long text),
+  `lora-balance` (ask a gateway for a balance), `sign-tx` (sign to a file without broadcasting) and `send-tx-hex`
+  (radio a pre-signed transaction to a gateway and wait for `TX_ACK`). Verified between two Heltec V3 boards,
+  including a real transaction relayed over LoRa and broadcast by a Core-backed gateway.
+- The CLI reads the board's actual node address instead of assuming `10.0.1`.
+
+### Fixed — serial framing and gateway relay
+- Received packets split across USB reads were mis-framed: frames without a length now wait for a 40 ms quiet
+  gap, and a stale partial frame is dropped after 250 ms instead of wedging the reader (seen in `daemon`).
+- `lora-balance` matched the decoded display text, so it missed `BAL:` replies.
+- Firmware: `RelayDesktopMessageOverLoRa` NACKs the host when the transmission times out instead of always ACKing.
 
 ### Changed — chain backends (Trezor Blockbook removed as default)
 - **Balance, UTXO fetch, broadcast and `verify-tx` failed with HTTP 403**: Trezor's public Blockbook
