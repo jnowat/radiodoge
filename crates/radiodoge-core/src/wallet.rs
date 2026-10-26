@@ -190,8 +190,58 @@ pub fn encode_transaction_payload(
 
 // ─── Real P2PKH transaction signing + broadcast ───────────────────────────────
 
-/// Default transaction fee.  1 DOGE covers any plausible tx size on the Dogecoin network.
-pub const DEFAULT_TX_FEE_DOGE: f64 = 1.0;
+/// Minimum transaction fee: 0.01 DOGE, the recommended fee for a transaction
+/// of up to 1 kB. Larger transactions pay [`recommended_fee_doge`] for their
+/// size; callers that sign should use [`build_signed_transaction_with_fee`].
+pub const DEFAULT_TX_FEE_DOGE: f64 = 0.01;
+
+/// Dogecoin Core's recommended relay/wallet fee rate: 0.01 DOGE per kB
+/// (1.14.4+ policy; the hard minimum relay fee is 0.001 DOGE/kB).
+pub const RECOMMENDED_FEE_PER_KB_KOINUS: u64 = 1_000_000;
+
+/// Fee for a transaction of `size_bytes` at [`RECOMMENDED_FEE_PER_KB_KOINUS`],
+/// charged per started kilobyte (so never less than 0.01 DOGE), in DOGE.
+pub fn recommended_fee_doge(size_bytes: usize) -> f64 {
+    let kb = size_bytes.div_ceil(1000).max(1) as u64;
+    (kb * RECOMMENDED_FEE_PER_KB_KOINUS) as f64 / 1e8
+}
+
+/// Sign a transaction paying [`recommended_fee_doge`] for its actual size.
+///
+/// Signs once at the one-kilobyte fee, then re-signs with a larger fee if the
+/// result is bigger than that fee covers (more inputs → more bytes). Returns
+/// the raw transaction and the fee paid, in DOGE.
+pub async fn build_signed_transaction_auto_fee(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+) -> Result<(Vec<u8>, f64)> {
+    let mut fee = recommended_fee_doge(0);
+    for _ in 0..4 {
+        let raw = build_signed_transaction(from_wif, to_address, amount_doge, fee).await?;
+        let needed = recommended_fee_doge(raw.len());
+        if needed <= fee + 1e-9 {
+            return Ok((raw, fee));
+        }
+        fee = needed;
+    }
+    anyhow::bail!("fee did not converge for {} DOGE", amount_doge)
+}
+
+/// Sign with an explicit fee (`Some`, in DOGE) or the size-based recommended
+/// fee (`None`, see [`build_signed_transaction_auto_fee`]). Returns the raw
+/// transaction and the fee it pays, in DOGE.
+pub async fn build_signed_transaction_with_fee(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+    fee_doge: Option<f64>,
+) -> Result<(Vec<u8>, f64)> {
+    match fee_doge {
+        Some(f) => Ok((build_signed_transaction(from_wif, to_address, amount_doge, f).await?, f)),
+        None => build_signed_transaction_auto_fee(from_wif, to_address, amount_doge).await,
+    }
+}
 
 /// Blocks a coinbase output must age before it can be spent.
 ///
@@ -295,7 +345,8 @@ fn sighash_preimage(
 /// (largest first), builds inputs and outputs (including change), signs each
 /// input with SIGHASH_ALL.
 ///
-/// Pass `wallet::DEFAULT_TX_FEE_DOGE` (1.0) for the fee.
+/// `fee_doge` is paid exactly as given; use [`build_signed_transaction_with_fee`]
+/// with `None` to pay the size-based recommended fee instead.
 /// To broadcast the result call `wallet::broadcast_raw_tx(&hex::encode(&tx))`.
 pub async fn build_signed_transaction(
     from_wif: &str,
@@ -1167,5 +1218,17 @@ mod tests {
             "the description must say what was not checked: {}",
             desc
         );
+    }
+}
+
+#[cfg(test)]
+mod fee_tests {
+    use super::recommended_fee_doge;
+    #[test]
+    fn per_started_kb_with_minimum() {
+        assert_eq!(recommended_fee_doge(0), 0.01);
+        assert_eq!(recommended_fee_doge(226), 0.01);
+        assert_eq!(recommended_fee_doge(1000), 0.01);
+        assert_eq!(recommended_fee_doge(1001), 0.02);
     }
 }

@@ -3826,7 +3826,13 @@ void RelayDesktopMessageOverLoRa() {
   // v0.4.2 — wait for the transmission rather than declaring the radio idle and
   // letting the main loop abort it. This is the path that carries TX_ACK back to
   // the sender, so aborting it left a broadcast transaction unacknowledged.
-  SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen));
+  // v0.4.3 — report a failed transmission instead of acknowledging it, so the
+  // host can tell a reply that never left the board from one that was lost.
+  if (!SendLoRaAndWait(ota, (uint8_t)(otaLen > 255 ? 255 : otaLen))) {
+    addLog("[GATEWAY] Relay to " + String(ota[5]) + "." + String(ota[6]) + "." + String(ota[7]) + " FAILED (TX timeout)");
+    Serial.write(hostNACK, HOST_ACK_NACK_SIZE);
+    return;
+  }
   addLog("[GATEWAY] Relayed host MESSAGE over LoRa to " + String(ota[5]) + "." + String(ota[6]) + "." + String(ota[7]) + " (" + String(otaLen) + " bytes)");
   Serial.write(hostACK, HOST_ACK_NACK_SIZE);
 }
