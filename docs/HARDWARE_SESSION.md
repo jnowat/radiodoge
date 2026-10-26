@@ -58,5 +58,16 @@ radiodoge-cli daemon -p COM4                       # gateway, leave running
 radiodoge-cli send-tx-hex -p COM3 -f <dryrun.hex> -g 10.0.2
 ```
 
-Expected: `✅ TX_ACK from 10.0.2 … <txid>`. If no ACK arrives, check the mempool for
-the txid before any retry. Confirm with `radiodoge-cli verify-tx -t <txid>`.
+The sender shows `[n/4]` progress (radio, frames, reply), then one of:
+
+| Reply | Meaning | Action |
+|---|---|---|
+| `TX_ACK` | Gateway broadcast it | Open the printed `https://dogechain.info/tx/<txid>` link |
+| `TX_QUEUED` | Gateway offline; held for retry | Keep waiting; the gateway retries on its own |
+| `TX_NACK:<txid>:<why>` | Network rejected it permanently | **Do not resend**; fix the cause |
+| no reply | Unknown, not failure | Check the explorer link before any retry |
+
+Re-sending the same txid within 30 minutes is refused (ledger:
+`~/.radiodoge/sent-txids.json`, or `RADIODOGE_SENT_LEDGER`). Pass `--force` only
+after the explorer shows it never landed. The GUI has the same guard with a
+"Resend anyway" button. Confirm with `radiodoge-cli verify-tx -t <txid>`.

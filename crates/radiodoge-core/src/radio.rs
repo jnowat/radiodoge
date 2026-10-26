@@ -1182,6 +1182,14 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
                 if let Some(pos) = crate::geo::Position::from_message(text) {
                     return pos.describe();
                 }
+                // Gateway held the tx for retry / network rejected it.
+                if let Some(txid) = text.strip_prefix("TX_QUEUED:") {
+                    return format!("⏳ TX queued at gateway (will retry): txid={}", txid);
+                }
+                if let Some(rest) = text.strip_prefix("TX_NACK:") {
+                    let (txid, why) = rest.split_once(':').unwrap_or((rest, ""));
+                    return format!("❌ TX rejected by network: txid={} {}", txid, why);
+                }
                 // Gateway TX acknowledgement: "TX_ACK:{txid}"
                 if let Some(txid) = text.strip_prefix("TX_ACK:") {
                     return format!("✅ TX confirmed: txid={}", txid);

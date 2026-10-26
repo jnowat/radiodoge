@@ -11,6 +11,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.28] - 2026-10-26
+
+### Added
+- Send over LoRa: the gateway now replies `TX_QUEUED` when it holds a transaction for retry and `TX_NACK:<txid>:<why>` when the network permanently rejects it (silence still means "unknown", never failure).
+- CLI `send --wif` and `send-tx-hex` show `[n/4]` progress, print the txid with a dogechain.info explorer link, and say "do not resend" on a NACK.
+- Duplicate-broadcast guard: the same txid is refused for 30 minutes (CLI ledger `~/.radiodoge/sent-txids.json`, override with `--force`; GUI has a "Resend anyway" button).
+- GUI Send tab: persistent txid panel with copy button, explorer link and live gateway status (waiting / queued / confirmed / rejected / no reply).
+
+Not hardware-tested.
+
 ## [0.3.27] — 2026-10-26 — Hardware-session harness
 
 ### Added

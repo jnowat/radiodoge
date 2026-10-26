@@ -8,7 +8,8 @@
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
-  import type { FeeEstimate, ParsedPayment } from '$lib/types';
+  import type { FeeEstimate, IncomingPacket, ParsedPayment, SendOutcome } from '$lib/types';
+  import { open } from '@tauri-apps/plugin-shell';
   import DogeSpinner from './DogeSpinner.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   interface Props {
@@ -44,6 +45,39 @@
    */
   let sendProgress = $state<{ sent: number; total: number } | null>(null);
 
+  /**
+   * The last signed transaction radioed, and what the gateway said about it.
+   * Silence is "unknown", never failure: older gateways only send TX_ACK, and
+   * a broadcast can succeed even when the reply is lost on the air.
+   */
+  type TxStatus = 'waiting' | 'queued' | 'acked' | 'nacked' | 'timeout';
+  let lastTx = $state<{ txid: string; url: string; status: TxStatus; reason?: string } | null>(null);
+  let duplicateBlocked = $state(false);
+  let copied = $state(false);
+  let _replyTimer: ReturnType<typeof setTimeout> | null = null;
+  const REPLY_TIMEOUT_MS = 90_000;
+
+  function hexToText(hex: string): string {
+    const bytes = new Uint8Array((hex.match(/../g) ?? []).map((h) => parseInt(h, 16)));
+    return new TextDecoder().decode(bytes);
+  }
+
+  function onGatewayReply(pkt: IncomingPacket) {
+    if (!lastTx || lastTx.status === 'acked' || lastTx.status === 'nacked') return;
+    const text = hexToText(pkt.payloadHex ?? '');
+    const m = /^TX_(ACK|QUEUED|NACK):([0-9a-fA-F]{64})(?::(.*))?/.exec(text);
+    if (!m || m[2].toLowerCase() !== lastTx.txid) return;
+    if (m[1] === 'ACK') lastTx.status = 'acked';
+    else if (m[1] === 'QUEUED') lastTx.status = 'queued';
+    else { lastTx.status = 'nacked'; lastTx.reason = m[3] || 'rejected'; }
+    if (lastTx.status !== 'queued' && _replyTimer) { clearTimeout(_replyTimer); _replyTimer = null; }
+  }
+
+  async function copyTxid() {
+    if (!lastTx) return;
+    try { await navigator.clipboard.writeText(lastTx.txid); copied = true; setTimeout(() => (copied = false), 1500); } catch { /* no clipboard */ }
+  }
+
   function onMobileSendFailed(ev: Event) {
     const detail = (ev as CustomEvent<string>).detail;
     if (_successClearTimer !== null) {
@@ -61,9 +95,12 @@
     const progress = listen<{ sent: number; total: number }>('transaction-progress', (ev) => {
       sendProgress = ev.payload;
     });
+    const replies = listen<IncomingPacket>('radio-packet', (ev) => onGatewayReply(ev.payload));
     return () => {
       window.removeEventListener('radiodoge:tx-send-failed', onMobileSendFailed);
       progress.then((fn) => fn());
+      replies.then((fn) => fn());
+      if (_replyTimer) clearTimeout(_replyTimer);
       if (_successClearTimer) clearTimeout(_successClearTimer);
     };
   });
@@ -142,7 +179,7 @@
     await sendTransaction();
   }
 
-  async function sendTransaction() {
+  async function sendTransaction(allowResend = false) {
     // Cancel any pending form-clear timer so a new transaction doesn't wipe
     // inputs the user has already started filling in.
     if (_successClearTimer !== null) {
@@ -166,19 +203,29 @@
     success = null;
     error = null;
     sendProgress = null;
+    duplicateBlocked = false;
 
     try {
-      const result = await invoke<string>('send_transaction', {
+      const result = await invoke<SendOutcome>('send_transaction', {
         tx: {
           toAddress: toAddress.trim(),
           amountDoge: parseFloat(amountDoge),
           memo: memo.trim() || undefined,
           fromPrivateKeyWif: wallet.privateKeyWif || undefined,
           feeDoge: feeDoge.trim() ? parseFloat(feeDoge) : undefined,
+          allowResend,
         }
       });
 
-      success = result;
+      success = result.message;
+      if (result.txid) {
+        if (_replyTimer) clearTimeout(_replyTimer);
+        lastTx = { txid: result.txid.toLowerCase(), url: result.explorerUrl ?? '', status: 'waiting' };
+        _replyTimer = setTimeout(() => {
+          if (lastTx && (lastTx.status === 'waiting' || lastTx.status === 'queued')) lastTx.status = 'timeout';
+          _replyTimer = null;
+        }, REPLY_TIMEOUT_MS);
+      }
       onTriggerConfetti(); // 🎉 BOOM — confetti!
 
       // Clear form 5s after success — gives user time to screenshot/note the result.
@@ -193,7 +240,9 @@
       }, 5000);
 
     } catch (e: unknown) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      duplicateBlocked = msg.startsWith('DUPLICATE:');
+      error = duplicateBlocked ? msg.slice('DUPLICATE:'.length).trim() : msg;
     } finally {
       isSending = false;
       sendProgress = null;
@@ -528,6 +577,31 @@
       </div>
       <div style="color: var(--doge-muted); font-size: var(--fs-sm); font-family: var(--font-mono);">
         {error}
+      </div>
+      {#if duplicateBlocked}
+        <button class="btn-ghost" style="margin-top: 10px;" onclick={() => sendTransaction(true)} disabled={isSending}>
+          Resend anyway
+        </button>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Last signed transaction: txid, explorer link, gateway reply -->
+  {#if lastTx}
+    <div class="tx-status" style="margin-top: 16px; padding: 14px 18px; border: 1px solid var(--doge-border, rgba(255,255,255,0.15)); border-radius: 12px; font-size: var(--fs-sm);">
+      <div style="font-weight: 700; margin-bottom: 6px;">
+        {#if lastTx.status === 'waiting'}📡 Radioed — waiting for the gateway…
+        {:else if lastTx.status === 'queued'}⏳ Gateway queued it (offline) — it will retry the broadcast.
+        {:else if lastTx.status === 'acked'}✅ Broadcast confirmed by the gateway.
+        {:else if lastTx.status === 'nacked'}❌ Rejected by the network: {lastTx.reason}. Do not resend this transaction.
+        {:else}❔ No reply heard. It may still have been broadcast — check the explorer before resending.{/if}
+      </div>
+      <div style="font-family: var(--font-mono); word-break: break-all; color: var(--doge-muted);">{lastTx.txid}</div>
+      <div style="display: flex; gap: 8px; margin-top: 8px;">
+        <button class="btn-ghost" onclick={copyTxid}>{copied ? 'Copied' : 'Copy txid'}</button>
+        {#if lastTx.url}
+          <button class="btn-ghost" onclick={() => open(lastTx!.url)}>View on explorer</button>
+        {/if}
       </div>
     </div>
   {/if}

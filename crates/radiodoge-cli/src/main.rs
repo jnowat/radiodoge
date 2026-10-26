@@ -15,6 +15,7 @@ use radiodoge_core::gateway_stats::{GatewayEventKind, GatewayStats};
 use radiodoge_core::store_forward::{parse_node, Outbox, PendingBroadcast};
 use radiodoge_core::{radio, spv, wallet};
 use radiodoge_core::serial::SerialManager;
+use radiodoge_core::tx_reply::{self, RecentSends, TxReply};
 use radiodoge_core::types::{IncomingPacket, NodeAddress};
 
 // ─── CLI Definition ──────────────────────────────────────────────────────────
@@ -104,6 +105,18 @@ enum Commands {
         /// Network fee in DOGE when signing with --wif (default: current network rate from the chain backends, never below 0.01 DOGE per started kB)
         #[arg(long)]
         fee: Option<f64>,
+
+        /// With --wif: gateway node to address (default: broadcast to any gateway)
+        #[arg(short, long)]
+        gateway: Option<String>,
+
+        /// With --wif: seconds to wait for the gateway's TX_ACK
+        #[arg(short = 'T', long, default_value = "90")]
+        timeout: u64,
+
+        /// With --wif: radio even if this txid was sent in the last 30 minutes
+        #[arg(long)]
+        force: bool,
     },
 
     /// Listen for incoming LoRa packets and print them
@@ -187,6 +200,9 @@ enum Commands {
         gateway: Option<String>,
         #[arg(short = 'T', long, default_value = "90")]
         timeout: u64,
+        /// Radio even if this txid was sent in the last 30 minutes
+        #[arg(long)]
+        force: bool,
     },
 
     /// Build and sign a P2PKH transaction WITHOUT broadcasting it or touching a board.
@@ -472,8 +488,8 @@ async fn main() -> Result<()> {
             cmd_meshtastic_bridge(&port, listen, send_hex, text, &from, freq_khz, power, channel).await
         }
         Commands::Meshtastic { cmd } => cmd_meshtastic(cmd),
-        Commands::Send { port, to_address, amount, memo, wif, fee } => {
-            cmd_send(&port, &to_address, amount, memo.as_deref(), wif.as_deref(), fee).await
+        Commands::Send { port, to_address, amount, memo, wif, fee, gateway, timeout, force } => {
+            cmd_send(&port, &to_address, amount, memo.as_deref(), wif.as_deref(), fee, gateway.as_deref(), timeout, force).await
         }
         Commands::Receive { port, timeout } => cmd_receive(&port, timeout).await,
         Commands::Ping { port } => cmd_ping(&port).await,
@@ -482,7 +498,7 @@ async fn main() -> Result<()> {
         Commands::Message { port, to, text, listen } => cmd_message(&port, &to, &text, listen).await,
         Commands::LoraPing { port, to, timeout } => cmd_lora_ping(&port, &to, timeout).await,
         Commands::LoraBalance { port, address, gateway, timeout } => cmd_lora_balance(&port, &address, gateway.as_deref(), timeout).await,
-        Commands::SendTxHex { port, file, gateway, timeout } => cmd_send_tx_hex(&port, &file, gateway.as_deref(), timeout).await,
+        Commands::SendTxHex { port, file, gateway, timeout, force } => cmd_send_tx_hex(&port, &file, gateway.as_deref(), timeout, force).await,
         Commands::SignTx { to_address, amount, out, fee } => cmd_sign_tx(&to_address, amount, &out, fee).await,
         Commands::Connect { port } => cmd_connect(&port).await,
         Commands::Daemon { port, stats_file, outbox_file } => cmd_daemon(&port, stats_file, outbox_file).await,
@@ -581,12 +597,22 @@ fn cmd_wallet(cmd: WalletCommands) -> Result<()> {
 }
 
 /// Send a Dogecoin transaction over LoRa.
-async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Option<&str>, fee: Option<f64>) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+async fn cmd_send(port: &str, to: &str, amount: f64, memo: Option<&str>, wif: Option<&str>, fee: Option<f64>, gateway: Option<&str>, timeout: u64, force: bool) -> Result<()> {
     if !wallet::is_valid_address(to) {
         anyhow::bail!("'{}' is not a valid Dogecoin address (must start with 'D')", to);
     }
     if amount <= 0.0 {
         anyhow::bail!("Amount must be > 0 DOGE");
+    }
+
+    if let Some(key) = wif {
+        println!("[1/4] 🔑 Signing P2PKH transaction (fetching UTXOs from chain backends)...");
+        let (raw, paid) = wallet::build_signed_transaction_with_fee(key, to, amount, fee)
+            .await
+            .context("Transaction signing failed")?;
+        println!("      {:.8} DOGE → {} + {:.8} fee ({} bytes)", amount, to, paid, raw.len());
+        return radio_signed_tx(port, &raw, gateway, timeout, force).await;
     }
 
     println!("🐕 Connecting to {} ...", port);
@@ -884,42 +910,97 @@ fn wallet_mnemonic_ok(line: &str) -> bool {
 }
 
 /// Radio a pre-signed transaction to a gateway and wait for its TX_ACK.
-async fn cmd_send_tx_hex(port: &str, file: &str, gateway: Option<&str>, timeout: u64) -> Result<()> {
+async fn cmd_send_tx_hex(port: &str, file: &str, gateway: Option<&str>, timeout: u64, force: bool) -> Result<()> {
     let hex_tx = std::fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
     let raw = hex::decode(hex_tx.trim()).context("file is not valid hex")?;
     let (_from, outs) = wallet::verify_signed_tx(&raw).context("not a valid signed transaction")?;
-    let txid = wallet::compute_txid(&raw);
-    println!("🔎 txid {} ({} bytes)", txid, raw.len());
-    for (v, a) in &outs { println!("   out {:.8} DOGE → {}", *v as f64 / 1e8, a); }
+    println!("[1/4] 🔎 verified signed tx ({} bytes)", raw.len());
+    for (v, a) in &outs { println!("      out {:.8} DOGE → {}", *v as f64 / 1e8, a); }
+    radio_signed_tx(port, &raw, gateway, timeout, force).await
+}
+
+/// Where the sender's duplicate-broadcast guard is kept.
+fn sent_ledger_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("RADIODOGE_SENT_LEDGER") { return p.into(); }
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home).join(".radiodoge").join("sent-txids.json")
+}
+
+/// Shared by `send --wif` and `send-tx-hex`: duplicate guard, frame + radio the
+/// transaction with progress, then wait for the gateway's ACK / QUEUED / NACK.
+async fn radio_signed_tx(port: &str, raw: &[u8], gateway: Option<&str>, timeout: u64, force: bool) -> Result<()> {
+    let txid = wallet::compute_txid(raw);
+    println!("      txid {}", txid);
+    let ledger_path = sent_ledger_path();
+    let mut ledger = RecentSends::from_json(&std::fs::read_to_string(&ledger_path).unwrap_or_default());
+    if let Some(age) = ledger.recently_sent(&txid, unix_now()) {
+        if !force {
+            anyhow::bail!(
+                "this txid was radioed {} min ago — check {} before resending (pass --force to send it again)",
+                age / 60, tx_reply::explorer_url(&txid)
+            );
+        }
+        println!("⚠️  --force: radioing a txid already sent {} min ago", age / 60);
+    }
     let dst = match gateway { Some(g) => parse_node_addr(g)?, None => NodeAddress::broadcast() };
     let manager = open_board(port).await?;
     let mut rx = manager.subscribe_packets();
     let firmware = manager.ensure_firmware_version().await;
     let src = manager.get_node_address().await;
-    let frames = radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, &raw, firmware.as_deref())
-        .map_err(|m| anyhow::anyhow!("{}", m))?;
+    let frames = match radio::build_tx_frames(&src, &dst, radio::CMD_DOGE_TX, raw, firmware.as_deref()) {
+        Ok(f) => f,
+        Err(m) => { manager.disconnect().await.ok(); anyhow::bail!("{}", m) }
+    };
     let n = frames.len();
+    println!("[2/4] 📦 {} frame(s), {} → {}", n, src.to_display_string(), dst.to_display_string());
     let t0 = std::time::Instant::now();
-    manager.send_frames(frames).await.context("sending over LoRa")?;
-    println!("📡 {} frame(s) on air {} → {} in {} ms; waiting for TX_ACK…",
-        n, src.to_display_string(), dst.to_display_string(), t0.elapsed().as_millis());
-    let ack = tokio::time::timeout(Duration::from_secs(timeout), async {
+    let sent = manager.send_frames_with_progress(frames, move |done, total| {
+        if total > 1 { println!("      frame {}/{} on air", done, total); }
+    }).await;
+    if let Err(e) = sent {
+        manager.disconnect().await.ok();
+        return Err(e).context("the board did not take every frame — nothing complete was aired");
+    }
+    ledger.record(&txid, unix_now());
+    if let Some(dir) = ledger_path.parent() { std::fs::create_dir_all(dir).ok(); }
+    std::fs::write(&ledger_path, ledger.to_json()).ok();
+    println!("[3/4] 📡 on air in {} ms; waiting up to {} s for the gateway…", t0.elapsed().as_millis(), timeout);
+    let want = txid.clone();
+    let me = src.clone();
+    let reply = tokio::time::timeout(Duration::from_secs(timeout), async {
         while let Ok(pkt) = rx.recv().await {
-            let raw = String::from_utf8_lossy(&hex::decode(&pkt.payload_hex).unwrap_or_default()).to_string();
-            if let Some(i) = raw.find("TX_ACK:") {
-                return Some((pkt.source.clone(), raw[i + 7..].trim_end_matches('\0').trim().to_string()));
+            let text = String::from_utf8_lossy(&hex::decode(&pkt.payload_hex).unwrap_or_default()).to_string();
+            // Ignore other senders' replies on a shared channel: the txid must
+            // match, unless the reply is addressed to this node specifically.
+            let parsed = TxReply::parse(&text).filter(|r| r.txid() == want || pkt.destination == me);
+            match parsed {
+                // QUEUED is progress, not the end: keep listening for the ACK.
+                Some(TxReply::Queued { .. }) => {
+                    println!("      ⏳ {} queued it (no internet yet); it will retry", pkt.source.to_display_string());
+                }
+                Some(r) => return Some((pkt.source.clone(), r)),
+                None => {}
             }
         }
         None
     }).await.ok().flatten();
     manager.disconnect().await.ok();
-    match ack {
-        Some((gw, id)) => {
-            println!("✅ TX_ACK from {} after {} ms: {}", gw.to_display_string(), t0.elapsed().as_millis(), id);
+    let link = tx_reply::explorer_url(&txid);
+    match reply {
+        Some((gw, TxReply::Ack { txid: id })) => {
+            println!("[4/4] ✅ TX_ACK from {} after {} ms", gw.to_display_string(), t0.elapsed().as_millis());
+            println!("      txid {}", id);
+            println!("      {}", tx_reply::explorer_url(&id));
             if id != txid { println!("⚠️  ACK txid differs from the local txid {}", txid); }
             Ok(())
         }
-        None => anyhow::bail!("No TX_ACK within {} s — check the mempool for {} before any retry", timeout, txid),
+        Some((gw, TxReply::Nack { txid: id, reason })) => {
+            anyhow::bail!("TX_NACK from {} for {}: {} — the network rejected it; do not resend the same transaction", gw.to_display_string(), id, reason)
+        }
+        Some((_, TxReply::Queued { .. })) | None => anyhow::bail!(
+            "No TX_ACK within {} s. The transaction may still be queued or broadcast — check {} before any retry",
+            timeout, link
+        ),
     }
 }
 
@@ -1477,6 +1558,16 @@ async fn daemon_broadcast_and_ack(
                     daemon_send_tx_ack(&txid, &mgr, &source, &stats, &outbox).await;
                     return;
                 }
+                if tx_reply::is_permanent_rejection(&msg) {
+                    // The network judged the transaction itself; retrying the
+                    // same bytes cannot help, so tell the sender instead of
+                    // queueing it forever.
+                    log::warn!("GATEWAY  network rejected txid={}: {} — sending TX_NACK", txid, msg);
+                    stats_record(&stats, GatewayEventKind::TxFailed, &source, msg.clone());
+                    let nack = TxReply::Nack { txid: txid.clone(), reason: msg }.to_text();
+                    send_reply(&nack, &mgr, &source, &stats, &outbox, GatewayEventKind::AckSent).await;
+                    return;
+                }
                 log::warn!("GATEWAY  broadcast attempt {}/3 failed: {}", attempt + 1, msg);
             }
         }
@@ -1490,7 +1581,10 @@ async fn daemon_broadcast_and_ack(
         .map(|mut o| o.queue_broadcast(&txid, &raw_hex, &source.to_display_string(), unix_now()))
         .unwrap_or(false);
     if queued {
-        stats_record(&stats, GatewayEventKind::TxQueued, &source, txid);
+        stats_record(&stats, GatewayEventKind::TxQueued, &source, txid.clone());
+        // Let the sender know it is held, so it does not resend in a panic.
+        let q = TxReply::Queued { txid }.to_text();
+        send_reply(&q, &mgr, &source, &stats, &outbox, GatewayEventKind::AckSent).await;
     }
 }
 
@@ -1578,8 +1672,12 @@ async fn send_reply(
 
 /// What the dashboard shows for a reply: the txid for an ACK, the amount for a balance.
 fn reply_detail(text: &str) -> String {
-    if let Some(id) = text.strip_prefix("TX_ACK:") {
-        id.to_string()
+    if let Some(r) = TxReply::parse(text) {
+        match r {
+            TxReply::Ack { txid } => txid,
+            TxReply::Queued { txid } => format!("{} (queued)", txid),
+            TxReply::Nack { txid, reason } => format!("{} (NACK: {})", txid, reason),
+        }
     } else if let Some(k) = text.strip_prefix("BAL:").and_then(|k| k.parse::<u64>().ok()) {
         format!("{:.8} DOGE", k as f64 / 1e8)
     } else {

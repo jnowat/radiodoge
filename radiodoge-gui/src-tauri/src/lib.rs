@@ -28,11 +28,11 @@ use tokio::sync::Mutex;
 #[cfg(desktop)]
 mod tray;
 
-use radiodoge_core::{radio, wallet};
+use radiodoge_core::{radio, tx_reply, wallet};
 use radiodoge_core::serial::SerialManager;
 use radiodoge_core::types::{
     BoardSettings, ConnectionStatusEvent, IncomingPacket, LoraSettings, NeighborEntry,
-    NodeAddress, PortInfo, RadioStats, TransactionRequest, TxHistoryEntry, WalletInfo,
+    NodeAddress, PortInfo, RadioStats, SendOutcome, TransactionRequest, TxHistoryEntry, WalletInfo,
 };
 
 /// Maximum transaction history entries kept in memory + persisted to disk.
@@ -776,7 +776,7 @@ async fn send_transaction(
     tx: TransactionRequest,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<String, String> {
+) -> Result<SendOutcome, String> {
     // On Android the JS bridge owns the USB/BLE port, so serial.is_connected() is
     // always false. Everywhere else, not connected means not connected.
     let is_mobile = js_bridge_owns_port(&state).await;
@@ -818,6 +818,27 @@ async fn send_transaction(
         .map_err(|e| e.to_string())?
     };
 
+    // Duplicate-broadcast guard: the same signed bytes radioed twice in a short
+    // window is almost always a double click or an impatient retry. The network
+    // would drop the copy, but it costs airtime and confuses the ACK display.
+    let txid = tx.from_private_key_wif.as_ref().map(|_| wallet::compute_txid(&payload));
+    if let Some(id) = txid.as_deref() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut recent = RECENT_SENDS.lock().await;
+        if let Some(age) = recent.recently_sent(id, now) {
+            if !tx.allow_resend {
+                return Err(format!(
+                    "DUPLICATE: this exact transaction ({}) was radioed {} s ago. Nothing was sent. Check {} before resending.",
+                    id, age, tx_reply::explorer_url(id)
+                ));
+            }
+        }
+        recent.record(id, now);
+    }
+
     // How the payload is framed depends on what the board's firmware can
     // receive: one packet on older builds, a multipart sequence on v0.4.2+.
     // `build_tx_frames` refuses anything the board would mis-frame rather than
@@ -825,6 +846,7 @@ async fn send_transaction(
     let src = state.serial.get_node_address().await;
     let dst = NodeAddress::broadcast();
     let signed_label = tx.from_private_key_wif.is_some();
+    let frame_count: usize;
 
     if is_mobile {
         // Mobile path: the JS bridge owns the port; emit packet bytes via a
@@ -840,6 +862,7 @@ async fn send_transaction(
             };
             emit_debug_traffic(&app, "TX", &hex::encode(pkt), &label);
         }
+        frame_count = packets.len();
         let _ = app.emit("mobile-tx-packets", &packets);
     } else {
         let fw = state.serial.ensure_firmware_version().await;
@@ -863,19 +886,26 @@ async fn send_transaction(
         // several seconds of real airtime, so report progress rather than
         // leaving the UI to guess whether anything is happening.
         let total_frames = frames.len();
+        frame_count = total_frames;
         let app_for_progress = app.clone();
-        state
+        let sent = state
             .serial
             .send_frames_with_progress(frames, move |sent, total| {
-                if total > 1 {
-                    let _ = app_for_progress.emit(
-                        "transaction-progress",
-                        serde_json::json!({ "sent": sent, "total": total }),
-                    );
-                }
+                let _ = app_for_progress.emit(
+                    "transaction-progress",
+                    serde_json::json!({ "sent": sent, "total": total }),
+                );
             })
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string());
+        if let Err(e) = sent {
+            // Not every frame reached the board, so no complete transaction
+            // was aired — allow an immediate retry.
+            if let Some(id) = txid.as_deref() {
+                RECENT_SENDS.lock().await.forget(id);
+            }
+            return Err(e);
+        }
         if total_frames > 1 {
             log::info!("Transaction sent as {} LoRa frames", total_frames);
         }
@@ -930,8 +960,17 @@ async fn send_transaction(
     }
 
     log::info!("Transaction sent: {}", msg);
-    Ok(msg)
+    Ok(SendOutcome {
+        message: msg,
+        explorer_url: txid.as_deref().map(tx_reply::explorer_url),
+        txid,
+        frames: frame_count,
+    })
 }
+
+/// Txids radioed this session, for the duplicate-broadcast guard.
+static RECENT_SENDS: std::sync::LazyLock<tokio::sync::Mutex<radiodoge_core::tx_reply::RecentSends>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(Default::default()));
 
 // ── v0.3.22 — Multi-channel scanning ───────────────────────────────────────
 
