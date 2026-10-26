@@ -8,7 +8,7 @@
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
-  import type { ParsedPayment } from '$lib/types';
+  import type { FeeEstimate, ParsedPayment } from '$lib/types';
   import DogeSpinner from './DogeSpinner.svelte';
   interface Props {
     onTriggerConfetti: () => void;
@@ -76,6 +76,39 @@
   });
 
   /** True only when ALL conditions are met — including a loaded wallet. */
+  // ── Fee estimation ──────────────────────────────────────────────────────
+  // Ask the chain backends for the current fee rate whenever the amount or
+  // wallet changes (debounced). On failure keep the fixed 1 DOGE default.
+  const DEFAULT_FEE_DOGE = 1;
+  let feeEstimate = $state<FeeEstimate | null>(null);
+  let feeEstimating = $state(false);
+  let feeError = $state<string | null>(null);
+  let useEstimatedFee = $state(true);
+  const effectiveFee = $derived(() =>
+    useEstimatedFee && feeEstimate ? feeEstimate.feeDoge : DEFAULT_FEE_DOGE
+  );
+
+  $effect(() => {
+    const address = wallet.address;
+    const amount = parseFloat(amountDoge);
+    feeEstimate = null;
+    feeError = null;
+    if (!wallet.isGenerated || !address || !(amount > 0)) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      feeEstimating = true;
+      try {
+        const est = await invoke<FeeEstimate>('estimate_fee', { fromAddress: address, amountDoge: amount });
+        if (!cancelled) feeEstimate = est;
+      } catch (e) {
+        if (!cancelled) feeError = String(e);
+      } finally {
+        if (!cancelled) feeEstimating = false;
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+  });
+
   const canSend = $derived(() =>
     connection.isConnected &&
     wallet.isGenerated &&
@@ -116,6 +149,7 @@
           amountDoge: parseFloat(amountDoge),
           memo: memo.trim() || undefined,
           fromPrivateKeyWif: wallet.privateKeyWif || undefined,
+          feeDoge: effectiveFee(),
         }
       });
 
@@ -365,7 +399,21 @@
         color: var(--doge-muted);
       ">
         <span>Network fee</span>
-        <span style="font-family: var(--font-mono); color: var(--doge-text);">1.00000000 DOGE (fixed)</span>
+        <span style="display: flex; align-items: center; gap: 10px;">
+          {#if feeEstimating}
+            <span>estimating…</span>
+          {:else if feeEstimate}
+            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;" title="Uncheck to pay the fixed 1 DOGE fee instead">
+              <input type="checkbox" bind:checked={useEstimatedFee} />
+              estimated ({(feeEstimate.rateKoinusPerKb / 1e8).toFixed(4)} DOGE/kB, {feeEstimate.sizeBytes} B)
+            </label>
+          {:else if feeError}
+            <span title={feeError}>estimate unavailable</span>
+          {/if}
+          <span style="font-family: var(--font-mono); color: var(--doge-text);">
+            {effectiveFee().toFixed(8)} DOGE{useEstimatedFee && feeEstimate ? '' : ' (default)'}
+          </span>
+        </span>
       </div>
     {/if}
 

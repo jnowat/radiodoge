@@ -449,6 +449,88 @@ pub async fn build_signed_transaction(
     Ok(tx)
 }
 
+// ─── Fee estimation ──────────────────────────────────────────────────────────
+
+/// Floor for estimated fees: 0.01 DOGE per kB, Dogecoin Core's recommended
+/// minimum relay/wallet rate. Estimates below this may not propagate.
+pub const MIN_FEE_RATE_KOINUS_PER_KB: u64 = 1_000_000;
+
+/// Ceiling for an *automatic* fee. A backend reporting something absurd must
+/// never silently cost the user more than this; above it the app falls back
+/// to `DEFAULT_TX_FEE_DOGE` and lets the user decide.
+pub const MAX_AUTO_FEE_DOGE: f64 = 10.0;
+
+/// Serialized size of a P2PKH transaction with compressed keys
+/// (10 B overhead, ~148 B per input, 34 B per output).
+pub fn p2pkh_tx_size(inputs: usize, outputs: usize) -> usize {
+    10 + 148 * inputs + 34 * outputs
+}
+
+/// Fee in koinus for `size_bytes` at `rate` koinus/kB, rounded up, never
+/// below the minimum relay rate.
+pub fn fee_for_size(rate_koinus_per_kb: u64, size_bytes: usize) -> u64 {
+    let rate = rate_koinus_per_kb.max(MIN_FEE_RATE_KOINUS_PER_KB);
+    (rate as u128 * size_bytes as u128).div_ceil(1000) as u64
+}
+
+/// Result of [`estimate_fee`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeeEstimate {
+    pub fee_doge: f64,
+    pub rate_koinus_per_kb: u64,
+    pub inputs: usize,
+    pub size_bytes: usize,
+}
+
+/// Pure coin-selection + sizing step of [`estimate_fee`]: mirrors
+/// `build_signed_transaction` (largest spendable coins first, change output
+/// assumed). `values` are spendable UTXO values in koinus.
+pub fn estimate_fee_for(mut values: Vec<u64>, amount_koinus: u64, rate_koinus_per_kb: u64) -> Result<FeeEstimate> {
+    values.sort_unstable_by(|a, b| b.cmp(a));
+    let mut sum: u64 = 0;
+    for (i, v) in values.iter().enumerate() {
+        sum = sum.saturating_add(*v);
+        let n = i + 1;
+        let size = p2pkh_tx_size(n, 2);
+        let fee = fee_for_size(rate_koinus_per_kb, size);
+        if sum >= amount_koinus.saturating_add(fee) {
+            return Ok(FeeEstimate {
+                fee_doge: fee as f64 / 1e8,
+                rate_koinus_per_kb: rate_koinus_per_kb.max(MIN_FEE_RATE_KOINUS_PER_KB),
+                inputs: n,
+                size_bytes: size,
+            });
+        }
+    }
+    anyhow::bail!(
+        "Insufficient confirmed funds for {:.8} DOGE plus fee ({:.8} DOGE spendable)",
+        amount_koinus as f64 / 1e8,
+        sum as f64 / 1e8
+    )
+}
+
+/// Estimate the network fee for sending `amount_doge` from `from_address`,
+/// using the configured backends' current fee rate.
+pub async fn estimate_fee(from_address: &str, amount_doge: f64) -> Result<FeeEstimate> {
+    if !amount_doge.is_finite() || amount_doge <= 0.0 {
+        anyhow::bail!("Invalid send amount: {}", amount_doge);
+    }
+    let rate = crate::backend::fetch_fee_rate().await?;
+    let values: Vec<u64> = crate::backend::fetch_utxos(from_address)
+        .await?
+        .into_iter()
+        .filter(|u| u.confirmations >= 1)
+        .filter(|u| !u.coinbase || u.confirmations >= COINBASE_MATURITY_BLOCKS)
+        .map(|u| u.value)
+        .collect();
+    let est = estimate_fee_for(values, (amount_doge * 1e8).round() as u64, rate)?;
+    if est.fee_doge > MAX_AUTO_FEE_DOGE {
+        anyhow::bail!("Estimated fee {:.8} DOGE exceeds the {} DOGE safety cap", est.fee_doge, MAX_AUTO_FEE_DOGE);
+    }
+    Ok(est)
+}
+
 /// Fetch the confirmed balance (koinus) for a Dogecoin address from the
 /// configured chain backends — Dogecoin Core RPC first, then the public
 /// fallback (see [`crate::backend`]).
@@ -921,6 +1003,24 @@ pub fn decode_transaction_payload(payload: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fee_sizing_and_floor() {
+        use super::*;
+        assert_eq!(p2pkh_tx_size(1, 2), 226);
+        // Below-floor rate is raised to 0.01 DOGE/kB: 226 B -> 226_000 koinus.
+        assert_eq!(fee_for_size(10, 226), 226_000);
+        // Rounds up.
+        assert_eq!(fee_for_size(1_000_001, 1), 1_001);
+        let e = estimate_fee_for(vec![5_000_000, 200_000_000], 100_000_000, 2_000_000).unwrap();
+        assert_eq!(e.inputs, 1);
+        assert_eq!(e.size_bytes, 226);
+        assert!((e.fee_doge - 0.00452).abs() < 1e-12);
+        // Needs both coins.
+        let e = estimate_fee_for(vec![60_000_000, 60_000_000], 100_000_000, 0).unwrap();
+        assert_eq!(e.inputs, 2);
+        assert!(estimate_fee_for(vec![1_000], 100_000_000, 0).is_err());
+    }
+
     use super::*;
 
     #[test]

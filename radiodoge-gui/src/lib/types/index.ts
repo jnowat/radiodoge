@@ -45,6 +45,8 @@ export interface TransactionRequest {
   amountDoge: number;
   memo?: string;
   fromPrivateKeyWif?: string;
+  /** Network fee in DOGE; omitted = fixed 1 DOGE default. */
+  feeDoge?: number;
 }
 
 /** Rich information about a serial port, including USB device details. */
@@ -236,4 +238,12 @@ export const DOGE_PHRASES = [
 
 export function randomDogephrase(): string {
   return DOGE_PHRASES[Math.floor(Math.random() * DOGE_PHRASES.length)];
+}
+
+/** Result of the `estimate_fee` command. */
+export interface FeeEstimate {
+  feeDoge: number;
+  rateKoinusPerKb: number;
+  inputs: number;
+  sizeBytes: number;
 }

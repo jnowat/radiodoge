@@ -132,6 +132,9 @@ pub struct TransactionRequest {
     pub memo: Option<String>,
     /// Sender's WIF private key (from generated wallet)
     pub from_private_key_wif: Option<String>,
+    /// Network fee in DOGE. `None` uses `wallet::DEFAULT_TX_FEE_DOGE`.
+    #[serde(default)]
+    pub fee_doge: Option<f64>,
 }
 
 /// An incoming LoRa packet captured by the receive loop.

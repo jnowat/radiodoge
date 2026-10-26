@@ -7,6 +7,17 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+
+## [Unreleased] — Fee estimation
+
+### Added
+- **Estimated network fees in the Send tab.** The app queries the configured chain backends for the current fee
+  rate (Core `estimatesmartfee 6`, BlockCypher `medium_fee_per_kb`, Blockbook `/estimatefee/6`), runs the same
+  largest-first coin selection as signing, and sizes the fee to the actual P2PKH transaction. Floor 0.01 DOGE/kB,
+  safety cap 10 DOGE. If no backend answers, or you untick "estimated", the fixed 1 DOGE fee is used as before.
+- Core: `backend::fee_rate_from` / `fetch_fee_rate`, `wallet::estimate_fee`, `estimate_fee_for`, `fee_for_size`,
+  `p2pkh_tx_size`; Tauri command `estimate_fee`; optional `feeDoge` on `TransactionRequest` (validated, 0–10 DOGE).
+- The CLI still uses the fixed 1 DOGE fee.
 ## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
 > Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.
