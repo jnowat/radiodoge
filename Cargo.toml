@@ -8,6 +8,7 @@
 #   radiodoge-core    Pure Rust core library (protocol, wallet, serial) — no Tauri
 #   radiodoge-cli     Headless CLI/daemon (Rust port of RadioDogeSharp + serdog)
 #   radiodoge-gui     Tauri 2 desktop GUI (Svelte frontend + Rust backend)
+#   radiodoge-inspector  Packet inspector (protocol-only core, builds for wasm32)
 #
 # Build all crates:   cargo build --workspace
 # Run tests:          cargo test  --workspace
@@ -17,6 +18,7 @@
 members = [
     "crates/radiodoge-core",
     "crates/radiodoge-cli",
+    "crates/radiodoge-inspector",
     "radiodoge-gui/src-tauri",
 ]
 resolver = "2"
