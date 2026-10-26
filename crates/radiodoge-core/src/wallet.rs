@@ -622,12 +622,6 @@ pub async fn fetch_balance(address: &str) -> Result<u64> {
     crate::backend::fetch_balance(address).await
 }
 
-/// Deprecated name kept for source compatibility; no longer uses Trezor.
-#[deprecated(note = "use fetch_balance; Blockbook is now one optional backend")]
-pub async fn fetch_balance_blockbook(address: &str) -> Result<u64> {
-    fetch_balance(address).await
-}
-
 /// Broadcast a raw signed Dogecoin transaction (hex) through the configured
 /// backends. Returns the txid on success.
 pub async fn broadcast_raw_tx(raw_hex: &str) -> Result<String> {
