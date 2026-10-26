@@ -12,6 +12,17 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## 0.3.22 — Multi-channel scanning
+
+### Added
+- **Multi-channel scan** (Mesh tab, desktop): hops the board across frequency/SF presets (US915 SF7–12 at 915 MHz plus the Meshtastic LongFast channel, or EU868), listens 5–120 s per channel and lists the packets, nodes and best RSSI heard on each. The best channel is starred. You can stop the scan at any time, and the board always retunes to your saved LoRa settings afterwards.
+- `radiodoge-core::scan`: channel plan, validation and result tally, with tests.
+
+### Notes
+- Each hop uses the existing set-LoRa-params command, which the firmware saves to flash, so frequent long scans add some flash wear.
+- Only RadioDoge packets are decoded; Meshtastic frames on a Meshtastic preset are not.
+
 ## 0.3.21 — Multi-gateway dashboard
 
 ### Added
