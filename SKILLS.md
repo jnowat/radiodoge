@@ -267,8 +267,9 @@ Touching the protocol means touching every layer. In order:
   on the same port, disambiguated by whether byte 1 is zero. Intentional. See PROTOCOL.md §7.
 - **`sleep(400ms)` / `sleep(600ms)` after sending a query.** The board needs real time to answer over UART;
   these were tuned against hardware. Don't shrink them without a board to test on.
-- **The flat 1 DOGE fee.** Deliberate — it covers any plausible transaction size on Dogecoin. Dynamic fee
-  estimation is on the roadmap.
+- **The 0.01 DOGE-per-started-kB fee.** Deliberate — it is Dogecoin Core's recommended rate (10× the
+  0.001 DOGE/kB minimum relay fee), so it relays without market-based estimation. Callers can override it.
+  Dynamic fee estimation is on the roadmap.
 - **SPV checks `SHA256d` against the `nBits` target.** Dogecoin's actual PoW is Scrypt/AuxPoW, so this is a
   consistency check, not trustless PoW validation. The module documents this; chain linkage and merkle proofs
   *are* fully correct.

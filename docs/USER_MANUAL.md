@@ -204,8 +204,9 @@ Open the **Send** tab (needs a connection *and* a loaded wallet).
 2. **Amount (DOGE)** — any amount > 0 (step `0.00000001`).
 3. **Memo** *(optional)* — up to 100 characters. *(The memo rides in the LoRa packet; it is ignored when the CLI
    signs a real transaction with `--wif`.)*
-4. The **From** row shows your loaded wallet address, and a fee summary appears:
-   **Network fee 1.00000000 DOGE (fixed)** — so the total debit is `amount + 1 DOGE`.
+4. The **From** row shows your loaded wallet address, and a **Network fee (DOGE)** field appears. Leave it
+   empty for the recommended fee — **0.01 DOGE per started kB**, so 0.01 DOGE for a typical transaction — or type
+   your own. The total debit is `amount + fee`.
 5. Click **🚀 Sign & Broadcast via Radio**. The button is disabled until you're connected, have a wallet, and
    both fields are valid; its tooltip tells you what's missing.
 
@@ -384,15 +385,21 @@ Your **recovery phrase is never written to disk** — back it up yourself.
 | `wallet import-wif <WIF>` | Import from a WIF key (`Q…`) |
 | `wallet validate <ADDRESS>` | Validate a Dogecoin address |
 | `ping -p <PORT>` | Ping the board (500 ms window) |
-| `send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>]` | Send over LoRa; `-w` signs a real tx first |
+| `send -p <PORT> -t <ADDR> -a <DOGE> [-m <MEMO>] [-w <WIF>] [--fee <DOGE>]` | Send over LoRa; `-w` signs a real tx first |
 | `receive -p <PORT> [-T <SECS>]` | Listen for packets (`-T 0` = forever; default 30 s; note capital **-T**) |
 | `connect <PORT>` | Interactive REPL (positional port) |
 | `balance -a <ADDRESS>` | Confirmed balance via Core RPC → BlockCypher (no board needed) |
-| `broadcast -w <WIF> -t <ADDR> -a <DOGE>` | Sign + push straight to the network over the internet |
+| `broadcast -w <WIF> -t <ADDR> -a <DOGE> [--fee <DOGE>]` | Sign + push straight to the network over the internet |
+| `set-address -p <PORT> <a.b.c>` | Set the board's LoRa node address |
+| `lora-ping -p <PORT> -t <a.b.c>` | Over-the-air ping; waits for the other board's ACK |
+| `message -p <PORT> -t <a.b.c> "<TEXT>" [-T <SECS>]` | Text message over LoRa (multipart when long) |
+| `lora-balance -p <PORT> -a <ADDR> [-g <a.b.c>]` | Balance from a LoRa gateway (any gateway by default) |
+| `sign-tx -t <ADDR> -a <DOGE> -o <FILE> [--fee <DOGE>]` | Sign to a hex file without broadcasting (`RADIODOGE_WIF` or `RADIODOGE_MNEMONIC_FILE`) |
+| `send-tx-hex -p <PORT> -f <FILE> [-g <a.b.c>]` | Radio a pre-signed transaction to a gateway; waits for `TX_ACK` |
 | `daemon -p <PORT>` | Run as a gateway daemon |
 
-Global `-v`/`--verbose` enables debug logging (or set `RUST_LOG=debug`). A fixed **1 DOGE** fee is added to
-`send --wif` and `broadcast`.
+Global `-v`/`--verbose` enables debug logging (or set `RUST_LOG=debug`). The fee for `send --wif`,
+`broadcast` and `sign-tx` defaults to **0.01 DOGE per started kB** (minimum 0.01 DOGE); override with `--fee <DOGE>`.
 
 ### The `connect` REPL
 

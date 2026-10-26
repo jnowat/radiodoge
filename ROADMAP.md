@@ -126,7 +126,7 @@ Rock-solid against real hardware, and now on your phone.
   length so they are self-delimiting on a byte stream, and transmissions wait for `TxDone` instead of being
   aborted by the main loop. The host splits a payload over 192 bytes into frames and sends them one at a time,
   waiting for the board to acknowledge each, gated on the board reporting `FW11` or newer
-- 🔜 **Fee estimation** — gateway reports the current mempool fee rate; the app sets an appropriate sat/byte fee.
+- ✅ **Fee estimation** — with no explicit fee, the desktop app, mobile send and CLI pay the configured chain backends' current rate (Core `estimatesmartfee`, BlockCypher, Blockbook) per started kB, floored at the recommended 0.01 DOGE/kB (also the fallback) and capped at 10 DOGE; `radiodoge-cli fee` shows it. *Gateway-reported rates over LoRa are still open.*
   Today the fee is a flat 1 DOGE regardless of transaction size
 
 ---
@@ -148,7 +148,7 @@ Bridge RadioDoge with the existing Meshtastic community.
 
 - 🔜 **iOS** — Bluetooth LE to the Heltec via the BLE-serial bridge
 - 🔜 **Linux AppImage + macOS .dmg** in CI — Tauri already supports these targets
-- 🔜 **WebAssembly packet inspector** — a browser tool to decode RadioDoge packets from hex
+- ✅ **WebAssembly packet inspector** — `crates/radiodoge-inspector`: paste hex, get framed and decoded packets in the browser, using the app's own framing code (protocol-only `radiodoge-core` build)
 - ✅ **Gateway dashboard (v0.3.17)** — `radiodoge-cli daemon --stats-file` writes live counters (packets, relayed-in, transactions in/broadcast/failed/repeats, ACKs, balance replies, per-node RSSI/hops, recent activity); the Settings tab shows them while the app's gateway daemon runs
 - ✅ **Multi-gateway dashboard** — aggregate several gateways' stats files in one view (v0.3.21; HTTP endpoints still open)
 - 🔜 **Lightning over LoRa** — forward BOLT-11 invoices and HTLC state through the mesh
