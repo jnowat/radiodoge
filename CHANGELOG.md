@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40) and node discovery (#44)._
 
+## [0.3.27] — 2026-10-26 — Hardware-session harness
+
+### Added
+- `docs/HARDWARE_SESSION.md` and `scripts/hw-session.ps1`: a scripted two-board checklist — flash the app partition only (`0x10000`, NVS kept; the merged image is refused), verify node addresses `10.0.1`/`10.0.2`, USB and LoRa pings both ways, start the gateway daemon and request a balance over LoRa, then sign a tiny send **without broadcasting**. Every board step prompts first; keys come only from `RADIODOGE_WIF` / `RADIODOGE_MNEMONIC_FILE`. The live send is printed as a manual command.
+- `radiodoge-cli info -p PORT [--expect 10.0.1]`: read-only node address, firmware version, and multipart / raw-LoRa capability; non-zero exit on an address mismatch.
+
 ## [0.3.26] — 2026-10-26 — Light theme applies on every tab at startup
 
 ### Fixed

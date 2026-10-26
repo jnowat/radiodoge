@@ -207,6 +207,18 @@ enum Commands {
         fee: Option<f64>,
     },
 
+    /// Print the board's node address and firmware version (read-only, nothing is aired)
+    ///
+    /// With --expect, exits non-zero unless the address matches (used by the
+    /// hardware-session harness). Example: radiodoge-cli info -p COM3 --expect 10.0.1
+    Info {
+        #[arg(short, long)]
+        port: String,
+        /// Fail unless the board reports this node address
+        #[arg(long)]
+        expect: Option<String>,
+    },
+
     /// Ping the Heltec device and report round-trip success/failure
     ///
     /// Example: radiodoge-cli ping -p COM3
@@ -465,6 +477,7 @@ async fn main() -> Result<()> {
         }
         Commands::Receive { port, timeout } => cmd_receive(&port, timeout).await,
         Commands::Ping { port } => cmd_ping(&port).await,
+        Commands::Info { port, expect } => cmd_info(&port, expect.as_deref()).await,
         Commands::SetAddress { port, address } => cmd_set_address(&port, &address).await,
         Commands::Message { port, to, text, listen } => cmd_message(&port, &to, &text, listen).await,
         Commands::LoraPing { port, to, timeout } => cmd_lora_ping(&port, &to, timeout).await,
@@ -908,6 +921,26 @@ async fn cmd_send_tx_hex(port: &str, file: &str, gateway: Option<&str>, timeout:
         }
         None => anyhow::bail!("No TX_ACK within {} s — check the mempool for {} before any retry", timeout, txid),
     }
+}
+
+/// Read-only board identity: node address, firmware, and capability flags.
+async fn cmd_info(port: &str, expect: Option<&str>) -> Result<()> {
+    let want = expect.map(parse_node_addr).transpose()?;
+    let manager = open_board(port).await?;
+    let fw = manager.ensure_firmware_version().await;
+    let addr = manager.get_node_address().await;
+    manager.disconnect().await.ok();
+    println!("📍 node address: {}", addr.to_display_string());
+    println!("🧩 firmware:     {}", fw.as_deref().unwrap_or("unknown (no reply)"));
+    println!("   multipart TX: {}", if radio::firmware_supports_multipart(fw.as_deref()) { "yes" } else { "no" });
+    println!("   raw LoRa:     {}", if radio::firmware_supports_raw(fw.as_deref()) { "yes" } else { "no" });
+    if let Some(w) = want {
+        if w != addr {
+            anyhow::bail!("expected node address {} but the board reports {}", w.to_display_string(), addr.to_display_string());
+        }
+        println!("✅ address matches {}", w.to_display_string());
+    }
+    Ok(())
 }
 
 /// Ping the Heltec device.
