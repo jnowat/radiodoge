@@ -1664,6 +1664,7 @@ fn parse_node_num(from: &str) -> Result<u32> {
     }.context("--from must be a u32")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_meshtastic_bridge(
     port: &str, listen: u16, send_hex: Option<String>, text: Option<String>,
     from: &str, freq_khz: u32, power: i8, channel: ChannelArgs,
