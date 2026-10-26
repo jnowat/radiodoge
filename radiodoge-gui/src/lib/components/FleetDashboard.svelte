@@ -77,7 +77,7 @@
   </div>
 
   <div class="add">
-    <input bind:value={draft} aria-label="Gateway stats file path" placeholder="Path to another gateway's gateway-stats.json"
+    <input bind:value={draft} placeholder="Path to another gateway's gateway-stats.json"
       onkeydown={(e) => e.key === 'Enter' && add()} aria-label="Stats file path" />
     <button class="ghost" onclick={add} disabled={!draft.trim()}>Add</button>
   </div>

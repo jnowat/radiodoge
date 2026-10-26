@@ -1080,7 +1080,6 @@
         <input
           type="password"
           aria-label="Wallet passphrase"
-          autocomplete="current-password"
           placeholder="Enter passphrase…"
           bind:value={unlockPassphrase}
           autocomplete="current-password"
