@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.37] - 2026-10-26
+
+### Changed
+- `docs/HARDWARE_SESSION.md`: the gateway is now `10.0.1` (the firmware default) and the sender `10.0.2`, with the matching `hw-session.ps1 -AddrA/-AddrB` call and a "one board per PC" table for running the steps by hand on two machines.
+
+Hardware session on two Heltec V3 boards (FW12): flash, identity, USB and LoRa pings both ways, node discovery both ways and balance over LoRa through the `10.0.1` gateway all passed. Nothing was broadcast.
+
 ## [0.3.36] - 2026-10-26
 
 ### Added
