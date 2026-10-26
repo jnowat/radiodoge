@@ -11,7 +11,8 @@
 
   type EventKind =
     | 'txReceived' | 'txBroadcast' | 'txFailed' | 'ackSent' | 'ackFailed'
-    | 'balanceRequest' | 'balanceReplied' | 'balanceFailed';
+    | 'balanceRequest' | 'balanceReplied' | 'balanceFailed'
+    | 'txQueued' | 'replyQueued' | 'replyForwarded' | 'expired';
   interface NodeTraffic { packets: number; transactions: number; lastSeen: number; lastRssi: number; lastHops: number }
   interface GatewayEvent { at: number; kind: EventKind; node: string; detail: string }
   interface GatewayStats {
@@ -21,6 +22,7 @@
     txReceived: number; txBroadcast: number; txDuplicates: number; txFailed: number;
     acksSent: number; acksFailed: number;
     balanceRequests: number; balanceReplies: number; balanceFailures: number;
+    txQueued?: number; repliesForwarded?: number; outboxBroadcasts?: number; outboxReplies?: number;
     nodes: Record<string, NodeTraffic>;
     events: GatewayEvent[];
   }
@@ -57,6 +59,10 @@
     balanceRequest: { icon: '🔎', label: 'Balance request', tone: 'var(--doge-blue)' },
     balanceReplied: { icon: '💰', label: 'Balance replied', tone: 'var(--doge-yellow)' },
     balanceFailed: { icon: '⚠️', label: 'Balance failed', tone: 'var(--doge-red)' },
+    txQueued: { icon: '📦', label: 'Queued for retry', tone: 'var(--doge-yellow)' },
+    replyQueued: { icon: '📦', label: 'Reply held for node', tone: 'var(--doge-yellow)' },
+    replyForwarded: { icon: '📨', label: 'Held reply delivered', tone: 'var(--doge-neon)' },
+    expired: { icon: '⌛', label: 'Expired unsent', tone: 'var(--doge-red)' },
   };
 
   function ago(t: number): string {
@@ -118,11 +124,15 @@
       <div class="tile"><div class="v" style="color: var(--doge-neon)">{stats.txBroadcast}</div><div class="k">Broadcast OK</div>
         <div class="h">{successRate === null ? 'no attempts yet' : `${successRate}% success`}</div></div>
       <div class="tile"><div class="v" class:bad={stats.txFailed > 0}>{stats.txFailed}</div><div class="k">Broadcast failed</div>
-        <div class="h">after 3 attempts each</div></div>
+        <div class="h">expired in the outbox</div></div>
       <div class="tile"><div class="v">{stats.acksSent}</div><div class="k">ACKs radioed</div>
         <div class="h">{stats.acksFailed} failed</div></div>
       <div class="tile"><div class="v">{stats.balanceReplies}/{stats.balanceRequests}</div><div class="k">Balance replies</div>
         <div class="h">{stats.balanceFailures} failed</div></div>
+      <div class="tile" title="Store-and-forward: transactions waiting for the internet to come back, and replies waiting for their node to be heard again">
+        <div class="v" class:warn={(stats.outboxBroadcasts ?? 0) + (stats.outboxReplies ?? 0) > 0}>{(stats.outboxBroadcasts ?? 0)} · {(stats.outboxReplies ?? 0)}</div>
+        <div class="k">Outbox (tx · replies)</div>
+        <div class="h">{stats.repliesForwarded ?? 0} held replies delivered</div></div>
     </div>
 
     <div class="cols">
@@ -180,6 +190,7 @@
   .tile { border: 1px solid var(--doge-border); border-radius: 10px; padding: 10px 12px; background: rgba(255, 255, 255, 0.02); }
   .v { font-size: 1.35rem; font-weight: 800; color: var(--doge-text); font-variant-numeric: tabular-nums; }
   .v.bad { color: var(--doge-red); }
+  .v.warn { color: var(--doge-yellow); }
   .k { font-size: 0.72rem; color: var(--doge-muted); margin-top: 2px; }
   .h { font-size: 0.68rem; color: var(--doge-subtle); margin-top: 4px; }
   .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }

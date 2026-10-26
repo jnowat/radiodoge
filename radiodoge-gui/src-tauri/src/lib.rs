@@ -1100,6 +1100,12 @@ async fn start_gateway(
         daemon_args.push("--stats-file".into());
         daemon_args.push(p.to_string_lossy().into_owned());
     }
+    // Store-and-forward: transactions still waiting for the network survive a
+    // gateway restart. Unlike the stats snapshot, this file is kept between runs.
+    if let Some(outbox) = stats_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("gateway-outbox.json")) {
+        daemon_args.push("--outbox-file".into());
+        daemon_args.push(outbox.to_string_lossy().into_owned());
+    }
 
     let child = tokio::process::Command::new(&cli_path)
         .args(&daemon_args)

@@ -36,6 +36,14 @@ pub enum GatewayEventKind {
     BalanceReplied,
     /// The balance lookup or reply failed.
     BalanceFailed,
+    /// Broadcast failed for now; the transaction is held for retry (store-and-forward).
+    TxQueued,
+    /// A reply could not be sent; it is held until the node is heard again.
+    ReplyQueued,
+    /// A held reply was sent when its node was heard again.
+    ReplyForwarded,
+    /// A held transaction or reply expired unsent.
+    Expired,
 }
 
 /// One line of the activity feed.
@@ -88,6 +96,15 @@ pub struct GatewayStats {
     pub balance_requests: u64,
     pub balance_replies: u64,
     pub balance_failures: u64,
+    /// Store-and-forward: how many times work was queued, and what is waiting now.
+    #[serde(default)]
+    pub tx_queued: u64,
+    #[serde(default)]
+    pub replies_forwarded: u64,
+    #[serde(default)]
+    pub outbox_broadcasts: u64,
+    #[serde(default)]
+    pub outbox_replies: u64,
 
     pub nodes: BTreeMap<String, NodeTraffic>,
     /// Newest first.
@@ -131,6 +148,9 @@ impl GatewayStats {
             BalanceRequest => self.balance_requests += 1,
             BalanceReplied => self.balance_replies += 1,
             BalanceFailed => self.balance_failures += 1,
+            TxQueued => self.tx_queued += 1,
+            ReplyForwarded => self.replies_forwarded += 1,
+            ReplyQueued | Expired => {}
         }
         self.events.insert(0, GatewayEvent { at: now, kind, node: node.to_string(), detail: detail.into() });
         self.events.truncate(MAX_EVENTS);

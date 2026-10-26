@@ -16,6 +16,7 @@
 
 pub mod backend;
 pub mod gateway_stats;
+pub mod store_forward;
 pub mod qr;
 pub mod radio;
 pub mod serial;

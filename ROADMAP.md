@@ -4,7 +4,7 @@
 
 **Much ambition. Very phases. Such plan. Wow.** 🐕
 
-*Current release: **v0.3.17** (app) · **v0.3.8** (Heltec V3 firmware)*
+*Current release: **v0.3.18** (app) · **v0.3.8** (Heltec V3 firmware)*
 
 [← Back to the README](README.md) · [User Manual](docs/USER_MANUAL.md) · [Changelog](CHANGELOG.md)
 
@@ -140,7 +140,7 @@ Bridge RadioDoge with the existing Meshtastic community.
 - 🔜 **Bridge mode** — `radiodoge-cli daemon` transparently bridges RadioDoge ↔ Meshtastic
 - 🔜 **Multi-channel scanning** — hop across frequencies/SFs to reach different Meshtastic presets
 - 🔜 **GPS location embedding** — sender coordinates in packets for disaster-response positioning
-- 🔜 **Store-and-forward** — cache undelivered packets and retry when the destination node is next heard
+- ✅ **Store-and-forward (v0.3.18)** — the gateway queues transactions it cannot broadcast (internet down) and retries them for 48 h, persisting the queue with `--outbox-file`; replies the board would not take are re-sent when the node is next heard. Still open: holding *node-to-node* messages for an absent destination (needs a firmware-side cache)
 
 ---
 

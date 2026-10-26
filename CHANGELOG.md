@@ -8,6 +8,26 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
 
+
+## 0.3.18 — 📦 Store-and-Forward Gateway
+
+### Added
+- **Store-and-forward in gateway mode.** A signed transaction whose three broadcast attempts all fail (usually
+  because the gateway has lost its internet link) is no longer dropped. It goes into an outbox and is retried with
+  backoff (30 s, doubling to a 15 min cap) for up to 48 h; when the network finally takes it, the `TX_ACK` is radioed
+  back to the sender. A radio reply (`TX_ACK`, `BAL`) the board would not accept is held and sent the next time that
+  node is heard, for up to 6 h.
+- `radiodoge-cli daemon --outbox-file PATH` keeps the outbox across restarts (written atomically, only when it
+  changes). The desktop app passes `<app data>/gateway-outbox.json`. Without the flag the queue is in memory only.
+- `radiodoge-core::store_forward` — the queues as plain, unit-tested data (dedup by txid, per-node and global caps,
+  expiry, JSON round-trip that tolerates a corrupt file).
+- Gateway dashboard: an **Outbox** tile (waiting transactions · held replies, held replies delivered) and new
+  activity entries — queued for retry, reply held, held reply delivered, expired.
+
+### Changed
+- "Broadcast failed" on the dashboard now means the transaction expired in the outbox, not that the first three
+  attempts failed.
+
 ## 0.3.17 — 📊 Gateway Dashboard
 
 ### Added
