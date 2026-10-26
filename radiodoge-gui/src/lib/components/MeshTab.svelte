@@ -1,4 +1,9 @@
 <script lang="ts">
+  import ChannelScan from './ChannelScan.svelte';
+  import { bridge as scanBridge } from '$lib/device/connection-bridge';
+  // Scanning drives the desktop serial link; the Android bridge is not wired for it.
+  let isAndroidScan = $state(false);
+  scanBridge.isAndroid().then((v) => (isAndroidScan = v)).catch(() => {});
   import { invoke } from '@tauri-apps/api/core';
   import { connection, setNeighbors, setAddrConflict } from '$lib/stores/connection.svelte';
   import { open } from '@tauri-apps/plugin-shell';
@@ -199,6 +204,7 @@
       </div>
     </div>
     <ShareLocation />
+    {#if !isAndroidScan}<ChannelScan />{/if}
   {/if}
 </div>
 

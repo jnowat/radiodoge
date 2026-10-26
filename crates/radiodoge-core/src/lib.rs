@@ -21,6 +21,7 @@ pub mod geo;
 pub mod store_forward;
 pub mod qr;
 pub mod radio;
+pub mod scan;
 pub mod serial;
 pub mod spv;
 pub mod types;
