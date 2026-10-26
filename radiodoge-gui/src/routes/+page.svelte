@@ -9,6 +9,8 @@
    */
 
   import '../app.css';
+  import { APP_VERSION } from '$lib/version';
+  import { restoreBackendSpec } from '$lib/settings/chainBackends';
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
 
@@ -104,6 +106,9 @@
   // ── Tauri Event Listeners ─────────────────────────────────────────────────
   onMount(() => {
     const unlisteners: Array<() => void> = [];
+
+    // Re-apply the chain-backend list saved in Settings.
+    void restoreBackendSpec();
 
     // Connection status changes from Rust backend
     listen<ConnectionStatusEvent>('connection-status', (event) => {
@@ -227,10 +232,11 @@
 <!-- App shell -->
 <div class="app-shell">
   <!-- Navigation bar (sticky top) -->
+  <div class="app-body">
   <NavBar {activeTab} onTabChange={handleTabChange} />
 
   <!-- Tab content area (scrollable) -->
-  <main class="app-main">
+  <main class="app-main" aria-label="Main content">
     {#if activeTab === 'connect'}
       <ConnectionPanel />
     {:else if activeTab === 'dashboard'}
@@ -253,12 +259,13 @@
       <SettingsTab />
     {/if}
   </main>
+  </div>
 
   <!-- Status bar (bottom) — responsive, truncates long device paths -->
   <footer class="app-footer">
     <!-- Left: version + connection info (truncates to fit) -->
     <div class="footer-left">
-      <span class="footer-version">RadioDoge v0.3.16</span>
+      <span class="footer-version">RadioDoge v{APP_VERSION}</span>
       <span class="footer-sep" aria-hidden="true">|</span>
       {#if connection.isConnected}
         <span class="footer-port">
@@ -311,8 +318,19 @@
     overflow: hidden;
   }
 
+  .app-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  @media (max-width: 860px) {
+    .app-body { flex-direction: column; }
+  }
+
   .app-main {
     flex: 1;
+    min-width: 0;
     overflow-y: auto;
     overflow-x: hidden;
     /* Ensure -webkit-overflow-scrolling: touch for smooth inertia on Android */
@@ -326,7 +344,7 @@
     justify-content: space-between;
     min-height: 28px;
     height: auto;
-    background: #080808;
+    background: var(--doge-nav);
     border-top: 1px solid var(--doge-border);
     padding: 3px clamp(8px, 3vw, 16px);
     padding-bottom: max(3px, env(safe-area-inset-bottom, 0px));
