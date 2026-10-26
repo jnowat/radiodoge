@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.40] - 2026-10-26
+
+### Added
+- Offline signing. `utxo-snapshot -a D… -o utxos.json` saves an address's unspent outputs (public chain data only) while online; with `RADIODOGE_UTXO_FILE` pointing at that file, `sign-tx --fee …` signs with no network at all, so a sender with only a LoRa link can sign locally and radio the result with `send-tx-hex`. The snapshot is checked against the signing address.
+
 ## [0.3.39] - 2026-10-26
 
 ### Notes

@@ -66,7 +66,7 @@ impl Backend {
 }
 
 /// An unspent output, normalised across backends.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Utxo {
     pub txid: String,
     pub vout: u32,
@@ -74,6 +74,7 @@ pub struct Utxo {
     pub confirmations: u32,
     /// `true` only if the backend says so. BlockCypher and Core's `listunspent`
     /// do not report it; coin selection treats those outputs as non-coinbase.
+    #[serde(default)]
     pub coinbase: bool,
 }
 
@@ -480,7 +481,32 @@ pub async fn fetch_balance(address: &str) -> Result<u64> {
     with_fallback(&bs, "Balance fetch", |b| async move { balance_from(&b, address).await }).await
 }
 
+/// A saved UTXO list for one address, so a machine with no internet can sign
+/// (see `RADIODOGE_UTXO_FILE`). It holds only public chain data.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UtxoSnapshot {
+    pub address: String,
+    /// Unix seconds when the snapshot was taken.
+    pub fetched_at: u64,
+    pub utxos: Vec<Utxo>,
+}
+
+/// Parse a snapshot and check it belongs to `address`.
+pub fn utxos_from_snapshot(json: &str, address: &str) -> Result<Vec<Utxo>> {
+    let snap: UtxoSnapshot = serde_json::from_str(json).map_err(|e| anyhow!("UTXO snapshot is not valid JSON: {}", e))?;
+    if snap.address != address {
+        bail!("UTXO snapshot is for {}, not {}", snap.address, address);
+    }
+    Ok(snap.utxos)
+}
+
+/// UTXOs for `address`. With `RADIODOGE_UTXO_FILE` set, they come from that
+/// snapshot (offline signing) instead of the network.
 pub async fn fetch_utxos(address: &str) -> Result<Vec<Utxo>> {
+    if let Ok(path) = std::env::var("RADIODOGE_UTXO_FILE") {
+        let body = std::fs::read_to_string(&path).map_err(|e| anyhow!("reading UTXO snapshot {}: {}", path, e))?;
+        return utxos_from_snapshot(&body, address);
+    }
     let bs = configured_backends()?;
     with_fallback(&bs, "UTXO fetch", |b| async move { utxos_from(&b, address).await }).await
 }
@@ -502,6 +528,16 @@ pub async fn fetch_fee_rate() -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn utxo_snapshot_round_trips_and_checks_address() {
+        let snap = UtxoSnapshot { address: "Daddr".into(), fetched_at: 1, utxos: vec![Utxo {
+            txid: "ab".repeat(32), vout: 1, value: 100_000_000, confirmations: 3, coinbase: false }] };
+        let json = serde_json::to_string(&snap).unwrap();
+        assert_eq!(utxos_from_snapshot(&json, "Daddr").unwrap(), snap.utxos);
+        assert!(utxos_from_snapshot(&json, "Dother").is_err());
+        assert!(utxos_from_snapshot("{", "Daddr").is_err());
+    }
+
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
