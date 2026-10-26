@@ -4,7 +4,7 @@
 
 **Much ambition. Very phases. Such plan. Wow.** 🐕
 
-*Current release: **v0.3.28** (app) · **v0.3.8** (Heltec V3 firmware)*
+*Current release: **v0.3.29** (app) · **v0.3.8** (Heltec V3 firmware)*
 
 [← Back to the README](README.md) · [User Manual](docs/USER_MANUAL.md) · [Changelog](CHANGELOG.md)
 
@@ -174,8 +174,9 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   nothing about whether the inputs exist, are unspent, or belong to the sender. **Anyone within radio range can
   build a transaction paying you any amount, sign it with a key they generated a second earlier, and send it
   for the cost of one packet.** The app says so in the packet description now rather than showing a checkmark,
-  but the only real answer is the chain: use `radiodoge-cli verify-tx <txid>` or the History tab's inclusion
-  check before treating anything as received.
+  but the only real answer is the chain: use `radiodoge-cli verify-tx <txid>`, the History tab's inclusion
+  check, or the Receive tab's **🔎 Check on-chain** button (v0.3.29, next to each incoming transaction, which
+  now shows its txid) before treating anything as received.
 - **🟡 The web/REST interface has no authentication, by design.**
   Any device that can reach the board's web server can call every `/api/*` route — and in dual-WiFi mode that
   includes hosts on the upstream LAN, not only devices joined to the board's own access point. Treat a firmware
