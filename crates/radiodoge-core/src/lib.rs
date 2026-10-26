@@ -13,7 +13,7 @@
 //! - `radiodoge-gui` (Tauri 2 desktop GUI)
 //! - `radiodoge-cli` (headless CLI replacing RadioDogeSharp and serdog)
 //! - Future Android / embedded targets
-
+//!
 //! Building with `default-features = false` keeps only [`radio`] and [`types`]
 //! (no Tokio, serial, crypto or HTTP), which is what the WebAssembly packet
 //! inspector uses.

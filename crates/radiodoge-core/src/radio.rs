@@ -690,7 +690,13 @@ pub fn try_build_multipart_packets(
 
     let chunks: Vec<&[u8]> = payload.chunks(MULTIPART_CHUNK_LEN).collect();
     let total_parts = chunks.len();
+    #[cfg(feature = "native")]
     let session_id = rand::random::<u16>();
+    // Protocol-only builds (wasm) have no RNG; derive a session id from the payload.
+    #[cfg(not(feature = "native"))]
+    let session_id = payload
+        .iter()
+        .fold(0x9E37u16, |h, &b| h.rotate_left(5) ^ u16::from(b));
 
     Ok(chunks
         .into_iter()
