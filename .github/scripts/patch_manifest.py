@@ -2,7 +2,8 @@
 """Add Bluetooth permissions to the Tauri-generated AndroidManifest.xml.
 
 USB permissions are added automatically by tauri-plugin-serialplugin.
-These BLE permissions are required by tauri-plugin-blec for BLE scan/connect.
+These BLE permissions are required by tauri-plugin-blec for BLE scan/connect;
+the location permissions also cover GPS position sharing (v0.3.20).
 
 Called from .github/workflows/build-android.yml after `tauri android init`.
 Paths are relative to the repository root.
@@ -32,6 +33,9 @@ bt_perms = (
     '    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n'
     '    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\n'
     '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n'
+    # v0.3.20 — Share my location (navigator.geolocation). Android 12+ requires
+    # COARSE alongside FINE so the user can choose approximate location.
+    '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n'
 )
 
 patched = content.replace("<application", bt_perms + "\n    <application", 1)

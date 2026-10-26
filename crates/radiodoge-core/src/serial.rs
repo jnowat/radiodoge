@@ -551,57 +551,7 @@ impl SerialManager {
                                     }
                                 }
 
-                                // v0.3.7 — Track neighbors from real over-the-air LoRa packets only.
-                                // Only count PING, MESSAGE, BROADCAST, MULTIPART, DOGE_TX — NOT serial
-                                // response commands (0x20 FW version, 0x22 settings, etc.) whose source
-                                // field is the board's own address and whose RSSI is always 0 (not real).
-                                const MESH_PACKET_CMDS: &[u8] = &[
-                                    radio::CMD_PING, radio::CMD_MESSAGE, radio::CMD_BROADCAST,
-                                    radio::CMD_MULTIPART, radio::CMD_DOGE_TX,
-                                    radio::CMD_RECEIVED_ACK, radio::CMD_RECEIVED_PING,
-                                ];
-                                if MESH_PACKET_CMDS.contains(&packet.command) {
-                                    use std::time::{SystemTime, UNIX_EPOCH};
-                                    let now = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs();
-                                    let src = &packet.source;
-                                    let shared_pos = if packet.command == radio::CMD_MESSAGE
-                                        || packet.command == radio::CMD_BROADCAST
-                                    {
-                                        hex::decode(&packet.payload_hex)
-                                            .ok()
-                                            .and_then(|b| String::from_utf8(b).ok())
-                                            .and_then(|t| crate::geo::Position::from_message(&t))
-                                    } else {
-                                        None
-                                    };
-                                    if src.region != 0xFF && src.community != 0xFF && src.node != 0xFF {
-                                        let mut nbrs = neighbors_clone.lock().await;
-                                        if let Some(existing) = nbrs.iter_mut().find(|n| n.address == *src) {
-                                            existing.rssi = packet.rssi;
-                                            existing.last_seen = now;
-                                            if shared_pos.is_some() {
-                                                existing.position = shared_pos;
-                                                existing.position_at = Some(now);
-                                            }
-                                        } else {
-                                            nbrs.push(crate::types::NeighborEntry {
-                                                address: src.clone(),
-                                                rssi: packet.rssi,
-                                                last_seen: now,
-                                                position: shared_pos,
-                                                position_at: shared_pos.map(|_| now),
-                                            });
-                                            // Keep last 20 neighbors
-                                            if nbrs.len() > 20 {
-                                                nbrs.sort_by_key(|b| std::cmp::Reverse(b.last_seen));
-                                                nbrs.truncate(20);
-                                            }
-                                        }
-                                    }
-                                }
+                                record_neighbor(&neighbors_clone, &packet).await;
 
                                 // Broadcast to all subscribers
                                 let _ = packet_tx_clone.send(packet.clone());
@@ -944,6 +894,12 @@ impl SerialManager {
         self.board_settings.lock().await.clone()
     }
 
+    /// v0.3.20 — Record a packet heard by a transport other than the desktop read
+    /// loop (the Android USB/BLE bridge), so mobile gets the same neighbor list.
+    pub async fn record_neighbor(&self, packet: &IncomingPacket) {
+        record_neighbor(&self.neighbors, packet).await;
+    }
+
     /// v0.3.7 — Return a snapshot of recently heard mesh neighbors.
     pub async fn get_neighbors(&self) -> Vec<NeighborEntry> {
         self.neighbors.lock().await.clone()
@@ -1027,5 +983,58 @@ impl SerialManager {
 impl Default for SerialManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// v0.3.7 — Track neighbors from real over-the-air LoRa packets only.
+/// Only PING, MESSAGE, BROADCAST, MULTIPART, DOGE_TX and received-acks count — NOT
+/// serial response commands (0x20 FW version, 0x22 settings, …) whose source is the
+/// board's own address and whose RSSI is always 0. v0.3.19: a `POS:` message also
+/// updates the neighbor's last known position.
+pub async fn record_neighbor(neighbors: &TokioMutex<Vec<NeighborEntry>>, packet: &IncomingPacket) {
+    const MESH_PACKET_CMDS: &[u8] = &[
+        radio::CMD_PING, radio::CMD_MESSAGE, radio::CMD_BROADCAST,
+        radio::CMD_MULTIPART, radio::CMD_DOGE_TX,
+        radio::CMD_RECEIVED_ACK, radio::CMD_RECEIVED_PING,
+    ];
+    if !MESH_PACKET_CMDS.contains(&packet.command) {
+        return;
+    }
+    let src = &packet.source;
+    if src.region == 0xFF || src.community == 0xFF || src.node == 0xFF {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let shared_pos = if packet.command == radio::CMD_MESSAGE || packet.command == radio::CMD_BROADCAST {
+        hex::decode(&packet.payload_hex)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+            .and_then(|t| crate::geo::Position::from_message(&t))
+    } else {
+        None
+    };
+    let mut nbrs = neighbors.lock().await;
+    if let Some(existing) = nbrs.iter_mut().find(|n| n.address == *src) {
+        existing.rssi = packet.rssi;
+        existing.last_seen = now;
+        if shared_pos.is_some() {
+            existing.position = shared_pos;
+            existing.position_at = Some(now);
+        }
+    } else {
+        nbrs.push(NeighborEntry {
+            address: src.clone(),
+            rssi: packet.rssi,
+            last_seen: now,
+            position: shared_pos,
+            position_at: shared_pos.map(|_| now),
+        });
+        if nbrs.len() > 20 {
+            nbrs.sort_by_key(|b| std::cmp::Reverse(b.last_seen));
+            nbrs.truncate(20);
+        }
     }
 }
