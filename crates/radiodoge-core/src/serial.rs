@@ -1136,10 +1136,14 @@ mod tests {
 
     #[test]
     fn stale_partial_frame_head_is_dropped_not_glued() {
-        let ping = radio::build_ping(&a(), &b());
-        let mut acc = ping[..5].to_vec();
+        // A GET_SETTINGS reply is 13 bytes; only its 8-byte header arrived.
+        let head = radio::build_get_settings(&a());
+        assert_eq!(head.len(), radio::SINGLE_HDR_LEN);
+        let mut acc = head.clone();
+        assert_eq!(take_frame(&mut acc, QUIET), None, "tail may be in flight");
+        assert_eq!(acc.len(), head.len());
         assert_eq!(take_frame(&mut acc, STALE), None);
-        assert!(acc.len() < 5, "stale head byte must be discarded");
+        assert!(acc.len() < head.len(), "stale head byte must be discarded");
     }
 
     #[test]
