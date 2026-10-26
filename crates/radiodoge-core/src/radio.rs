@@ -711,7 +711,13 @@ pub fn try_build_multipart_packets(
 
     let chunks: Vec<&[u8]> = payload.chunks(MULTIPART_CHUNK_LEN).collect();
     let total_parts = chunks.len();
+    #[cfg(feature = "native")]
     let session_id = rand::random::<u16>();
+    // Protocol-only builds (wasm) have no RNG; derive a session id from the payload.
+    #[cfg(not(feature = "native"))]
+    let session_id = payload
+        .iter()
+        .fold(0x9E37u16, |h, &b| h.rotate_left(5) ^ u16::from(b));
 
     Ok(chunks
         .into_iter()
@@ -1033,7 +1039,7 @@ fn assembled_to_packet(a: AssembledPayload, rssi: i16) -> IncomingPacket {
 }
 
 /// Attempt to decode a packet payload based on command type.
-fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
+pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
     match command {
         CMD_PING => Some("🏓 PING".to_string()),
         CMD_MESSAGE | CMD_BROADCAST => {
@@ -1060,6 +1066,9 @@ fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
                 None
             }
         }
+        #[cfg(not(feature = "native"))]
+        CMD_DOGE_TX => Some(format!("🐕 Dogecoin transaction payload ({} bytes)", payload.len())),
+        #[cfg(feature = "native")]
         CMD_DOGE_TX => {
             if crate::wallet::is_signed_tx_payload(payload) {
                 Some(format!("🐕 {}", crate::wallet::describe_signed_tx(payload)))
@@ -1869,6 +1878,7 @@ mod tests {
     /// A signed transaction too large for one packet must survive the
     /// split → reassemble round trip intact, and be recognised as signed.
     #[test]
+    #[cfg(feature = "native")]
     fn test_signed_tx_round_trips_through_multipart() {
         // A plausible signed-tx shape: version prefix plus body, over the limit.
         let mut tx = vec![0x01, 0x00, 0x00, 0x00];

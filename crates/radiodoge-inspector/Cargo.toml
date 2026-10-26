@@ -1,0 +1,20 @@
+[package]
+name = "radiodoge-inspector"
+version = "0.1.0"
+description = "RadioDoge packet inspector — decode RadioDoge LoRa/serial packets from hex (WebAssembly)"
+authors = ["RadioDoge Contributors"]
+license = "MIT"
+repository = "https://github.com/jnowat/RadioDoge"
+edition = "2021"
+rust-version = "1.88"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Protocol only: no Tokio, serial, crypto or HTTP, so it builds for wasm32.
+radiodoge-core = { path = "../radiodoge-core", default-features = false }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+hex            = { workspace = true }
+wasm-bindgen   = "0.2"

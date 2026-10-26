@@ -148,7 +148,7 @@ Bridge RadioDoge with the existing Meshtastic community.
 
 - 🔜 **iOS** — Bluetooth LE to the Heltec via the BLE-serial bridge
 - 🔜 **Linux AppImage + macOS .dmg** in CI — Tauri already supports these targets
-- 🔜 **WebAssembly packet inspector** — a browser tool to decode RadioDoge packets from hex
+- ✅ **WebAssembly packet inspector** — `crates/radiodoge-inspector`: paste hex, get framed and decoded packets in the browser, using the app's own framing code (protocol-only `radiodoge-core` build)
 - 🔜 **Gateway dashboard** — monitor multiple gateways, relay stats, and mesh health at a glance
 - 🔜 **Lightning over LoRa** — forward BOLT-11 invoices and HTLC state through the mesh
 
