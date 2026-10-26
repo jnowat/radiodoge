@@ -846,7 +846,7 @@ async fn send_transaction(
     let src = state.serial.get_node_address().await;
     let dst = NodeAddress::broadcast();
     let signed_label = tx.from_private_key_wif.is_some();
-    let mut frame_count = 0usize;
+    let frame_count: usize;
 
     if is_mobile {
         // Mobile path: the JS bridge owns the port; emit packet bytes via a
