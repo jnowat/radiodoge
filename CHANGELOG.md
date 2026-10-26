@@ -7,6 +7,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+
+## [Unreleased] — Firmware web/REST authentication
+
+### Security
+- **The V3 firmware's web UI and REST API now require a login.** HTTP Basic, user `radiodoge`, password = the
+  board's (per-board, random) AP password. Previously any device on the AP — or, in dual-WiFi mode, anyone on
+  the upstream LAN — could send transactions, change WiFi/gateway settings, use `/proxy` and read logs.
+  `/ping`, `/status`, `/api/ping` and `/api/status` stay open for liveness checks. The desktop app and CLI talk
+  to the board over USB/BLE and are unaffected.
 ## [Unreleased] — 🔧 Build, Docs & Audit Fixes (Heltec V3 bring-up)
 
 > Found while flashing a real Heltec WiFi LoRa 32 V3 end to end.

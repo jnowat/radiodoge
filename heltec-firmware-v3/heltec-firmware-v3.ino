@@ -4479,65 +4479,82 @@ String ExtractStringMessageFromBuffer(uint8_t *buf, int bufferSize) {
 }
 
 // Web Server Functions
+// REST/web-UI authentication (HTTP Basic). Every endpoint except the read-only
+// liveness checks (/ping, /status, /api/ping, /api/status) requires user
+// "radiodoge" and the board's AP password. This matters most when the board
+// has joined another WiFi network (STA mode): without it anyone on that LAN
+// could send transactions, change settings or read logs.
+static const char *WEB_AUTH_USER = "radiodoge";
+
+std::function<void()> requireAuth(void (*handler)()) {
+  return [handler]() {
+    if (!server.authenticate(WEB_AUTH_USER, ap_password.c_str())) {
+      server.requestAuthentication(BASIC_AUTH, "RadioDoge");
+      return;
+    }
+    handler();
+  };
+}
+
 void setupWebServer() {
   // Serve the main control page
-  server.on("/", handleRoot);
+  server.on("/", requireAuth(handleRoot));
   
   // API endpoints (legacy text format)
   server.on("/ping", handlePing);
-  server.on("/message", handleMessage);
-  server.on("/transaction", handleTransaction);
-  server.on("/broadcast", handleBroadcast);
-  server.on("/ack", handleACK);
-  server.on("/address", handleAddress);
+  server.on("/message", requireAuth(handleMessage));
+  server.on("/transaction", requireAuth(handleTransaction));
+  server.on("/broadcast", requireAuth(handleBroadcast));
+  server.on("/ack", requireAuth(handleACK));
+  server.on("/address", requireAuth(handleAddress));
   server.on("/status", handleStatus);
   
   // REST API endpoints with JSON support
   server.on("/api/ping", HTTP_GET, handleApiPing);
   server.on("/api/ping", HTTP_POST, handleApiPing);
-  server.on("/api/message", HTTP_GET, handleApiMessage);
-  server.on("/api/message", HTTP_POST, handleApiMessage);
-  server.on("/api/transaction", HTTP_GET, handleApiTransaction);
-  server.on("/api/transaction", HTTP_POST, handleApiTransaction);
-  server.on("/api/broadcast", HTTP_GET, handleApiBroadcast);
-  server.on("/api/broadcast", HTTP_POST, handleApiBroadcast);
+  server.on("/api/message", HTTP_GET, requireAuth(handleApiMessage));
+  server.on("/api/message", HTTP_POST, requireAuth(handleApiMessage));
+  server.on("/api/transaction", HTTP_GET, requireAuth(handleApiTransaction));
+  server.on("/api/transaction", HTTP_POST, requireAuth(handleApiTransaction));
+  server.on("/api/broadcast", HTTP_GET, requireAuth(handleApiBroadcast));
+  server.on("/api/broadcast", HTTP_POST, requireAuth(handleApiBroadcast));
   server.on("/api/status", HTTP_GET, handleApiStatus);
-  server.on("/api/address", HTTP_GET, handleApiAddress);
-  server.on("/api/address", HTTP_POST, handleApiAddress);
+  server.on("/api/address", HTTP_GET, requireAuth(handleApiAddress));
+  server.on("/api/address", HTTP_POST, requireAuth(handleApiAddress));
   
   // WiFi Configuration endpoints
-  server.on("/api/wifi", HTTP_GET, handleApiWifi);
-  server.on("/api/wifi", HTTP_POST, handleApiWifi);
-  server.on("/api/wifi/connect", HTTP_POST, handleApiWifiConnect);
-  server.on("/api/wifi/disconnect", HTTP_POST, handleApiWifiDisconnect);
-  server.on("/api/wifi/clear", HTTP_POST, handleApiWifiClear);
+  server.on("/api/wifi", HTTP_GET, requireAuth(handleApiWifi));
+  server.on("/api/wifi", HTTP_POST, requireAuth(handleApiWifi));
+  server.on("/api/wifi/connect", HTTP_POST, requireAuth(handleApiWifiConnect));
+  server.on("/api/wifi/disconnect", HTTP_POST, requireAuth(handleApiWifiDisconnect));
+  server.on("/api/wifi/clear", HTTP_POST, requireAuth(handleApiWifiClear));
   
   // Internet Bridge endpoints
-  server.on("/api/bridge/enable", HTTP_POST, handleApiBridgeEnable);
-  server.on("/api/bridge/disable", HTTP_POST, handleApiBridgeDisable);
-  server.on("/api/bridge/status", HTTP_GET, handleApiBridgeStatus);
-  server.on("/proxy", HTTP_GET, handleHttpProxy);
-  server.on("/api/lora/clear", HTTP_POST, handleApiLoRaClear);
-  server.on("/api/password/change", HTTP_POST, handleApiPasswordChange);
-  server.on("/api/password/reset", HTTP_POST, handleApiPasswordReset);
-  server.on("/api/password/status", HTTP_GET, handleApiPasswordStatus);
-  server.on("/api/gateway", HTTP_POST, handleApiGateway);
-  server.on("/api/gateway/status", HTTP_GET, handleApiGatewayStatus);
-  server.on("/api/gateway/save", HTTP_POST, handleApiGatewaySave);
-  server.on("/api/gateway/clear", HTTP_POST, handleApiGatewayClear);
-  server.on("/api/gateway/test", HTTP_POST, handleApiGatewayTest);
-  server.on("/api/gateway/debug", HTTP_GET, handleApiGatewayDebug);
-  server.on("/api/gateway/load", HTTP_GET, handleApiGatewayLoad);
-  server.on("/api/logs", HTTP_GET, handleApiLogs);
-  server.on("/api/logs/text", HTTP_GET, handleApiLogsText);
-  server.on("/api/logs/send", HTTP_POST, handleApiLogsSend);
-  server.on("/api/transaction/send", HTTP_POST, handleApiTransactionSend);
-  server.on("/api/gateway/config", HTTP_GET, handleApiGatewayConfig);
-  server.on("/api/gateway/config", HTTP_POST, handleApiGatewayConfigSet);
-  server.on("/api/rpc", HTTP_POST, handleApiRpc);
-  server.on("/api/jsonrpc", HTTP_POST, handleApiJsonRpc);
-  server.on("/api/multipart/status", HTTP_GET, handleApiMultipartStatus);
-  server.on("/api/queue/status", HTTP_GET, handleApiQueueStatus);
+  server.on("/api/bridge/enable", HTTP_POST, requireAuth(handleApiBridgeEnable));
+  server.on("/api/bridge/disable", HTTP_POST, requireAuth(handleApiBridgeDisable));
+  server.on("/api/bridge/status", HTTP_GET, requireAuth(handleApiBridgeStatus));
+  server.on("/proxy", HTTP_GET, requireAuth(handleHttpProxy));
+  server.on("/api/lora/clear", HTTP_POST, requireAuth(handleApiLoRaClear));
+  server.on("/api/password/change", HTTP_POST, requireAuth(handleApiPasswordChange));
+  server.on("/api/password/reset", HTTP_POST, requireAuth(handleApiPasswordReset));
+  server.on("/api/password/status", HTTP_GET, requireAuth(handleApiPasswordStatus));
+  server.on("/api/gateway", HTTP_POST, requireAuth(handleApiGateway));
+  server.on("/api/gateway/status", HTTP_GET, requireAuth(handleApiGatewayStatus));
+  server.on("/api/gateway/save", HTTP_POST, requireAuth(handleApiGatewaySave));
+  server.on("/api/gateway/clear", HTTP_POST, requireAuth(handleApiGatewayClear));
+  server.on("/api/gateway/test", HTTP_POST, requireAuth(handleApiGatewayTest));
+  server.on("/api/gateway/debug", HTTP_GET, requireAuth(handleApiGatewayDebug));
+  server.on("/api/gateway/load", HTTP_GET, requireAuth(handleApiGatewayLoad));
+  server.on("/api/logs", HTTP_GET, requireAuth(handleApiLogs));
+  server.on("/api/logs/text", HTTP_GET, requireAuth(handleApiLogsText));
+  server.on("/api/logs/send", HTTP_POST, requireAuth(handleApiLogsSend));
+  server.on("/api/transaction/send", HTTP_POST, requireAuth(handleApiTransactionSend));
+  server.on("/api/gateway/config", HTTP_GET, requireAuth(handleApiGatewayConfig));
+  server.on("/api/gateway/config", HTTP_POST, requireAuth(handleApiGatewayConfigSet));
+  server.on("/api/rpc", HTTP_POST, requireAuth(handleApiRpc));
+  server.on("/api/jsonrpc", HTTP_POST, requireAuth(handleApiJsonRpc));
+  server.on("/api/multipart/status", HTTP_GET, requireAuth(handleApiMultipartStatus));
+  server.on("/api/queue/status", HTTP_GET, requireAuth(handleApiQueueStatus));
   
   server.begin();
   addLog("[WiFi] Web server started");
