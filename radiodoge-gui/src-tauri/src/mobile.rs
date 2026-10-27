@@ -144,13 +144,14 @@ pub(crate) async fn mobile_push_bytes(
 
         // Parse exactly the bytes for this packet so payload_hex is clean, and
         // let multipart sequences reassemble before anything downstream sees them.
-        let now_secs = std::time::SystemTime::now()
+        let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_millis() as u64;
         let ingested = {
             let mut reasm = state.mobile_reassembler.lock().await;
-            radio::ingest_packet(&acc[..packet_len], rssi, &mut reasm, now_secs)
+            let mut latch = state.mobile_signal_latch.lock().await;
+            radio::ingest_with_signal(&acc[..packet_len], rssi, &mut latch, &mut reasm, now_ms)
         };
         // Consume the frame either way — a multipart fragment has been absorbed
         // even though it does not yield a packet yet.

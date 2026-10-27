@@ -108,11 +108,12 @@ pub(crate) async fn cmd_daemon(
 
     let on_packet = Arc::new(move |pkt: IncomingPacket| {
         log::info!(
-            "PACKET  {} → {}  cmd=0x{:02X}  rssi={}{}  payload={}{}",
+            "PACKET  {} → {}  cmd=0x{:02X}  rssi={}{}{}  payload={}{}",
             pkt.source.to_display_string(),
             pkt.destination.to_display_string(),
             pkt.command,
             pkt.rssi,
+            pkt.snr.map(|s| format!("  snr={}", s)).unwrap_or_default(),
             if pkt.hops > 0 { format!("  hops={}", pkt.hops) } else { String::new() },
             pkt.payload_hex,
             pkt.decoded
