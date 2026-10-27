@@ -41,7 +41,10 @@ pub(crate) async fn mobile_set_connected(
     *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
     // FW14: a pending RX_SIGNAL belongs to the old session's next frame.
     state.mobile_signal_latch.lock().await.clear();
-    let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&device_path));
+    let _ = app.emit(
+        "connection-status",
+        ConnectionStatusEvent::connecting(&device_path),
+    );
     log::info!("mobile_set_connected: {}", device_path);
     Ok(())
 }
@@ -117,7 +120,10 @@ pub(crate) async fn mobile_push_bytes(
     pub(crate) const MOBILE_ACCUMULATOR_CAP: usize = 8 * 1024;
     let mut acc = state.mobile_accumulator.lock().await;
     if acc.len() + bytes.len() > MOBILE_ACCUMULATOR_CAP {
-        eprintln!("[mobile_push_bytes] accumulator overflow ({} bytes) — discarding stale data", acc.len());
+        eprintln!(
+            "[mobile_push_bytes] accumulator overflow ({} bytes) — discarding stale data",
+            acc.len()
+        );
         acc.clear();
     }
     acc.extend_from_slice(&bytes);
@@ -222,7 +228,7 @@ pub(crate) async fn mobile_push_bytes(
                 if let Ok(payload) = hex::decode(&packet.payload_hex) {
                     if payload.len() >= 4 {
                         let addr = NodeAddress::new(payload[0], payload[1], payload[2]);
-                        let gw   = payload[3] != 0;
+                        let gw = payload[3] != 0;
                         let wifi = payload.get(4).map(|&b| b != 0).unwrap_or(true);
 
                         // Only trust the addr if it is not the broadcast address
@@ -245,7 +251,11 @@ pub(crate) async fn mobile_push_bytes(
                         // Now emit "connected" — we have everything we need.
                         // Include the firmware version if it arrived before settings.
                         let fw = state.mobile_fw_version.lock().await.clone();
-                        let port = state.current_port.lock().await.clone()
+                        let port = state
+                            .current_port
+                            .lock()
+                            .await
+                            .clone()
                             .unwrap_or_else(|| "usb-android".to_string());
                         let _ = app.emit(
                             "connection-status",
@@ -260,7 +270,9 @@ pub(crate) async fn mobile_push_bytes(
             // is_incoming_doge_tx.
             radio::CMD_DOGE_TX if is_incoming_doge_tx(&packet) => {
                 // No system-tray notification on Android; emit an in-app event instead
-                let body = packet.decoded.clone()
+                let body = packet
+                    .decoded
+                    .clone()
                     .unwrap_or_else(|| "Incoming Dogecoin transaction over LoRa".to_string());
                 let _ = app.emit(
                     "mobile-doge-tx-received",
@@ -269,11 +281,17 @@ pub(crate) async fn mobile_push_bytes(
             }
 
             radio::CMD_ADDR_CONFLICT => {
-                let addr_str = packet.decoded.clone().unwrap_or_else(|| "unknown".to_string());
-                let _ = app.emit("addr-conflict", serde_json::json!({
-                    "detected": true,
-                    "address": addr_str,
-                }));
+                let addr_str = packet
+                    .decoded
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                let _ = app.emit(
+                    "addr-conflict",
+                    serde_json::json!({
+                        "detected": true,
+                        "address": addr_str,
+                    }),
+                );
             }
 
             radio::CMD_GET_MAC => {
@@ -284,8 +302,7 @@ pub(crate) async fn mobile_push_bytes(
                     if payload.len() >= 6 {
                         let mac = format!(
                             "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                            payload[0], payload[1], payload[2],
-                            payload[3], payload[4], payload[5]
+                            payload[0], payload[1], payload[2], payload[3], payload[4], payload[5]
                         );
                         state.serial.update_board_mac(mac.clone()).await;
                         let _ = app.emit("mobile-board-mac", &mac);
@@ -350,14 +367,20 @@ pub(crate) async fn mobile_build_ping(state: State<'_, AppState>) -> Result<Vec<
 /// The JS layer writes the bytes to USB/BLE; the board responds via CMD_GET_SETTINGS
 /// board-sync which updates gateway_mode in the connection store.
 #[tauri::command]
-pub(crate) async fn mobile_build_set_gateway(enable: bool, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+pub(crate) async fn mobile_build_set_gateway(
+    enable: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
     let src = state.serial.get_node_address().await;
     Ok(radio::build_set_gateway(&src, enable))
 }
 
 /// Build a WIFI_TOGGLE packet for the Android USB bridge.
 #[tauri::command]
-pub(crate) async fn mobile_build_wifi_toggle(enable: bool, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+pub(crate) async fn mobile_build_wifi_toggle(
+    enable: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
     let src = state.serial.get_node_address().await;
     Ok(radio::build_wifi_toggle(&src, enable))
 }
@@ -366,7 +389,10 @@ pub(crate) async fn mobile_build_wifi_toggle(enable: bool, state: State<'_, AppS
 /// Enables or disables BLE advertising on the board (persisted to NVS).
 /// Requires firmware v0.3.16+.
 #[tauri::command]
-pub(crate) async fn mobile_build_ble_toggle(enable: bool, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+pub(crate) async fn mobile_build_ble_toggle(
+    enable: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
     let src = state.serial.get_node_address().await;
     Ok(radio::build_ble_toggle(&src, enable))
 }
@@ -395,7 +421,15 @@ pub(crate) async fn set_ble_enabled(
     let src = state.serial.get_node_address().await;
     let pkt = radio::build_ble_toggle(&src, enable);
     let pkt_hex = hex::encode(&pkt);
-    emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_BLE_TOGGLE (0x28) → {}", if enable { "ON" } else { "OFF" }));
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &pkt_hex,
+        &format!(
+            "CMD_BLE_TOGGLE (0x28) → {}",
+            if enable { "ON" } else { "OFF" }
+        ),
+    );
     // The board answers 0x28 with a 9-byte echo carrying the state it applied.
     // This used to return `enable` without looking, so the UI reported a toggle
     // the board may never have received.
@@ -421,14 +455,17 @@ pub(crate) async fn set_ble_enabled(
 /// When the board replies, `mobile_push_bytes` processes the responses and
 /// emits "mobile-firmware-version" and "connection-status: connected".
 #[tauri::command]
-pub(crate) async fn mobile_build_connect_queries(state: State<'_, AppState>) -> Result<Vec<Vec<u8>>, String> {
+pub(crate) async fn mobile_build_connect_queries(
+    state: State<'_, AppState>,
+) -> Result<Vec<Vec<u8>>, String> {
     let src = state.serial.get_node_address().await;
     // Opening the window here rather than when the bytes are written: the JS
     // layer writes these immediately, and a few seconds covers BLE's slower
     // round trip. Outside it, a "version reply" is somebody else's LoRa packet.
-    state
-        .mobile_fw_query_until_ms
-        .store(now_millis() + MOBILE_FIRMWARE_REPLY_WINDOW_MS, Ordering::Relaxed);
+    state.mobile_fw_query_until_ms.store(
+        now_millis() + MOBILE_FIRMWARE_REPLY_WINDOW_MS,
+        Ordering::Relaxed,
+    );
     Ok(vec![
         radio::build_get_firmware_version(&src),
         radio::build_get_settings(&src),
@@ -463,12 +500,8 @@ pub(crate) async fn mobile_build_tx_packets(
         )
         .await?
     } else {
-        wallet::encode_transaction_payload(
-            &tx.to_address,
-            tx.amount_doge,
-            tx.memo.as_deref(),
-        )
-        .map_err(radiodoge_core::errors::friendly)?
+        wallet::encode_transaction_payload(&tx.to_address, tx.amount_doge, tx.memo.as_deref())
+            .map_err(radiodoge_core::errors::friendly)?
     };
 
     // Whether a multipart sequence can be handed to the board depends on its
@@ -486,13 +519,13 @@ pub(crate) async fn mobile_build_lora_settings_packet(settings: LoraSettings) ->
     let bw_idx: u8 = match settings.bandwidth_khz as u32 {
         250 => 1,
         500 => 2,
-        _   => 0, // default 125 kHz
+        _ => 0, // default 125 kHz
     };
     let cr: u8 = match settings.coding_rate.as_str() {
         "4/6" => 6,
         "4/7" => 7,
         "4/8" => 8,
-        _     => 5, // default 4/5
+        _ => 5, // default 4/5
     };
     let freq_khz = (settings.frequency_mhz * 1000.0).round() as u32;
     radio::build_set_lora_params(
@@ -568,7 +601,10 @@ pub(crate) async fn mobile_ble_connect(
     *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
     // FW14: a pending RX_SIGNAL belongs to the old session's next frame.
     state.mobile_signal_latch.lock().await.clear();
-    let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&address));
+    let _ = app.emit(
+        "connection-status",
+        ConnectionStatusEvent::connecting(&address),
+    );
     log::info!("mobile_ble_connect: {}", address);
     Ok(())
 }
@@ -606,20 +642,27 @@ pub(crate) async fn mobile_ble_disconnect(
 ///   1. Emit a "TX-USB" debug-serial-traffic event visible in the Debug Console
 ///   2. Mirror the equivalent `mobile_ble_write_characteristic` for the BLE path
 #[tauri::command]
-pub(crate) async fn mobile_emit_debug_tx(bytes: Vec<u8>, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+pub(crate) async fn mobile_emit_debug_tx(
+    bytes: Vec<u8>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
     let hex = hex::encode(&bytes);
-    let note = bytes.first().map(|cmd| match *cmd {
-        0x02 => "CMD_PING",
-        0x10 => "CMD_DOGE_TX",
-        0x20 => "CMD_GET_FIRMWARE_VERSION",
-        0x22 => "CMD_GET_SETTINGS",
-        0x23 => "CMD_SET_GATEWAY",
-        0x24 => "CMD_WIFI_TOGGLE",
-        0x26 => "CMD_GET_BATTERY",
-        0x27 => "CMD_GET_MAC",
-        0x28 => "CMD_BLE_TOGGLE",
-        _    => "CMD_?",
-    }).unwrap_or("(empty)");
+    let note = bytes
+        .first()
+        .map(|cmd| match *cmd {
+            0x02 => "CMD_PING",
+            0x10 => "CMD_DOGE_TX",
+            0x20 => "CMD_GET_FIRMWARE_VERSION",
+            0x22 => "CMD_GET_SETTINGS",
+            0x23 => "CMD_SET_GATEWAY",
+            0x24 => "CMD_WIFI_TOGGLE",
+            0x26 => "CMD_GET_BATTERY",
+            0x27 => "CMD_GET_MAC",
+            0x28 => "CMD_BLE_TOGGLE",
+            _ => "CMD_?",
+        })
+        .unwrap_or("(empty)");
     emit_debug_traffic(&app, "TX-USB", &hex, note);
     *state.mobile_packets_tx.lock().await += 1;
     Ok(())

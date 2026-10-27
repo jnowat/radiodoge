@@ -91,7 +91,11 @@ pub fn parse_hex(input: &str) -> Result<Vec<u8>, String> {
 
 fn addr(b: &[u8]) -> String {
     let s = format!("{}.{}.{}", b[0], b[1], b[2]);
-    if b == [0xFF, 0xFF, 0xFF] { format!("{} (broadcast)", s) } else { s }
+    if b == [0xFF, 0xFF, 0xFF] {
+        format!("{} (broadcast)", s)
+    } else {
+        s
+    }
 }
 
 /// Cut `bytes` into packets and decode each one.
@@ -101,7 +105,10 @@ pub fn inspect(bytes: &[u8]) -> Report {
     while pos < bytes.len() {
         let skip = resync_offset(&bytes[pos..]);
         if skip > 0 {
-            r.noise.push(Noise { offset: pos, length: skip });
+            r.noise.push(Noise {
+                offset: pos,
+                length: skip,
+            });
             pos += skip;
             continue;
         }
@@ -117,14 +124,25 @@ pub fn inspect(bytes: &[u8]) -> Report {
         let pkt = &buf[..n];
         let frame = if n < SINGLE_HDR_LEN {
             Frame {
-                offset: pos, length: n, command: cmd, command_name: command_name(cmd),
-                flags: None, hops: None, multipart: false, source: None, destination: None,
-                payload_hex: hex::encode(&pkt[1..]), decoded: None,
+                offset: pos,
+                length: n,
+                command: cmd,
+                command_name: command_name(cmd),
+                flags: None,
+                hops: None,
+                multipart: false,
+                source: None,
+                destination: None,
+                payload_hex: hex::encode(&pkt[1..]),
+                decoded: None,
             }
         } else {
             let payload = &pkt[SINGLE_HDR_LEN..];
             Frame {
-                offset: pos, length: n, command: cmd, command_name: command_name(cmd),
+                offset: pos,
+                length: n,
+                command: cmd,
+                command_name: command_name(cmd),
                 flags: Some(pkt[1]),
                 hops: Some(hops_from_flags(pkt[1])),
                 multipart: is_multipart_flags(pkt[1]),
@@ -145,7 +163,10 @@ pub fn inspect(bytes: &[u8]) -> Report {
 pub fn inspect_hex(input: &str) -> String {
     let report = match parse_hex(input) {
         Ok(bytes) => inspect(&bytes),
-        Err(e) => Report { error: Some(e), ..Default::default() },
+        Err(e) => Report {
+            error: Some(e),
+            ..Default::default()
+        },
     };
     serde_json::to_string(&report).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
@@ -170,14 +191,27 @@ mod tests {
         buf.extend(build_ping(&me, &NodeAddress::new(10, 0, 2)));
         buf.extend(build_broadcast(&me, "much wow"));
         let r = inspect(&buf);
-        assert_eq!(r.noise, vec![Noise { offset: 0, length: 2 }]);
+        assert_eq!(
+            r.noise,
+            vec![Noise {
+                offset: 0,
+                length: 2
+            }]
+        );
         assert_eq!(r.frames.len(), 2);
         assert_eq!(r.frames[0].command_name, "PING");
         assert_eq!(r.frames[0].source.as_deref(), Some("10.0.1"));
         assert_eq!(r.frames[0].destination.as_deref(), Some("10.0.2"));
         assert_eq!(r.frames[1].command_name, "MESSAGE");
-        assert_eq!(r.frames[1].destination.as_deref(), Some("255.255.255 (broadcast)"));
-        assert!(r.frames[1].decoded.as_deref().unwrap_or("").contains("much wow"));
+        assert_eq!(
+            r.frames[1].destination.as_deref(),
+            Some("255.255.255 (broadcast)")
+        );
+        assert!(r.frames[1]
+            .decoded
+            .as_deref()
+            .unwrap_or("")
+            .contains("much wow"));
     }
 
     #[test]

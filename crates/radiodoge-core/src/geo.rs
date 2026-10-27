@@ -32,8 +32,15 @@ pub struct Position {
 impl Position {
     /// A position, rejecting out-of-range or non-finite coordinates.
     pub fn new(lat: f64, lon: f64, accuracy_m: Option<u32>) -> Option<Self> {
-        let ok = lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon);
-        ok.then_some(Self { lat, lon, accuracy_m })
+        let ok = lat.is_finite()
+            && lon.is_finite()
+            && (-90.0..=90.0).contains(&lat)
+            && (-180.0..=180.0).contains(&lon);
+        ok.then_some(Self {
+            lat,
+            lon,
+            accuracy_m,
+        })
     }
 
     /// The wire text, `POS:lat,lon[,acc]`.
@@ -47,7 +54,10 @@ impl Position {
 
     /// Parse message text. Returns `None` for anything that is not a valid position.
     pub fn from_message(text: &str) -> Option<Self> {
-        let body = text.trim_end_matches('\0').trim().strip_prefix(POS_PREFIX)?;
+        let body = text
+            .trim_end_matches('\0')
+            .trim()
+            .strip_prefix(POS_PREFIX)?;
         let mut parts = body.split(',').map(str::trim);
         let lat = parts.next()?.parse::<f64>().ok()?;
         let lon = parts.next()?.parse::<f64>().ok()?;
@@ -63,7 +73,10 @@ impl Position {
 
     /// The same text the packet log shows, e.g. `📍 Position: 44.97781, -93.26504 (±15 m)`.
     pub fn describe(&self) -> String {
-        let acc = self.accuracy_m.map(|a| format!(" (±{} m)", a)).unwrap_or_default();
+        let acc = self
+            .accuracy_m
+            .map(|a| format!(" (±{} m)", a))
+            .unwrap_or_default();
         format!("📍 Position: {:.5}, {:.5}{}", self.lat, self.lon, acc)
     }
 
@@ -98,16 +111,33 @@ mod tests {
         let q = Position::from_message(&m).unwrap();
         assert!((q.lat - 44.97781).abs() < 1e-9 && (q.lon + 93.26504).abs() < 1e-9);
         assert_eq!(q.accuracy_m, Some(15));
-        assert_eq!(Position::from_message("POS:1.5,2.5").unwrap().accuracy_m, None);
+        assert_eq!(
+            Position::from_message("POS:1.5,2.5").unwrap().accuracy_m,
+            None
+        );
         assert!(m.len() < 40);
     }
 
     #[test]
     fn rejects_garbage() {
-        for bad in ["", "POS:", "POS:1", "POS:91,0", "POS:0,181", "POS:NaN,0", "POS:1,2,x", "POS:1,2,3,4", "hello", "POS:inf,0"] {
+        for bad in [
+            "",
+            "POS:",
+            "POS:1",
+            "POS:91,0",
+            "POS:0,181",
+            "POS:NaN,0",
+            "POS:1,2,x",
+            "POS:1,2,3,4",
+            "hello",
+            "POS:inf,0",
+        ] {
             assert!(Position::from_message(bad).is_none(), "{bad}");
         }
-        assert!(Position::from_message("POS: 1.0 , 2.0 \0\0").is_some(), "padding and spaces tolerated");
+        assert!(
+            Position::from_message("POS: 1.0 , 2.0 \0\0").is_some(),
+            "padding and spaces tolerated"
+        );
     }
 
     #[test]

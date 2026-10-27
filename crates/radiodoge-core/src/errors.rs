@@ -95,9 +95,15 @@ mod tests {
         let s = friendly("No serial port open — connect first");
         assert!(s.starts_with("No serial port open"));
         assert!(s.contains("Hint: Connect a board first"));
-        assert!(hint_for("Access is denied. (os error 5)").unwrap().contains("Arduino IDE"));
-        assert!(hint_for("operation timed out").unwrap().contains("No answer"));
-        assert!(hint_for("HTTP 429 Too Many Requests").unwrap().contains("rate-limiting"));
+        assert!(hint_for("Access is denied. (os error 5)")
+            .unwrap()
+            .contains("Arduino IDE"));
+        assert!(hint_for("operation timed out")
+            .unwrap()
+            .contains("No answer"));
+        assert!(hint_for("HTTP 429 Too Many Requests")
+            .unwrap()
+            .contains("rate-limiting"));
         assert!(hint_for("The system cannot find the file specified. (os error 2)").is_some());
     }
 

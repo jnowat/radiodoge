@@ -42,7 +42,11 @@ pub(crate) async fn start_gateway(
         log::info!("Releasing {} so the gateway daemon can own it", port);
         state.reconnect_enabled.store(false, Ordering::Relaxed);
         state.connection_generation.fetch_add(1, Ordering::SeqCst);
-        state.serial.disconnect().await.map_err(radiodoge_core::errors::friendly)?;
+        state
+            .serial
+            .disconnect()
+            .await
+            .map_err(radiodoge_core::errors::friendly)?;
         *state.current_port.lock().await = None;
         let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
         #[cfg(desktop)]
@@ -55,7 +59,11 @@ pub(crate) async fn start_gateway(
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
 
-    let cli_name = if cfg!(windows) { "radiodoge-cli.exe" } else { "radiodoge-cli" };
+    let cli_name = if cfg!(windows) {
+        "radiodoge-cli.exe"
+    } else {
+        "radiodoge-cli"
+    };
     let cli_path = exe_dir
         .map(|d| d.join(cli_name))
         .filter(|p| p.exists())
@@ -78,7 +86,11 @@ pub(crate) async fn start_gateway(
     }
     // Store-and-forward: transactions still waiting for the network survive a
     // gateway restart. Unlike the stats snapshot, this file is kept between runs.
-    if let Some(outbox) = stats_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("gateway-outbox.json")) {
+    if let Some(outbox) = stats_path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|d| d.join("gateway-outbox.json"))
+    {
         daemon_args.push("--outbox-file".into());
         daemon_args.push(outbox.to_string_lossy().into_owned());
     }
@@ -105,11 +117,13 @@ pub(crate) async fn start_gateway(
         // open the board at all.
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!(
-            "Failed to spawn '{}': {}. \
+        .map_err(|e| {
+            format!(
+                "Failed to spawn '{}': {}. \
              Bundle radiodoge-cli next to the app executable, or add it to PATH.",
-            cli_path, e
-        ))?;
+                cli_path, e
+            )
+        })?;
 
     // Spawning succeeding only means the binary launched. The daemon can still
     // exit immediately — no board on that port, no permission, port still held —
@@ -125,7 +139,10 @@ pub(crate) async fn start_gateway(
                  is using the port.",
                 status, port
             );
-            if let Some(tail) = daemon_log_path(&app).and_then(|p| std::fs::read_to_string(p).ok()).map(|t| log_tail(&t, 3)) {
+            if let Some(tail) = daemon_log_path(&app)
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|t| log_tail(&t, 3))
+            {
                 if !tail.is_empty() {
                     msg.push_str(&format!(" Daemon said: {}", tail));
                 }
@@ -140,7 +157,7 @@ pub(crate) async fn start_gateway(
             }
             return Err(msg);
         }
-        Ok(None) => {}  // still running, as expected
+        Ok(None) => {} // still running, as expected
         Err(e) => log::warn!("Could not check the gateway daemon's state: {}", e),
     }
 
@@ -161,7 +178,10 @@ pub(crate) fn daemon_log_path(app: &AppHandle) -> Option<std::path::PathBuf> {
 
 /// Where the gateway daemon writes its dashboard snapshot.
 pub(crate) fn gateway_stats_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("gateway-stats.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("gateway-stats.json"))
 }
 
 /// Gateway dashboard: the running daemon's latest counters.
@@ -186,7 +206,9 @@ pub(crate) async fn get_gateway_stats(
     };
     let stats = match gateway_stats_path(&app) {
         Some(p) => match tokio::fs::read(&p).await {
-            Ok(bytes) => serde_json::from_slice::<radiodoge_core::gateway_stats::GatewayStats>(&bytes).ok(),
+            Ok(bytes) => {
+                serde_json::from_slice::<radiodoge_core::gateway_stats::GatewayStats>(&bytes).ok()
+            }
             Err(_) => None,
         },
         None => None,
@@ -200,7 +222,10 @@ pub(crate) async fn get_gateway_stats(
 /// added (other gateways writing `--stats-file` into a shared folder), and
 /// returns each source's status alongside the merged fleet summary.
 #[tauri::command]
-pub(crate) async fn get_fleet_stats(paths: Vec<String>, app: AppHandle) -> Result<serde_json::Value, String> {
+pub(crate) async fn get_fleet_stats(
+    paths: Vec<String>,
+    app: AppHandle,
+) -> Result<serde_json::Value, String> {
     use radiodoge_core::fleet::{aggregate, is_online, FleetMember};
     use radiodoge_core::gateway_stats::GatewayStats;
     pub(crate) const MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -226,12 +251,17 @@ pub(crate) async fn get_fleet_stats(paths: Vec<String>, app: AppHandle) -> Resul
     for (i, (fixed, path)) in sources.into_iter().enumerate() {
         let Some(path) = path else { continue };
         let read = async {
-            let meta = tokio::fs::metadata(&path).await.map_err(radiodoge_core::errors::friendly)?;
+            let meta = tokio::fs::metadata(&path)
+                .await
+                .map_err(radiodoge_core::errors::friendly)?;
             if meta.len() > MAX_BYTES {
                 return Err("file is larger than 4 MB".to_string());
             }
-            let bytes = tokio::fs::read(&path).await.map_err(radiodoge_core::errors::friendly)?;
-            serde_json::from_slice::<GatewayStats>(&bytes).map_err(|e| format!("not a stats file: {e}"))
+            let bytes = tokio::fs::read(&path)
+                .await
+                .map_err(radiodoge_core::errors::friendly)?;
+            serde_json::from_slice::<GatewayStats>(&bytes)
+                .map_err(|e| format!("not a stats file: {e}"))
         }
         .await;
         let is_local = i == 0 && fixed == "This PC";
@@ -239,10 +269,14 @@ pub(crate) async fn get_fleet_stats(paths: Vec<String>, app: AppHandle) -> Resul
             fixed
         } else if let Ok(s) = &read {
             s.gateway_address.clone().unwrap_or_else(|| {
-                path.file_stem().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "gateway".into())
+                path.file_stem()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "gateway".into())
             })
         } else {
-            path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "gateway".into())
+            path.file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "gateway".into())
         };
         let mut label = base.clone();
         let mut n = 2;
@@ -279,10 +313,7 @@ pub(crate) async fn get_fleet_stats(paths: Vec<String>, app: AppHandle) -> Resul
 /// released it — otherwise stopping the gateway would leave the user staring at
 /// a disconnected app with no indication that they need to press Connect again.
 #[tauri::command]
-pub(crate) async fn stop_gateway(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+pub(crate) async fn stop_gateway(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     if let Some(mut child) = state.gateway_process.lock().await.take() {
         let _ = child.kill().await;
         // The OS releases the port when the process actually exits, which is not
@@ -299,7 +330,11 @@ pub(crate) async fn stop_gateway(
             if let Err(e) = connect_port(port.clone(), state, app).await {
                 // Not fatal: the user can press Connect. Say so rather than
                 // reporting a failure to stop the gateway, which did stop.
-                log::warn!("Could not reopen {} after stopping the gateway: {}", port, e);
+                log::warn!(
+                    "Could not reopen {} after stopping the gateway: {}",
+                    port,
+                    e
+                );
             }
         }
     }
@@ -308,7 +343,11 @@ pub(crate) async fn stop_gateway(
 
 /// The last `n` non-empty lines of a log, joined with " | ".
 fn log_tail(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     lines[lines.len().saturating_sub(n)..].join(" | ")
 }
 

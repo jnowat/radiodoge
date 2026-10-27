@@ -29,8 +29,18 @@ pub struct ScanChannel {
 }
 
 impl ScanChannel {
-    fn new(label: impl Into<String>, frequency_mhz: f32, spreading_factor: u8, bandwidth_khz: f32) -> Self {
-        Self { label: label.into(), frequency_mhz, spreading_factor, bandwidth_khz }
+    fn new(
+        label: impl Into<String>,
+        frequency_mhz: f32,
+        spreading_factor: u8,
+        bandwidth_khz: f32,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            frequency_mhz,
+            spreading_factor,
+            bandwidth_khz,
+        }
     }
 
     /// Whether the firmware will accept it (same ranges as `loRaParamsAreValid`).
@@ -60,7 +70,12 @@ pub fn plan(region: &str) -> Vec<ScanChannel> {
     let mut v: Vec<ScanChannel> = (7..=12)
         .map(|sf| ScanChannel::new(format!("{name} SF{sf}"), base, sf, 125.0))
         .collect();
-    v.push(ScanChannel::new(format!("{name} Meshtastic LongFast"), mesh_freq, 11, 250.0));
+    v.push(ScanChannel::new(
+        format!("{name} Meshtastic LongFast"),
+        mesh_freq,
+        11,
+        250.0,
+    ));
     v
 }
 
@@ -72,7 +87,11 @@ pub fn lora_param_fields(s: &LoraSettings) -> (u8, u8, u8, u32, u8) {
         500 => 2,
         _ => 0,
     };
-    let cr = s.coding_rate.trim_start_matches("4/").parse::<u8>().unwrap_or(5);
+    let cr = s
+        .coding_rate
+        .trim_start_matches("4/")
+        .parse::<u8>()
+        .unwrap_or(5);
     let power = s.power_dbm.clamp(2, 22) as u8;
     (s.spreading_factor, bw_idx, cr, freq_khz, power)
 }
@@ -92,7 +111,10 @@ impl ChannelResult {
     /// (RSSI 0, our own address) are ignored by the caller via `is_air_packet`.
     pub fn record(&mut self, p: &IncomingPacket) {
         self.packets += 1;
-        let addr = format!("{}.{}.{}", p.source.region, p.source.community, p.source.node);
+        let addr = format!(
+            "{}.{}.{}",
+            p.source.region, p.source.community, p.source.node
+        );
         let e = self.nodes.entry(addr).or_insert(p.rssi);
         *e = (*e).max(p.rssi);
         self.best_rssi = Some(self.best_rssi.map_or(p.rssi, |b| b.max(p.rssi)));
@@ -103,8 +125,13 @@ impl ChannelResult {
 pub fn is_air_packet(p: &IncomingPacket) -> bool {
     use crate::radio::*;
     const AIR: &[u8] = &[
-        CMD_PING, CMD_MESSAGE, CMD_BROADCAST, CMD_MULTIPART, CMD_DOGE_TX,
-        CMD_RECEIVED_ACK, CMD_RECEIVED_PING,
+        CMD_PING,
+        CMD_MESSAGE,
+        CMD_BROADCAST,
+        CMD_MULTIPART,
+        CMD_DOGE_TX,
+        CMD_RECEIVED_ACK,
+        CMD_RECEIVED_PING,
     ];
     AIR.contains(&p.command) && p.rssi != 0
 }
@@ -148,7 +175,11 @@ mod tests {
 
     #[test]
     fn apply_keeps_power_cr_and_address() {
-        let base = LoraSettings { power_dbm: 14, coding_rate: "4/7".into(), ..Default::default() };
+        let base = LoraSettings {
+            power_dbm: 14,
+            coding_rate: "4/7".into(),
+            ..Default::default()
+        };
         let s = ScanChannel::new("x", 906.875, 11, 250.0).apply_to(&base);
         assert_eq!(lora_param_fields(&s), (11, 1, 7, 906_875, 14));
         assert_eq!(s.node_address, base.node_address);
@@ -157,7 +188,10 @@ mod tests {
     #[test]
     fn records_air_packets_and_strongest_rssi() {
         let mut r = ChannelResult::default();
-        for p in [pkt(crate::radio::CMD_PING, 5, -110), pkt(crate::radio::CMD_PING, 5, -90)] {
+        for p in [
+            pkt(crate::radio::CMD_PING, 5, -110),
+            pkt(crate::radio::CMD_PING, 5, -90),
+        ] {
             assert!(is_air_packet(&p));
             r.record(&p);
         }

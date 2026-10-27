@@ -22,7 +22,9 @@ use tokio::sync::{broadcast, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::radio;
-use crate::types::{BoardSettings, IncomingPacket, NeighborEntry, NodeAddress, PortInfo, RadioStats};
+use crate::types::{
+    BoardSettings, IncomingPacket, NeighborEntry, NodeAddress, PortInfo, RadioStats,
+};
 
 // ─── USB VID/PID tables for common ESP32 / Heltec serial adapters ────────────
 
@@ -254,7 +256,13 @@ impl SerialManager {
 
         // Sort: likely-Heltec USB ports first, then other USB, then non-USB.
         ports.sort_by_key(|p| {
-            if p.is_likely_heltec { 0u8 } else if p.is_usb { 1 } else { 2 }
+            if p.is_likely_heltec {
+                0u8
+            } else if p.is_usb {
+                1
+            } else {
+                2
+            }
         });
 
         ports
@@ -440,7 +448,8 @@ impl SerialManager {
                                 // Parse firmware version from CMD_GET_FIRMWARE_VERSION responses.
                                 // Only while one was asked for — see firmware_query_until_ms.
                                 if packet.command == radio::CMD_GET_FIRMWARE_VERSION
-                                    && now_millis() < firmware_query_until_clone.load(Ordering::Relaxed)
+                                    && now_millis()
+                                        < firmware_query_until_clone.load(Ordering::Relaxed)
                                 {
                                     if let Some(ver) = parse_firmware_version(&packet.payload_hex) {
                                         *firmware_version_clone.lock().await = Some(ver);
@@ -450,9 +459,12 @@ impl SerialManager {
                                 // v0.3.6 — Parse CMD_GET_SETTINGS (0x22) responses.
                                 // Payload: [region, community, node, gateway_mode_byte, wifi_enabled_byte(v0.3.7)]
                                 if packet.command == radio::CMD_GET_SETTINGS {
-                                    if let Some(settings) = parse_settings_payload(&packet.payload_hex) {
+                                    if let Some(settings) =
+                                        parse_settings_payload(&packet.payload_hex)
+                                    {
                                         if settings.node_address != NodeAddress::broadcast() {
-                                            *node_address_clone.lock().await = settings.node_address.clone();
+                                            *node_address_clone.lock().await =
+                                                settings.node_address.clone();
                                         }
                                         *board_settings_clone.lock().await = Some(settings);
                                     }
@@ -539,7 +551,8 @@ impl SerialManager {
             let port = guard
                 .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("No serial port open — connect first"))?;
-            port.write_all(&bytes).context("Failed to write to serial port")?;
+            port.write_all(&bytes)
+                .context("Failed to write to serial port")?;
             port.flush().context("Failed to flush serial port")?;
             Ok::<(), anyhow::Error>(())
         })
@@ -609,18 +622,20 @@ impl SerialManager {
     ) -> Result<bool> {
         let mut rx = self.packet_tx.subscribe();
         self.send_raw(packet).await?;
-        Ok(tokio::time::timeout(Duration::from_millis(timeout_ms), async move {
-            loop {
-                match rx.recv().await {
-                    Ok(pkt) if pkt.command == expect_cmd => return true,
-                    Ok(_) => continue,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => return false,
+        Ok(
+            tokio::time::timeout(Duration::from_millis(timeout_ms), async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(pkt) if pkt.command == expect_cmd => return true,
+                        Ok(_) => continue,
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return false,
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap_or(false))
+            })
+            .await
+            .unwrap_or(false),
+        )
     }
 
     /// Like [`send_and_await_reply`](Self::send_and_await_reply), but returns
@@ -633,17 +648,19 @@ impl SerialManager {
     ) -> Result<Option<IncomingPacket>> {
         let mut rx = self.packet_tx.subscribe();
         self.send_raw(packet).await?;
-        Ok(tokio::time::timeout(Duration::from_millis(timeout_ms), async move {
-            loop {
-                match rx.recv().await {
-                    Ok(pkt) if pkt.command == expect_cmd => return Some(pkt),
-                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => return None,
+        Ok(
+            tokio::time::timeout(Duration::from_millis(timeout_ms), async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(pkt) if pkt.command == expect_cmd => return Some(pkt),
+                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap_or(None))
+            })
+            .await
+            .unwrap_or(None),
+        )
     }
 
     /// Write a complete host→board send — one frame, or a multipart sequence.
@@ -693,7 +710,11 @@ impl SerialManager {
         // the transaction must not be written. For a lone frame the wait is a
         // courtesy confirmation, and retrying it against a board that simply
         // does not answer would stall the send for half a minute.
-        let attempts = if require_ack { FRAME_SEND_RETRIES + 1 } else { 1 };
+        let attempts = if require_ack {
+            FRAME_SEND_RETRIES + 1
+        } else {
+            1
+        };
 
         for (idx, frame) in frames.into_iter().enumerate() {
             let mut acked = false;
@@ -835,7 +856,8 @@ impl SerialManager {
         let local = self.node_address.lock().await.clone();
         self.firmware_query_until_ms
             .store(now_millis() + FIRMWARE_REPLY_WINDOW_MS, Ordering::Relaxed);
-        self.send_raw(radio::build_get_firmware_version(&local)).await
+        self.send_raw(radio::build_get_firmware_version(&local))
+            .await
     }
 
     /// v0.3.6 — Board settings (node address + gateway_mode) as last reported by the device.
@@ -867,7 +889,10 @@ impl SerialManager {
         if !self.is_connected() {
             anyhow::bail!("Not connected to a board");
         }
-        let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let started = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let local = self.get_node_address().await;
         self.send_raw(radio::build_discover(&local)).await?;
         tokio::time::sleep(listen).await;
@@ -902,14 +927,23 @@ impl SerialManager {
         if self.is_connected() {
             let mut rx = self.packet_tx.subscribe();
             let local = self.node_address.lock().await.clone();
-            if self.send_raw(radio::build_get_node_addr(&local)).await.is_ok() {
-                let _ = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async move {
-                    while let Ok(pkt) = rx.recv().await {
-                        if pkt.command == radio::CMD_GET_NODE_ADDR && pkt.source != NodeAddress::broadcast() {
-                            return;
+            if self
+                .send_raw(radio::build_get_node_addr(&local))
+                .await
+                .is_ok()
+            {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_millis(timeout_ms),
+                    async move {
+                        while let Ok(pkt) = rx.recv().await {
+                            if pkt.command == radio::CMD_GET_NODE_ADDR
+                                && pkt.source != NodeAddress::broadcast()
+                            {
+                                return;
+                            }
                         }
-                    }
-                })
+                    },
+                )
                 .await;
             }
         }
@@ -937,8 +971,12 @@ impl SerialManager {
         tokio::time::timeout(deadline, async move {
             loop {
                 match rx.recv().await {
-                    Ok(pkt) if pkt.command == radio::CMD_GET_NODE_ADDR
-                        && pkt.source == expected_owned => return true,
+                    Ok(pkt)
+                        if pkt.command == radio::CMD_GET_NODE_ADDR
+                            && pkt.source == expected_owned =>
+                    {
+                        return true
+                    }
                     Ok(_) => continue,
                     Err(_) => return false,
                 }
@@ -1049,9 +1087,13 @@ impl Default for SerialManager {
 /// updates the neighbor's last known position.
 pub async fn record_neighbor(neighbors: &TokioMutex<Vec<NeighborEntry>>, packet: &IncomingPacket) {
     const MESH_PACKET_CMDS: &[u8] = &[
-        radio::CMD_PING, radio::CMD_MESSAGE, radio::CMD_BROADCAST,
-        radio::CMD_MULTIPART, radio::CMD_DOGE_TX,
-        radio::CMD_RECEIVED_ACK, radio::CMD_RECEIVED_PING,
+        radio::CMD_PING,
+        radio::CMD_MESSAGE,
+        radio::CMD_BROADCAST,
+        radio::CMD_MULTIPART,
+        radio::CMD_DOGE_TX,
+        radio::CMD_RECEIVED_ACK,
+        radio::CMD_RECEIVED_PING,
     ];
     if !MESH_PACKET_CMDS.contains(&packet.command) {
         return;
@@ -1064,14 +1106,15 @@ pub async fn record_neighbor(neighbors: &TokioMutex<Vec<NeighborEntry>>, packet:
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let shared_pos = if packet.command == radio::CMD_MESSAGE || packet.command == radio::CMD_BROADCAST {
-        hex::decode(&packet.payload_hex)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .and_then(|t| crate::geo::Position::from_message(&t))
-    } else {
-        None
-    };
+    let shared_pos =
+        if packet.command == radio::CMD_MESSAGE || packet.command == radio::CMD_BROADCAST {
+            hex::decode(&packet.payload_hex)
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+                .and_then(|t| crate::geo::Position::from_message(&t))
+        } else {
+            None
+        };
     let mut nbrs = neighbors.lock().await;
     if let Some(existing) = nbrs.iter_mut().find(|n| n.address == *src) {
         existing.rssi = packet.rssi;
@@ -1201,7 +1244,10 @@ mod tests {
     #[test]
     fn parses_firmware_version_payload() {
         let hex = hex::encode(b"RadioDoge NV3FW12\0\0");
-        assert_eq!(parse_firmware_version(&hex).as_deref(), Some("RadioDoge NV3FW12"));
+        assert_eq!(
+            parse_firmware_version(&hex).as_deref(),
+            Some("RadioDoge NV3FW12")
+        );
         assert_eq!(parse_firmware_version(&hex::encode(b"\0 ")), None);
         assert_eq!(parse_firmware_version("zz"), None);
     }
@@ -1221,7 +1267,10 @@ mod tests {
     fn parses_battery_and_mac() {
         assert_eq!(parse_battery_mv("0F3C"), Some(3900));
         assert_eq!(parse_battery_mv("0F"), None);
-        assert_eq!(parse_mac("a1b2c3d4e5f6").as_deref(), Some("A1:B2:C3:D4:E5:F6"));
+        assert_eq!(
+            parse_mac("a1b2c3d4e5f6").as_deref(),
+            Some("A1:B2:C3:D4:E5:F6")
+        );
         assert_eq!(parse_mac("a1b2c3"), None);
     }
 
@@ -1235,7 +1284,11 @@ mod tests {
 
 /// Neighbors last heard at or after `since` (unix seconds), strongest first.
 pub fn heard_since(neighbors: &[NeighborEntry], since: u64) -> Vec<NeighborEntry> {
-    let mut v: Vec<NeighborEntry> = neighbors.iter().filter(|n| n.last_seen >= since).cloned().collect();
+    let mut v: Vec<NeighborEntry> = neighbors
+        .iter()
+        .filter(|n| n.last_seen >= since)
+        .cloned()
+        .collect();
     v.sort_by_key(|n| std::cmp::Reverse(n.rssi));
     v
 }
@@ -1246,8 +1299,22 @@ mod discovery_tests {
 
     #[test]
     fn heard_since_filters_and_sorts() {
-        let n = |node, rssi, last_seen| NeighborEntry { address: NodeAddress::new(10, 0, node), rssi, last_seen, position: None, position_at: None };
-        let out = heard_since(&[n(2, -90, 100), n(3, -40, 105), n(4, -70, 99), n(5, -60, 101)], 100);
+        let n = |node, rssi, last_seen| NeighborEntry {
+            address: NodeAddress::new(10, 0, node),
+            rssi,
+            last_seen,
+            position: None,
+            position_at: None,
+        };
+        let out = heard_since(
+            &[
+                n(2, -90, 100),
+                n(3, -40, 105),
+                n(4, -70, 99),
+                n(5, -60, 101),
+            ],
+            100,
+        );
         let nodes: Vec<u8> = out.iter().map(|e| e.address.node).collect();
         assert_eq!(nodes, vec![3, 5, 2]);
     }

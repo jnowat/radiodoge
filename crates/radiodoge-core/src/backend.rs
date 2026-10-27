@@ -41,7 +41,10 @@ pub const DEFAULT_BLOCKCYPHER_URL: &str = "https://api.blockcypher.com/v1/doge/m
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcAuth {
     None,
-    UserPass { user: String, password: String },
+    UserPass {
+        user: String,
+        password: String,
+    },
     /// Path to the `.cookie` file Core writes when `server=1` and no
     /// `rpcpassword` is set. Read on every call, because Core rotates it on restart.
     Cookie(std::path::PathBuf),
@@ -101,7 +104,11 @@ pub fn configured_backends() -> Result<Vec<Backend>> {
         return Ok(b);
     }
     let spec = std::env::var("RADIODOGE_BACKENDS").unwrap_or_default();
-    let spec = if spec.trim().is_empty() { "core,blockcypher".to_string() } else { spec };
+    let spec = if spec.trim().is_empty() {
+        "core,blockcypher".to_string()
+    } else {
+        spec
+    };
     parse_backends(&spec, &|k| std::env::var(k).ok())
 }
 
@@ -121,7 +128,10 @@ pub fn parse_backends(spec: &str, env: &dyn Fn(&str) -> Option<String>) -> Resul
                     .unwrap_or_else(|| DEFAULT_RPC_URL.to_string());
                 let auth = match (env("RADIODOGE_RPC_USER"), env("RADIODOGE_RPC_PASSWORD")) {
                     (Some(user), Some(password)) => RpcAuth::UserPass { user, password },
-                    _ => match env("RADIODOGE_RPC_COOKIE").map(std::path::PathBuf::from).or_else(default_cookie_path) {
+                    _ => match env("RADIODOGE_RPC_COOKIE")
+                        .map(std::path::PathBuf::from)
+                        .or_else(default_cookie_path)
+                    {
                         Some(p) => RpcAuth::Cookie(p),
                         None => RpcAuth::None,
                     },
@@ -135,9 +145,14 @@ pub fn parse_backends(spec: &str, env: &dyn Fn(&str) -> Option<String>) -> Resul
                 token: env("RADIODOGE_BLOCKCYPHER_TOKEN").filter(|t| !t.is_empty()),
             },
             "blockbook" => Backend::Blockbook {
-                base: arg.ok_or_else(|| anyhow!("blockbook needs a URL: blockbook=https://host/api/v2"))?,
+                base: arg.ok_or_else(|| {
+                    anyhow!("blockbook needs a URL: blockbook=https://host/api/v2")
+                })?,
             },
-            other => bail!("Unknown backend '{}' (expected core, blockcypher or blockbook=URL)", other),
+            other => bail!(
+                "Unknown backend '{}' (expected core, blockcypher or blockbook=URL)",
+                other
+            ),
         };
         out.push(b);
     }
@@ -151,7 +166,8 @@ pub fn parse_backends(spec: &str, env: &dyn Fn(&str) -> Option<String>) -> Resul
 pub fn default_cookie_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("Dogecoin").join(".cookie"))
+        std::env::var_os("APPDATA")
+            .map(|a| std::path::PathBuf::from(a).join("Dogecoin").join(".cookie"))
     } else if cfg!(target_os = "macos") {
         home.map(|h| h.join("Library/Application Support/Dogecoin/.cookie"))
     } else {
@@ -185,7 +201,10 @@ fn bc_url(base: &str, path: &str, token: &Option<String>, query: &str) -> String
 }
 
 async fn http_json(req: reqwest::RequestBuilder, what: &str) -> Result<serde_json::Value> {
-    let resp = req.send().await.map_err(|e| anyhow!("{} failed: {}", what, e))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow!("{} failed: {}", what, e))?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     let json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
@@ -197,7 +216,11 @@ async fn http_json(req: reqwest::RequestBuilder, what: &str) -> Result<serde_jso
             .and_then(|j| j.get("error"))
             .map(|e| match e {
                 serde_json::Value::String(s) => s.clone(),
-                other => other.get("message").and_then(|m| m.as_str()).map(String::from).unwrap_or_else(|| other.to_string()),
+                other => other
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| other.to_string()),
             })
             .filter(|s| !s.is_empty() && s != "null");
         return Err(match detail {
@@ -210,7 +233,12 @@ async fn http_json(req: reqwest::RequestBuilder, what: &str) -> Result<serde_jso
 
 // ─── Dogecoin Core JSON-RPC ──────────────────────────────────────────────────
 
-async fn rpc(url: &str, auth: &RpcAuth, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+async fn rpc(
+    url: &str,
+    auth: &RpcAuth,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value> {
     let body = serde_json::json!({"jsonrpc": "1.0", "id": "radiodoge", "method": method, "params": params});
     let mut req = client()?.post(url).json(&body);
     match auth {
@@ -219,21 +247,33 @@ async fn rpc(url: &str, auth: &RpcAuth, method: &str, params: serde_json::Value)
         RpcAuth::Cookie(path) => {
             let cookie = std::fs::read_to_string(path)
                 .map_err(|e| anyhow!("Core RPC cookie {} unreadable: {}", path.display(), e))?;
-            let (u, p) = cookie.trim().split_once(':').ok_or_else(|| anyhow!("Malformed Core RPC cookie"))?;
+            let (u, p) = cookie
+                .trim()
+                .split_once(':')
+                .ok_or_else(|| anyhow!("Malformed Core RPC cookie"))?;
             req = req.basic_auth(u, Some(p));
         }
     }
-    let resp = req.send().await.map_err(|e| anyhow!("Core RPC {} failed: {}", method, e))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow!("Core RPC {} failed: {}", method, e))?;
     let status = resp.status();
     if status.as_u16() == 401 {
-        bail!("Core RPC {} failed: HTTP 401 (check rpcuser/rpcpassword or cookie)", method);
+        bail!(
+            "Core RPC {} failed: HTTP 401 (check rpcuser/rpcpassword or cookie)",
+            method
+        );
     }
     let text = resp.text().await.unwrap_or_default();
     // Core answers RPC-level errors with HTTP 500 and a JSON body — read it either way.
     let v: serde_json::Value = serde_json::from_str(&text)
         .map_err(|_| anyhow!("Core RPC {} failed: HTTP {}", method, status.as_u16()))?;
     if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
-        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error");
         bail!("Core RPC {}: {}", method, msg);
     }
     Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
@@ -241,8 +281,14 @@ async fn rpc(url: &str, auth: &RpcAuth, method: &str, params: serde_json::Value)
 
 async fn core_require_watched(url: &str, auth: &RpcAuth, address: &str) -> Result<()> {
     let info = rpc(url, auth, "validateaddress", serde_json::json!([address])).await?;
-    let mine = info.get("ismine").and_then(|v| v.as_bool()).unwrap_or(false);
-    let watch = info.get("iswatchonly").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mine = info
+        .get("ismine")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let watch = info
+        .get("iswatchonly")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !mine && !watch {
         bail!(
             "address {} is not in the Core wallet (listunspent would report 0); import it once with: dogecoin-cli importaddress {} \"radiodoge\" true",
@@ -254,14 +300,33 @@ async fn core_require_watched(url: &str, auth: &RpcAuth, address: &str) -> Resul
 
 async fn core_utxos(url: &str, auth: &RpcAuth, address: &str) -> Result<Vec<Utxo>> {
     core_require_watched(url, auth, address).await?;
-    let list = rpc(url, auth, "listunspent", serde_json::json!([0, 9_999_999, [address]])).await?;
-    let arr = list.as_array().ok_or_else(|| anyhow!("Core listunspent: unexpected result"))?;
+    let list = rpc(
+        url,
+        auth,
+        "listunspent",
+        serde_json::json!([0, 9_999_999, [address]]),
+    )
+    .await?;
+    let arr = list
+        .as_array()
+        .ok_or_else(|| anyhow!("Core listunspent: unexpected result"))?;
     arr.iter()
         .map(|u| {
-            let amount = u.get("amount").and_then(|a| a.as_f64()).ok_or_else(|| anyhow!("listunspent: missing amount"))?;
+            let amount = u
+                .get("amount")
+                .and_then(|a| a.as_f64())
+                .ok_or_else(|| anyhow!("listunspent: missing amount"))?;
             Ok(Utxo {
-                txid: u.get("txid").and_then(|t| t.as_str()).ok_or_else(|| anyhow!("listunspent: missing txid"))?.to_string(),
-                vout: u.get("vout").and_then(|t| t.as_u64()).ok_or_else(|| anyhow!("listunspent: missing vout"))? as u32,
+                txid: u
+                    .get("txid")
+                    .and_then(|t| t.as_str())
+                    .ok_or_else(|| anyhow!("listunspent: missing txid"))?
+                    .to_string(),
+                vout: u
+                    .get("vout")
+                    .and_then(|t| t.as_u64())
+                    .ok_or_else(|| anyhow!("listunspent: missing vout"))?
+                    as u32,
                 value: (amount * 1e8).round() as u64,
                 confirmations: u.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
                 coinbase: false,
@@ -273,10 +338,18 @@ async fn core_utxos(url: &str, auth: &RpcAuth, address: &str) -> Result<Vec<Utxo
 // ─── BlockCypher ─────────────────────────────────────────────────────────────
 
 async fn bc_utxos(base: &str, token: &Option<String>, address: &str) -> Result<Vec<Utxo>> {
-    let url = bc_url(base, &format!("/addrs/{}", address), token, "unspentOnly=true&includeScript=false&limit=2000");
+    let url = bc_url(
+        base,
+        &format!("/addrs/{}", address),
+        token,
+        "unspentOnly=true&includeScript=false&limit=2000",
+    );
     let v = http_json(client()?.get(&url), "UTXO fetch").await?;
     if v.get("hasMore").and_then(|h| h.as_bool()).unwrap_or(false) {
-        log::warn!("BlockCypher returned a partial UTXO list for {} (hasMore)", address);
+        log::warn!(
+            "BlockCypher returned a partial UTXO list for {} (hasMore)",
+            address
+        );
     }
     let mut out = Vec::new();
     for key in ["txrefs", "unconfirmed_txrefs"] {
@@ -285,9 +358,20 @@ async fn bc_utxos(base: &str, token: &Option<String>, address: &str) -> Result<V
                 continue;
             }
             out.push(Utxo {
-                txid: r.get("tx_hash").and_then(|t| t.as_str()).ok_or_else(|| anyhow!("BlockCypher: missing tx_hash"))?.to_string(),
-                vout: r.get("tx_output_n").and_then(|n| n.as_u64()).ok_or_else(|| anyhow!("BlockCypher: missing tx_output_n"))? as u32,
-                value: r.get("value").and_then(|n| n.as_u64()).ok_or_else(|| anyhow!("BlockCypher: missing value"))?,
+                txid: r
+                    .get("tx_hash")
+                    .and_then(|t| t.as_str())
+                    .ok_or_else(|| anyhow!("BlockCypher: missing tx_hash"))?
+                    .to_string(),
+                vout: r
+                    .get("tx_output_n")
+                    .and_then(|n| n.as_u64())
+                    .ok_or_else(|| anyhow!("BlockCypher: missing tx_output_n"))?
+                    as u32,
+                value: r
+                    .get("value")
+                    .and_then(|n| n.as_u64())
+                    .ok_or_else(|| anyhow!("BlockCypher: missing value"))?,
                 confirmations: r.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
                 coinbase: false,
             });
@@ -301,13 +385,27 @@ async fn bc_utxos(base: &str, token: &Option<String>, address: &str) -> Result<V
 async fn bb_utxos(base: &str, address: &str) -> Result<Vec<Utxo>> {
     let url = format!("{}/utxo/{}", base.trim_end_matches('/'), address);
     let v = http_json(client()?.get(&url), "UTXO fetch").await?;
-    let arr = v.as_array().ok_or_else(|| anyhow!("Blockbook: unexpected UTXO response"))?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| anyhow!("Blockbook: unexpected UTXO response"))?;
     arr.iter()
         .map(|u| {
             Ok(Utxo {
-                txid: u.get("txid").and_then(|t| t.as_str()).ok_or_else(|| anyhow!("Blockbook: missing txid"))?.to_string(),
-                vout: u.get("vout").and_then(|t| t.as_u64()).ok_or_else(|| anyhow!("Blockbook: missing vout"))? as u32,
-                value: u.get("value").and_then(|t| t.as_str()).and_then(|s| s.parse().ok()).ok_or_else(|| anyhow!("Blockbook: bad value"))?,
+                txid: u
+                    .get("txid")
+                    .and_then(|t| t.as_str())
+                    .ok_or_else(|| anyhow!("Blockbook: missing txid"))?
+                    .to_string(),
+                vout: u
+                    .get("vout")
+                    .and_then(|t| t.as_u64())
+                    .ok_or_else(|| anyhow!("Blockbook: missing vout"))?
+                    as u32,
+                value: u
+                    .get("value")
+                    .and_then(|t| t.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| anyhow!("Blockbook: bad value"))?,
                 confirmations: u.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
                 coinbase: u.get("coinbase").and_then(|c| c.as_bool()).unwrap_or(false),
             })
@@ -331,17 +429,31 @@ pub async fn balance_from(b: &Backend, address: &str) -> Result<u64> {
     match b {
         Backend::Core { url, auth } => {
             // Confirmed = outputs with at least one confirmation.
-            Ok(core_utxos(url, auth, address).await?.iter().filter(|u| u.confirmations >= 1).map(|u| u.value).sum())
+            Ok(core_utxos(url, auth, address)
+                .await?
+                .iter()
+                .filter(|u| u.confirmations >= 1)
+                .map(|u| u.value)
+                .sum())
         }
         Backend::BlockCypher { base, token } => {
             let url = bc_url(base, &format!("/addrs/{}/balance", address), token, "");
             let v = http_json(client()?.get(&url), "Balance fetch").await?;
-            v.get("balance").and_then(|b| b.as_u64()).ok_or_else(|| anyhow!("Invalid balance value in BlockCypher response"))
+            v.get("balance")
+                .and_then(|b| b.as_u64())
+                .ok_or_else(|| anyhow!("Invalid balance value in BlockCypher response"))
         }
         Backend::Blockbook { base } => {
-            let url = format!("{}/address/{}?details=basic", base.trim_end_matches('/'), address);
+            let url = format!(
+                "{}/address/{}?details=basic",
+                base.trim_end_matches('/'),
+                address
+            );
             let v = http_json(client()?.get(&url), "Balance fetch").await?;
-            v.get("balance").and_then(|b| b.as_str()).and_then(|s| s.parse().ok()).ok_or_else(|| anyhow!("Invalid balance value in Blockbook response"))
+            v.get("balance")
+                .and_then(|b| b.as_str())
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| anyhow!("Invalid balance value in Blockbook response"))
         }
     }
 }
@@ -350,24 +462,50 @@ pub async fn balance_from(b: &Backend, address: &str) -> Result<u64> {
 pub async fn broadcast_via(b: &Backend, raw_hex: &str) -> Result<String> {
     match b {
         Backend::Core { url, auth } => {
-            let r = rpc(url, auth, "sendrawtransaction", serde_json::json!([raw_hex])).await
-                .map_err(|e| anyhow!("Network rejected transaction: {}", e))?;
-            r.as_str().map(String::from).ok_or_else(|| anyhow!("Unexpected sendrawtransaction result: {}", r))
+            let r = rpc(
+                url,
+                auth,
+                "sendrawtransaction",
+                serde_json::json!([raw_hex]),
+            )
+            .await
+            .map_err(|e| anyhow!("Network rejected transaction: {}", e))?;
+            r.as_str()
+                .map(String::from)
+                .ok_or_else(|| anyhow!("Unexpected sendrawtransaction result: {}", r))
         }
         Backend::BlockCypher { base, token } => {
             let url = bc_url(base, "/txs/push", token, "");
-            let v = http_json(client()?.post(&url).json(&serde_json::json!({"tx": raw_hex})), "Broadcast")
-                .await
-                .map_err(|e| {
-                    let s = e.to_string();
-                    if s.contains("HTTP 400") { anyhow!("Network rejected transaction: {}", s) } else { e }
-                })?;
-            v.pointer("/tx/hash").and_then(|h| h.as_str()).map(String::from)
+            let v = http_json(
+                client()?
+                    .post(&url)
+                    .json(&serde_json::json!({"tx": raw_hex})),
+                "Broadcast",
+            )
+            .await
+            .map_err(|e| {
+                let s = e.to_string();
+                if s.contains("HTTP 400") {
+                    anyhow!("Network rejected transaction: {}", s)
+                } else {
+                    e
+                }
+            })?;
+            v.pointer("/tx/hash")
+                .and_then(|h| h.as_str())
+                .map(String::from)
                 .ok_or_else(|| anyhow!("Unexpected broadcast response: {}", v))
         }
         Backend::Blockbook { base } => {
             let url = format!("{}/sendtx/", base.trim_end_matches('/'));
-            let v = http_json(client()?.post(&url).header("Content-Type", "text/plain").body(raw_hex.to_string()), "Broadcast").await?;
+            let v = http_json(
+                client()?
+                    .post(&url)
+                    .header("Content-Type", "text/plain")
+                    .body(raw_hex.to_string()),
+                "Broadcast",
+            )
+            .await?;
             if let Some(txid) = v.get("result").and_then(|r| r.as_str()) {
                 Ok(txid.to_string())
             } else if let Some(err) = v.get("error").and_then(|r| r.as_str()) {
@@ -386,22 +524,39 @@ pub async fn tx_status_from(b: &Backend, txid: &str) -> Result<TxStatus> {
             // Works for mempool txs, wallet txs, and anything if Core runs with txindex=1.
             let v = rpc(url, auth, "getrawtransaction", serde_json::json!([txid, 1])).await?;
             let confirmations = v.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0) as u32;
-            let block_hash = v.get("blockhash").and_then(|h| h.as_str()).map(String::from);
+            let block_hash = v
+                .get("blockhash")
+                .and_then(|h| h.as_str())
+                .map(String::from);
             let block_height = match &block_hash {
-                Some(h) => rpc(url, auth, "getblockheader", serde_json::json!([h])).await?
-                    .get("height").and_then(|x| x.as_u64()),
+                Some(h) => rpc(url, auth, "getblockheader", serde_json::json!([h]))
+                    .await?
+                    .get("height")
+                    .and_then(|x| x.as_u64()),
                 None => None,
             };
-            Ok(TxStatus { confirmations, block_height, block_hash })
+            Ok(TxStatus {
+                confirmations,
+                block_height,
+                block_hash,
+            })
         }
         Backend::BlockCypher { base, token } => {
-            let url = bc_url(base, &format!("/txs/{}", txid), token, "includeHex=false&limit=1");
+            let url = bc_url(
+                base,
+                &format!("/txs/{}", txid),
+                token,
+                "includeHex=false&limit=1",
+            );
             let v = http_json(client()?.get(&url), "Transaction lookup").await?;
             let h = v.get("block_height").and_then(|x| x.as_i64()).unwrap_or(-1);
             Ok(TxStatus {
                 confirmations: v.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
                 block_height: (h >= 0).then_some(h as u64),
-                block_hash: v.get("block_hash").and_then(|x| x.as_str()).map(String::from),
+                block_hash: v
+                    .get("block_hash")
+                    .and_then(|x| x.as_str())
+                    .map(String::from),
             })
         }
         Backend::Blockbook { base } => {
@@ -411,7 +566,10 @@ pub async fn tx_status_from(b: &Backend, txid: &str) -> Result<TxStatus> {
             Ok(TxStatus {
                 confirmations: v.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
                 block_height: (h >= 0).then_some(h as u64),
-                block_hash: v.get("blockHash").and_then(|x| x.as_str()).map(String::from),
+                block_hash: v
+                    .get("blockHash")
+                    .and_then(|x| x.as_str())
+                    .map(String::from),
             })
         }
     }
@@ -432,19 +590,23 @@ pub async fn fee_rate_from(b: &Backend) -> Result<u64> {
     match b {
         Backend::Core { url, auth } => {
             let v = rpc(url, auth, "estimatesmartfee", serde_json::json!([6])).await?;
-            v.get("feerate").and_then(doge_per_kb)
+            v.get("feerate")
+                .and_then(doge_per_kb)
                 .ok_or_else(|| anyhow!("Core has no fee estimate yet (not enough recent blocks)"))
         }
         Backend::BlockCypher { base, token } => {
             let url = bc_url(base, "", token, "");
             let v = http_json(client()?.get(&url), "Fee estimate").await?;
-            v.get("medium_fee_per_kb").and_then(|x| x.as_u64()).filter(|r| *r > 0)
+            v.get("medium_fee_per_kb")
+                .and_then(|x| x.as_u64())
+                .filter(|r| *r > 0)
                 .ok_or_else(|| anyhow!("BlockCypher response has no medium_fee_per_kb"))
         }
         Backend::Blockbook { base } => {
             let url = format!("{}/estimatefee/6", base.trim_end_matches('/'));
             let v = http_json(client()?.get(&url), "Fee estimate").await?;
-            v.get("result").and_then(doge_per_kb)
+            v.get("result")
+                .and_then(doge_per_kb)
                 .ok_or_else(|| anyhow!("Blockbook returned no usable fee estimate"))
         }
     }
@@ -478,7 +640,10 @@ where
 
 pub async fn fetch_balance(address: &str) -> Result<u64> {
     let bs = configured_backends()?;
-    with_fallback(&bs, "Balance fetch", |b| async move { balance_from(&b, address).await }).await
+    with_fallback(&bs, "Balance fetch", |b| async move {
+        balance_from(&b, address).await
+    })
+    .await
 }
 
 /// A saved UTXO list for one address, so a machine with no internet can sign
@@ -493,7 +658,8 @@ pub struct UtxoSnapshot {
 
 /// Parse a snapshot and check it belongs to `address`.
 pub fn utxos_from_snapshot(json: &str, address: &str) -> Result<Vec<Utxo>> {
-    let snap: UtxoSnapshot = serde_json::from_str(json).map_err(|e| anyhow!("UTXO snapshot is not valid JSON: {}", e))?;
+    let snap: UtxoSnapshot = serde_json::from_str(json)
+        .map_err(|e| anyhow!("UTXO snapshot is not valid JSON: {}", e))?;
     if snap.address != address {
         bail!("UTXO snapshot is for {}, not {}", snap.address, address);
     }
@@ -504,34 +670,58 @@ pub fn utxos_from_snapshot(json: &str, address: &str) -> Result<Vec<Utxo>> {
 /// snapshot (offline signing) instead of the network.
 pub async fn fetch_utxos(address: &str) -> Result<Vec<Utxo>> {
     if let Ok(path) = std::env::var("RADIODOGE_UTXO_FILE") {
-        let body = std::fs::read_to_string(&path).map_err(|e| anyhow!("reading UTXO snapshot {}: {}", path, e))?;
+        let body = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow!("reading UTXO snapshot {}: {}", path, e))?;
         return utxos_from_snapshot(&body, address);
     }
     let bs = configured_backends()?;
-    with_fallback(&bs, "UTXO fetch", |b| async move { utxos_from(&b, address).await }).await
+    with_fallback(&bs, "UTXO fetch", |b| async move {
+        utxos_from(&b, address).await
+    })
+    .await
 }
 
 pub async fn broadcast(raw_hex: &str) -> Result<String> {
     let bs = configured_backends()?;
-    with_fallback(&bs, "Broadcast", |b| async move { broadcast_via(&b, raw_hex).await }).await
+    with_fallback(&bs, "Broadcast", |b| async move {
+        broadcast_via(&b, raw_hex).await
+    })
+    .await
 }
 
 pub async fn fetch_tx_status(txid: &str) -> Result<TxStatus> {
     let bs = configured_backends()?;
-    with_fallback(&bs, "Transaction lookup", |b| async move { tx_status_from(&b, txid).await }).await
+    with_fallback(&bs, "Transaction lookup", |b| async move {
+        tx_status_from(&b, txid).await
+    })
+    .await
 }
 
 pub async fn fetch_fee_rate() -> Result<u64> {
     let bs = configured_backends()?;
-    with_fallback(&bs, "Fee estimate", |b| async move { fee_rate_from(&b).await }).await
+    with_fallback(
+        &bs,
+        "Fee estimate",
+        |b| async move { fee_rate_from(&b).await },
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn utxo_snapshot_round_trips_and_checks_address() {
-        let snap = UtxoSnapshot { address: "Daddr".into(), fetched_at: 1, utxos: vec![Utxo {
-            txid: "ab".repeat(32), vout: 1, value: 100_000_000, confirmations: 3, coinbase: false }] };
+        let snap = UtxoSnapshot {
+            address: "Daddr".into(),
+            fetched_at: 1,
+            utxos: vec![Utxo {
+                txid: "ab".repeat(32),
+                vout: 1,
+                value: 100_000_000,
+                confirmations: 3,
+                coinbase: false,
+            }],
+        };
         let json = serde_json::to_string(&snap).unwrap();
         assert_eq!(utxos_from_snapshot(&json, "Daddr").unwrap(), snap.utxos);
         assert!(utxos_from_snapshot(&json, "Dother").is_err());
@@ -543,7 +733,9 @@ mod tests {
 
     /// Minimal one-shot-per-connection HTTP mock: serves `responses` in order
     /// and returns the raw requests it saw.
-    async fn mock(responses: Vec<(u16, &'static str)>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    async fn mock(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let h = tokio::spawn(async move {
@@ -557,12 +749,21 @@ mod tests {
                     req.extend_from_slice(&buf[..n]);
                     let text = String::from_utf8_lossy(&req).to_string();
                     if let Some(i) = text.find("\r\n\r\n") {
-                        let len = text.lines()
-                            .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                        let len = text
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
                             .unwrap_or(0);
-                        if req.len() >= i + 4 + len { break; }
+                        if req.len() >= i + 4 + len {
+                            break;
+                        }
                     }
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                 }
                 seen.push(String::from_utf8_lossy(&req).to_string());
                 let resp = format!("HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", code, body.len(), body);
@@ -574,14 +775,18 @@ mod tests {
         (url, h)
     }
 
-    fn no_env(_: &str) -> Option<String> { None }
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
 
     #[test]
     fn parse_defaults_and_overrides() {
         let b = parse_backends("core,blockcypher", &no_env).unwrap();
         assert_eq!(b.len(), 2);
         assert!(matches!(&b[0], Backend::Core { url, .. } if url == DEFAULT_RPC_URL));
-        assert!(matches!(&b[1], Backend::BlockCypher { base, token: None } if base == DEFAULT_BLOCKCYPHER_URL));
+        assert!(
+            matches!(&b[1], Backend::BlockCypher { base, token: None } if base == DEFAULT_BLOCKCYPHER_URL)
+        );
 
         let env = |k: &str| match k {
             "RADIODOGE_RPC_USER" => Some("u".into()),
@@ -589,12 +794,39 @@ mod tests {
             "RADIODOGE_BLOCKCYPHER_TOKEN" => Some("t".into()),
             _ => None,
         };
-        let b = parse_backends("core=http://10.0.0.2:22555, blockcypher, blockbook=https://bb/api/v2", &env).unwrap();
-        assert_eq!(b[0], Backend::Core { url: "http://10.0.0.2:22555".into(), auth: RpcAuth::UserPass { user: "u".into(), password: "p".into() } });
-        assert_eq!(b[1], Backend::BlockCypher { base: DEFAULT_BLOCKCYPHER_URL.into(), token: Some("t".into()) });
-        assert_eq!(b[2], Backend::Blockbook { base: "https://bb/api/v2".into() });
+        let b = parse_backends(
+            "core=http://10.0.0.2:22555, blockcypher, blockbook=https://bb/api/v2",
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            b[0],
+            Backend::Core {
+                url: "http://10.0.0.2:22555".into(),
+                auth: RpcAuth::UserPass {
+                    user: "u".into(),
+                    password: "p".into()
+                }
+            }
+        );
+        assert_eq!(
+            b[1],
+            Backend::BlockCypher {
+                base: DEFAULT_BLOCKCYPHER_URL.into(),
+                token: Some("t".into())
+            }
+        );
+        assert_eq!(
+            b[2],
+            Backend::Blockbook {
+                base: "https://bb/api/v2".into()
+            }
+        );
 
-        assert!(parse_backends("blockbook", &no_env).is_err(), "blockbook needs an explicit URL");
+        assert!(
+            parse_backends("blockbook", &no_env).is_err(),
+            "blockbook needs an explicit URL"
+        );
         assert!(parse_backends("trezor", &no_env).is_err());
         assert!(parse_backends(" , ", &no_env).is_err());
     }
@@ -613,20 +845,43 @@ mod tests {
             (201, r#"{"tx":{"hash":"deadbeef"}}"#),
             (400, r#"{"error":"Error validating transaction: Transaction with hash deadbeef already exists."}"#),
         ]).await;
-        let b = Backend::BlockCypher { base: url, token: Some("tok".into()) };
+        let b = Backend::BlockCypher {
+            base: url,
+            token: Some("tok".into()),
+        };
         assert_eq!(balance_from(&b, "D").await.unwrap(), 2_300_000_000);
         let u = utxos_from(&b, "D").await.unwrap();
-        assert_eq!(u, vec![
-            Utxo { txid: "aa".into(), vout: 1, value: 500, confirmations: 7, coinbase: false },
-            Utxo { txid: "cc".into(), vout: 2, value: 42, confirmations: 0, coinbase: false },
-        ]);
+        assert_eq!(
+            u,
+            vec![
+                Utxo {
+                    txid: "aa".into(),
+                    vout: 1,
+                    value: 500,
+                    confirmations: 7,
+                    coinbase: false
+                },
+                Utxo {
+                    txid: "cc".into(),
+                    vout: 2,
+                    value: 42,
+                    confirmations: 0,
+                    coinbase: false
+                },
+            ]
+        );
         assert_eq!(broadcast_via(&b, "0100").await.unwrap(), "deadbeef");
         let e = broadcast_via(&b, "0100").await.unwrap_err().to_string();
-        assert!(e.contains("Network rejected transaction") && e.contains("already exists"), "{e}");
+        assert!(
+            e.contains("Network rejected transaction") && e.contains("already exists"),
+            "{e}"
+        );
         let reqs = h.await.unwrap();
         assert!(reqs[0].starts_with("GET /addrs/D/balance?token=tok "));
         assert!(reqs[1].contains("unspentOnly=true"));
-        assert!(reqs[2].starts_with("POST /txs/push?token=tok") && reqs[2].contains(r#"{"tx":"0100"}"#));
+        assert!(
+            reqs[2].starts_with("POST /txs/push?token=tok") && reqs[2].contains(r#"{"tx":"0100"}"#)
+        );
     }
 
     #[tokio::test]
@@ -637,11 +892,17 @@ mod tests {
             (200, r#"{"result":{"feerate":0.03,"blocks":6},"error":null,"id":"radiodoge"}"#),
             (200, r#"{"result":{"errors":["Insufficient data"],"blocks":0},"error":null,"id":"radiodoge"}"#),
         ]).await;
-        let bc = Backend::BlockCypher { base: url.clone(), token: None };
+        let bc = Backend::BlockCypher {
+            base: url.clone(),
+            token: None,
+        };
         assert_eq!(fee_rate_from(&bc).await.unwrap(), 1_500_000);
         let bb = Backend::Blockbook { base: url.clone() };
         assert_eq!(fee_rate_from(&bb).await.unwrap(), 2_000_000);
-        let core = Backend::Core { url: url.clone(), auth: RpcAuth::None };
+        let core = Backend::Core {
+            url: url.clone(),
+            auth: RpcAuth::None,
+        };
         assert_eq!(fee_rate_from(&core).await.unwrap(), 3_000_000);
         assert!(fee_rate_from(&core).await.is_err());
         let reqs = h.await.unwrap();
@@ -661,7 +922,13 @@ mod tests {
             (200, r#"{"result":"cafe","error":null,"id":"radiodoge"}"#),
             (500, r#"{"result":null,"error":{"code":-27,"message":"transaction already in block chain"},"id":"radiodoge"}"#),
         ]).await;
-        let b = Backend::Core { url, auth: RpcAuth::UserPass { user: "u".into(), password: "p".into() } };
+        let b = Backend::Core {
+            url,
+            auth: RpcAuth::UserPass {
+                user: "u".into(),
+                password: "p".into(),
+            },
+        };
         assert_eq!(balance_from(&b, "D").await.unwrap(), 2_300_000_000);
         let e = balance_from(&b, "D").await.unwrap_err().to_string();
         assert!(e.contains("importaddress"), "{e}");
@@ -669,7 +936,9 @@ mod tests {
         let e = broadcast_via(&b, "0100").await.unwrap_err().to_string();
         assert!(e.contains("already in block chain"), "{e}");
         let reqs = h.await.unwrap();
-        assert!(reqs[0].to_ascii_lowercase().contains("authorization: basic dtpw")); // base64("u:p")
+        assert!(reqs[0]
+            .to_ascii_lowercase()
+            .contains("authorization: basic dtpw")); // base64("u:p")
         assert!(reqs[1].contains(r#""method":"listunspent""#));
         assert!(reqs[3].contains(r#""method":"sendrawtransaction""#));
     }
@@ -679,29 +948,61 @@ mod tests {
         // Port 9 on localhost: nothing listening → connection refused.
         let (url, h) = mock(vec![(200, r#"{"balance":7}"#)]).await;
         let list = vec![
-            Backend::Core { url: "http://127.0.0.1:9".into(), auth: RpcAuth::None },
+            Backend::Core {
+                url: "http://127.0.0.1:9".into(),
+                auth: RpcAuth::None,
+            },
             Backend::Blockbook { base: url.clone() },
         ];
         // Blockbook returns balance as a string; a number is a parse error → both fail.
-        let e = with_fallback(&list, "Balance fetch", |b| async move { balance_from(&b, "D").await }).await.unwrap_err().to_string();
+        let e = with_fallback(&list, "Balance fetch", |b| async move {
+            balance_from(&b, "D").await
+        })
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("core:") && e.contains("blockbook:"), "{e}");
         h.await.unwrap();
 
         let (url, h) = mock(vec![(200, r#"{"balance":"7"}"#)]).await;
         let list = vec![
-            Backend::Core { url: "http://127.0.0.1:9".into(), auth: RpcAuth::None },
+            Backend::Core {
+                url: "http://127.0.0.1:9".into(),
+                auth: RpcAuth::None,
+            },
             Backend::Blockbook { base: url },
         ];
-        assert_eq!(with_fallback(&list, "Balance fetch", |b| async move { balance_from(&b, "D").await }).await.unwrap(), 7);
+        assert_eq!(
+            with_fallback(&list, "Balance fetch", |b| async move {
+                balance_from(&b, "D").await
+            })
+            .await
+            .unwrap(),
+            7
+        );
         h.await.unwrap();
     }
 
     #[tokio::test]
     async fn tx_status_blockcypher() {
-        let (url, h) = mock(vec![(200, r#"{"block_height":6405433,"block_hash":"00ff","confirmations":3}"#)]).await;
-        let b = Backend::BlockCypher { base: url, token: None };
+        let (url, h) = mock(vec![(
+            200,
+            r#"{"block_height":6405433,"block_hash":"00ff","confirmations":3}"#,
+        )])
+        .await;
+        let b = Backend::BlockCypher {
+            base: url,
+            token: None,
+        };
         let s = tx_status_from(&b, "ab").await.unwrap();
-        assert_eq!(s, TxStatus { confirmations: 3, block_height: Some(6405433), block_hash: Some("00ff".into()) });
+        assert_eq!(
+            s,
+            TxStatus {
+                confirmations: 3,
+                block_height: Some(6405433),
+                block_hash: Some("00ff".into())
+            }
+        );
         h.await.unwrap();
     }
 }

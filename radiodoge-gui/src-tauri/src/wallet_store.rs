@@ -24,7 +24,9 @@ pub(crate) async fn saved_wallet_address(app: &AppHandle) -> Option<String> {
         return Some(enc.address);
     }
     // Legacy plaintext format (pre-v0.3.16).
-    serde_json::from_str::<WalletInfo>(&json).ok().map(|w| w.address)
+    serde_json::from_str::<WalletInfo>(&json)
+        .ok()
+        .map(|w| w.address)
 }
 
 #[tauri::command]
@@ -58,12 +60,15 @@ pub(crate) async fn save_wallet(
     // that saved "successfully" but cannot be reopened is indistinguishable from
     // losing the coins. The cost is one extra argon2 pass on save.
     match wallet::decrypt_wallet(&encrypted, &passphrase) {
-        Ok(check) if check.private_key_wif == wallet_info.private_key_wif
-            && check.address == wallet_info.address => {}
+        Ok(check)
+            if check.private_key_wif == wallet_info.private_key_wif
+                && check.address == wallet_info.address => {}
         Ok(_) => {
-            return Err("Refusing to save: the encrypted wallet did not decrypt back to the \
+            return Err(
+                "Refusing to save: the encrypted wallet did not decrypt back to the \
                         same key. Nothing was written; your existing wallet file is untouched."
-                .to_string())
+                    .to_string(),
+            )
         }
         Err(e) => {
             return Err(format!(
@@ -74,10 +79,16 @@ pub(crate) async fn save_wallet(
         }
     }
 
-    let dir = app.path().app_data_dir().map_err(radiodoge_core::errors::friendly)?;
-    tokio::fs::create_dir_all(&dir).await.map_err(radiodoge_core::errors::friendly)?;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(radiodoge_core::errors::friendly)?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     let path = dir.join("wallet.json");
-    let json = serde_json::to_string_pretty(&encrypted).map_err(radiodoge_core::errors::friendly)?;
+    let json =
+        serde_json::to_string_pretty(&encrypted).map_err(radiodoge_core::errors::friendly)?;
     write_file_atomically(&path, &json).await?;
     log::info!("Encrypted wallet saved to disk.");
     Ok(())
@@ -99,7 +110,10 @@ pub(crate) async fn wallet_needs_passphrase(app: AppHandle) -> bool {
 ///   the user to re-save with a passphrase.
 /// Returns `Err("passphrase_required")` if the file is encrypted but no passphrase was supplied.
 #[tauri::command]
-pub(crate) async fn load_saved_wallet(passphrase: Option<String>, app: AppHandle) -> Result<Option<WalletInfo>, String> {
+pub(crate) async fn load_saved_wallet(
+    passphrase: Option<String>,
+    app: AppHandle,
+) -> Result<Option<WalletInfo>, String> {
     let path = match app.path().app_data_dir() {
         Ok(p) => p.join("wallet.json"),
         Err(_) => return Ok(None),
@@ -150,7 +164,10 @@ pub(crate) async fn load_address_book(app: AppHandle) -> Result<Vec<serde_json::
         Ok(json) => match serde_json::from_str::<Vec<serde_json::Value>>(&json) {
             Ok(entries) => Ok(entries),
             Err(e) => {
-                eprintln!("[addrbook] address_book.json parse failed ({}), starting fresh", e);
+                eprintln!(
+                    "[addrbook] address_book.json parse failed ({}), starting fresh",
+                    e
+                );
                 Ok(vec![])
             }
         },
@@ -160,9 +177,17 @@ pub(crate) async fn load_address_book(app: AppHandle) -> Result<Vec<serde_json::
 
 /// v0.3.8 — Save the address book to app-local storage.
 #[tauri::command]
-pub(crate) async fn save_address_book(entries: Vec<serde_json::Value>, app: AppHandle) -> Result<(), String> {
-    let dir = app.path().app_data_dir().map_err(radiodoge_core::errors::friendly)?;
-    tokio::fs::create_dir_all(&dir).await.map_err(radiodoge_core::errors::friendly)?;
+pub(crate) async fn save_address_book(
+    entries: Vec<serde_json::Value>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(radiodoge_core::errors::friendly)?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     let path = dir.join("address_book.json");
     let json = serde_json::to_string_pretty(&entries).map_err(radiodoge_core::errors::friendly)?;
     write_file_atomically(&path, &json).await?;

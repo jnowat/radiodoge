@@ -36,7 +36,12 @@ pub(crate) fn unix_now() -> u64 {
         .as_secs()
 }
 
-pub(crate) fn stats_record(stats: &SharedStats, kind: GatewayEventKind, node: &NodeAddress, detail: impl Into<String>) {
+pub(crate) fn stats_record(
+    stats: &SharedStats,
+    kind: GatewayEventKind,
+    node: &NodeAddress,
+    detail: impl Into<String>,
+) {
     if let Ok(mut s) = stats.lock() {
         s.record(kind, &node.to_display_string(), detail, unix_now());
     }
@@ -102,8 +107,7 @@ pub(crate) async fn cmd_daemon(
     // duplicate, which used to look like a broadcast failure and cost the sender
     // its acknowledgement. Remembering what has been broadcast turns a repeat
     // into an immediate re-ACK instead.
-    let seen_txs: SeenTxs =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let seen_txs: SeenTxs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let seen_for_outbox = Arc::clone(&seen_txs);
 
     let on_packet = Arc::new(move |pkt: IncomingPacket| {
@@ -114,7 +118,11 @@ pub(crate) async fn cmd_daemon(
             pkt.command,
             pkt.rssi,
             pkt.snr.map(|s| format!("  snr={}", s)).unwrap_or_default(),
-            if pkt.hops > 0 { format!("  hops={}", pkt.hops) } else { String::new() },
+            if pkt.hops > 0 {
+                format!("  hops={}", pkt.hops)
+            } else {
+                String::new()
+            },
             pkt.payload_hex,
             pkt.decoded
                 .as_deref()
@@ -122,7 +130,12 @@ pub(crate) async fn cmd_daemon(
                 .unwrap_or_default(),
         );
         if let Ok(mut s) = stats_for_packets.lock() {
-            s.record_packet(&pkt.source.to_display_string(), pkt.rssi, pkt.hops, unix_now());
+            s.record_packet(
+                &pkt.source.to_display_string(),
+                pkt.rssi,
+                pkt.hops,
+                unix_now(),
+            );
         }
 
         // Store-and-forward: the node is in range right now, so release any
@@ -138,7 +151,15 @@ pub(crate) async fn cmd_daemon(
             let ob = Arc::clone(&outbox_for_packets);
             tokio::spawn(async move {
                 for r in held {
-                    send_reply(&r.text, &mgr, &source, &st, &ob, GatewayEventKind::ReplyForwarded).await;
+                    send_reply(
+                        &r.text,
+                        &mgr,
+                        &source,
+                        &st,
+                        &ob,
+                        GatewayEventKind::ReplyForwarded,
+                    )
+                    .await;
                 }
             });
         }
@@ -180,7 +201,11 @@ pub(crate) async fn cmd_daemon(
                 let st = Arc::clone(&stats_for_packets);
                 let ob = Arc::clone(&outbox_for_packets);
                 stats_record(&st, GatewayEventKind::BalanceRequest, &source, "");
-                log::info!("GATEWAY  balance request from {} for {}", source.to_display_string(), addr);
+                log::info!(
+                    "GATEWAY  balance request from {} for {}",
+                    source.to_display_string(),
+                    addr
+                );
                 tokio::spawn(async move {
                     daemon_fetch_and_send_balance(addr, mgr, source, st, ob).await;
                 });
@@ -189,7 +214,9 @@ pub(crate) async fn cmd_daemon(
     });
 
     log::info!("Connecting to {} ...", port);
-    manager.connect(port, on_packet).await
+    manager
+        .connect(port, on_packet)
+        .await
         .with_context(|| format!("Failed to open serial port {}", port))?;
 
     let addr = manager.refresh_node_address(1500).await;
@@ -219,7 +246,10 @@ pub(crate) async fn cmd_daemon(
     // gateway broadcasts transactions perfectly and the sender never hears back.
     // Asking for it here means running the daemon is enough; there is no
     // separate step in the GUI to remember.
-    if let Err(e) = manager.send_raw(radio::build_set_gateway(&addr, true)).await {
+    if let Err(e) = manager
+        .send_raw(radio::build_set_gateway(&addr, true))
+        .await
+    {
         log::warn!("Could not enable gateway mode on the board: {}", e);
     } else {
         log::info!("Gateway mode enabled on the board (needed to radio TX_ACK back to senders)");
@@ -265,7 +295,9 @@ pub(crate) async fn cmd_daemon(
     }
 
     // Run until Ctrl-C
-    tokio::signal::ctrl_c().await.context("Failed to listen for Ctrl-C")?;
+    tokio::signal::ctrl_c()
+        .await
+        .context("Failed to listen for Ctrl-C")?;
     if let Some(p) = outbox_file.as_deref() {
         if let Ok(o) = outbox.lock() {
             write_atomic(p, &o.to_json());
@@ -318,7 +350,10 @@ pub(crate) async fn daemon_broadcast_and_ack(
     // A transaction this gateway already put on the network only needs its
     // acknowledgement re-sent — the sender may simply not have heard the first.
     if let Some(known) = seen.lock().await.get(&txid).cloned() {
-        log::info!("GATEWAY  txid={} already broadcast this session — re-sending ACK", known);
+        log::info!(
+            "GATEWAY  txid={} already broadcast this session — re-sending ACK",
+            known
+        );
         if let Ok(mut s) = stats.lock() {
             s.record_duplicate(unix_now());
         }
@@ -340,12 +375,18 @@ pub(crate) async fn daemon_broadcast_and_ack(
                     // worth seeing in a gateway log.
                     log::warn!(
                         "GATEWAY  network returned txid={} but the payload hashes to {}",
-                        network_txid, txid
+                        network_txid,
+                        txid
                     );
                 }
                 log::info!("GATEWAY  broadcast OK  txid={}", network_txid);
                 seen.lock().await.insert(txid.clone(), network_txid.clone());
-                stats_record(&stats, GatewayEventKind::TxBroadcast, &source, network_txid.clone());
+                stats_record(
+                    &stats,
+                    GatewayEventKind::TxBroadcast,
+                    &source,
+                    network_txid.clone(),
+                );
                 daemon_send_tx_ack(&network_txid, &mgr, &source, &stats, &outbox).await;
                 return;
             }
@@ -357,7 +398,12 @@ pub(crate) async fn daemon_broadcast_and_ack(
                         txid
                     );
                     seen.lock().await.insert(txid.clone(), txid.clone());
-                    stats_record(&stats, GatewayEventKind::TxBroadcast, &source, format!("{} (already on network)", txid));
+                    stats_record(
+                        &stats,
+                        GatewayEventKind::TxBroadcast,
+                        &source,
+                        format!("{} (already on network)", txid),
+                    );
                     daemon_send_tx_ack(&txid, &mgr, &source, &stats, &outbox).await;
                     return;
                 }
@@ -365,20 +411,43 @@ pub(crate) async fn daemon_broadcast_and_ack(
                     // The network judged the transaction itself; retrying the
                     // same bytes cannot help, so tell the sender instead of
                     // queueing it forever.
-                    log::warn!("GATEWAY  network rejected txid={}: {} — sending TX_NACK", txid, msg);
+                    log::warn!(
+                        "GATEWAY  network rejected txid={}: {} — sending TX_NACK",
+                        txid,
+                        msg
+                    );
                     stats_record(&stats, GatewayEventKind::TxFailed, &source, msg.clone());
-                    let nack = TxReply::Nack { txid: txid.clone(), reason: msg }.to_text();
-                    send_reply(&nack, &mgr, &source, &stats, &outbox, GatewayEventKind::AckSent).await;
+                    let nack = TxReply::Nack {
+                        txid: txid.clone(),
+                        reason: msg,
+                    }
+                    .to_text();
+                    send_reply(
+                        &nack,
+                        &mgr,
+                        &source,
+                        &stats,
+                        &outbox,
+                        GatewayEventKind::AckSent,
+                    )
+                    .await;
                     return;
                 }
-                log::warn!("GATEWAY  broadcast attempt {}/3 failed: {}", attempt + 1, msg);
+                log::warn!(
+                    "GATEWAY  broadcast attempt {}/3 failed: {}",
+                    attempt + 1,
+                    msg
+                );
             }
         }
     }
     // Store-and-forward: keep it and keep trying. The usual cause is a gateway
     // that has lost its internet link, and the sender has no other way to reach
     // the network.
-    log::warn!("GATEWAY  broadcast failed after 3 attempts for txid={} — queued for retry", txid);
+    log::warn!(
+        "GATEWAY  broadcast failed after 3 attempts for txid={} — queued for retry",
+        txid
+    );
     let queued = outbox
         .lock()
         .map(|mut o| o.queue_broadcast(&txid, &raw_hex, &source.to_display_string(), unix_now()))
@@ -387,21 +456,39 @@ pub(crate) async fn daemon_broadcast_and_ack(
         stats_record(&stats, GatewayEventKind::TxQueued, &source, txid.clone());
         // Let the sender know it is held, so it does not resend in a panic.
         let q = TxReply::Queued { txid }.to_text();
-        send_reply(&q, &mgr, &source, &stats, &outbox, GatewayEventKind::AckSent).await;
+        send_reply(
+            &q,
+            &mgr,
+            &source,
+            &stats,
+            &outbox,
+            GatewayEventKind::AckSent,
+        )
+        .await;
     }
 }
 
 /// One pass of the store-and-forward worker.
-pub(crate) async fn outbox_tick(outbox: &SharedOutbox, stats: &SharedStats, mgr: &Arc<SerialManager>, seen: &SeenTxs) {
+pub(crate) async fn outbox_tick(
+    outbox: &SharedOutbox,
+    stats: &SharedStats,
+    mgr: &Arc<SerialManager>,
+    seen: &SeenTxs,
+) {
     let now = unix_now();
     let (due, expired) = match outbox.lock() {
         Ok(mut o) => {
             let before: Vec<PendingBroadcast> = o.broadcasts.clone();
             let gone = o.expire(now);
-            let expired: Vec<PendingBroadcast> =
-                before.into_iter().filter(|b| !o.is_queued(&b.txid)).collect();
+            let expired: Vec<PendingBroadcast> = before
+                .into_iter()
+                .filter(|b| !o.is_queued(&b.txid))
+                .collect();
             if gone.1 > 0 {
-                log::warn!("GATEWAY  {} held reply(ies) expired before their node was heard again", gone.1);
+                log::warn!(
+                    "GATEWAY  {} held reply(ies) expired before their node was heard again",
+                    gone.1
+                );
             }
             (o.due_broadcasts(now), expired)
         }
@@ -409,7 +496,11 @@ pub(crate) async fn outbox_tick(outbox: &SharedOutbox, stats: &SharedStats, mgr:
     };
     for b in expired {
         let node = parse_node(&b.source).unwrap_or_default();
-        log::error!("GATEWAY  txid={} expired in the outbox after {} retries", b.txid, b.attempts);
+        log::error!(
+            "GATEWAY  txid={} expired in the outbox after {} retries",
+            b.txid,
+            b.attempts
+        );
         stats_record(stats, GatewayEventKind::TxFailed, &node, b.txid.clone());
         stats_record(stats, GatewayEventKind::Expired, &node, b.txid);
     }
@@ -419,13 +510,22 @@ pub(crate) async fn outbox_tick(outbox: &SharedOutbox, stats: &SharedStats, mgr:
             Ok(id) => Some(id),
             Err(e) if is_duplicate_broadcast_error(&e.to_string()) => Some(b.txid.clone()),
             Err(e) => {
-                log::info!("GATEWAY  outbox retry {} for txid={} failed: {}", b.attempts + 1, b.txid, e);
+                log::info!(
+                    "GATEWAY  outbox retry {} for txid={} failed: {}",
+                    b.attempts + 1,
+                    b.txid,
+                    e
+                );
                 None
             }
         };
         match accepted {
             Some(id) => {
-                log::info!("GATEWAY  outbox: txid={} broadcast on retry {}", id, b.attempts + 1);
+                log::info!(
+                    "GATEWAY  outbox: txid={} broadcast on retry {}",
+                    id,
+                    b.attempts + 1
+                );
                 if let Ok(mut o) = outbox.lock() {
                     o.broadcast_done(&b.txid);
                 }
@@ -463,7 +563,11 @@ pub(crate) async fn send_reply(
             true
         }
         Err(e) => {
-            log::warn!("GATEWAY  reply to {} not sent ({}) — held until the node is heard again", dest.to_display_string(), e);
+            log::warn!(
+                "GATEWAY  reply to {} not sent ({}) — held until the node is heard again",
+                dest.to_display_string(),
+                e
+            );
             if let Ok(mut o) = outbox.lock() {
                 o.queue_reply(&dest.to_display_string(), text, unix_now());
             }
@@ -481,7 +585,10 @@ pub(crate) fn reply_detail(text: &str) -> String {
             TxReply::Queued { txid } => format!("{} (queued)", txid),
             TxReply::Nack { txid, reason } => format!("{} (NACK: {})", txid, reason),
         }
-    } else if let Some(k) = text.strip_prefix("BAL:").and_then(|k| k.parse::<u64>().ok()) {
+    } else if let Some(k) = text
+        .strip_prefix("BAL:")
+        .and_then(|k| k.parse::<u64>().ok())
+    {
         format!("{:.8} DOGE", k as f64 / 1e8)
     } else {
         String::new()
@@ -500,7 +607,16 @@ pub(crate) async fn daemon_send_tx_ack(
     stats: &SharedStats,
     outbox: &SharedOutbox,
 ) {
-    if !send_reply(&format!("TX_ACK:{}", txid), mgr, source, stats, outbox, GatewayEventKind::AckSent).await {
+    if !send_reply(
+        &format!("TX_ACK:{}", txid),
+        mgr,
+        source,
+        stats,
+        outbox,
+        GatewayEventKind::AckSent,
+    )
+    .await
+    {
         stats_record(stats, GatewayEventKind::AckFailed, source, "held for retry");
     }
 }
@@ -518,16 +634,37 @@ pub(crate) async fn daemon_fetch_and_send_balance(
         Ok(koinus) => {
             log::info!(
                 "GATEWAY  balance for {}: {} koinus ({:.8} DOGE)",
-                address, koinus, koinus as f64 / 1e8
+                address,
+                koinus,
+                koinus as f64 / 1e8
             );
             // The dashboard shows the amount, never the address asked about.
-            if !send_reply(&format!("BAL:{}", koinus), &mgr, &source, &stats, &outbox, GatewayEventKind::BalanceReplied).await {
-                stats_record(&stats, GatewayEventKind::BalanceFailed, &source, "reply held for retry");
+            if !send_reply(
+                &format!("BAL:{}", koinus),
+                &mgr,
+                &source,
+                &stats,
+                &outbox,
+                GatewayEventKind::BalanceReplied,
+            )
+            .await
+            {
+                stats_record(
+                    &stats,
+                    GatewayEventKind::BalanceFailed,
+                    &source,
+                    "reply held for retry",
+                );
             }
         }
         Err(e) => {
             log::warn!("GATEWAY  balance fetch failed for {}: {}", address, e);
-            stats_record(&stats, GatewayEventKind::BalanceFailed, &source, e.to_string());
+            stats_record(
+                &stats,
+                GatewayEventKind::BalanceFailed,
+                &source,
+                e.to_string(),
+            );
         }
     }
 }
