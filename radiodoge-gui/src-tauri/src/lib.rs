@@ -111,6 +111,8 @@ pub struct AppState {
     /// Always 0 on USB (RSSI is not available over serial); may be non-zero
     /// in a future BLE path that reports received signal strength.
     pub mobile_last_rssi: Arc<Mutex<i16>>,
+    /// FW14 - SNR of the last packet the board reported a signal for (None = no reading).
+    pub mobile_last_snr: Arc<Mutex<Option<i8>>>,
 }
 
 impl AppState {
@@ -134,6 +136,7 @@ impl AppState {
             mobile_packets_rx: Arc::new(Mutex::new(0)),
             mobile_packets_tx: Arc::new(Mutex::new(0)),
             mobile_last_rssi: Arc::new(Mutex::new(0)),
+            mobile_last_snr: Arc::new(Mutex::new(None)),
         }
     }
 }
