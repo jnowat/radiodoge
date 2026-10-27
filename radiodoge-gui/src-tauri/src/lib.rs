@@ -40,6 +40,7 @@ mod gateway;
 mod wallet_store;
 
 mod mobile;
+mod offline_utxos;
 
 /// Maximum transaction history entries kept in memory + persisted to disk.
 const MAX_HISTORY: usize = 50;
@@ -97,6 +98,8 @@ pub struct AppState {
     /// sequence. Stored when GET_FIRMWARE_VERSION (0x20) response is received,
     /// included in the "connection-status: connected" event emitted after GET_SETTINGS.
     pub mobile_fw_version: Arc<Mutex<Option<String>>>,
+    /// v0.3.43 — imported UTXO snapshot for offline signing (memory only).
+    pub utxo_snapshot: Arc<Mutex<Option<radiodoge_core::backend::UtxoSnapshot>>>,
     /// v0.3.10 — BLE device address (MAC) when connected via Bluetooth, None otherwise.
     /// Set by mobile_ble_connect, cleared by mobile_ble_disconnect.
     pub ble_device_address: Arc<Mutex<Option<String>>>,
@@ -132,6 +135,7 @@ impl AppState {
             mobile_reassembler: Arc::new(Mutex::new(radio::MultipartReassembler::new())),
             mobile_signal_latch: Arc::new(Mutex::new(radio::RxSignalLatch::new())),
             mobile_fw_version: Arc::new(Mutex::new(None)),
+            utxo_snapshot: Arc::new(Mutex::new(None)),
             ble_device_address: Arc::new(Mutex::new(None)),
             mobile_packets_rx: Arc::new(Mutex::new(0)),
             mobile_packets_tx: Arc::new(Mutex::new(0)),
@@ -812,15 +816,14 @@ async fn send_transaction(
 
     // Build payload: real signed transaction when WIF is available, legacy stub otherwise.
     let payload = if let Some(ref wif) = tx.from_private_key_wif {
-        wallet::build_signed_transaction_with_fee(
+        offline_utxos::sign_payload(
+            &state.utxo_snapshot,
             wif,
             &tx.to_address,
             tx.amount_doge,
             resolve_fee(tx.fee_doge)?,
         )
-        .await
-        .map_err(|e| format!("Transaction signing failed: {}", e))?
-        .0
+        .await?
     } else {
         wallet::encode_transaction_payload(
             &tx.to_address,
@@ -1537,6 +1540,9 @@ pub fn run() {
             query_battery,
             query_mac,
             wallet_store::save_wallet,
+            offline_utxos::import_utxo_snapshot,
+            offline_utxos::utxo_snapshot_info,
+            offline_utxos::clear_utxo_snapshot,
             wallet_store::wallet_needs_passphrase,
             wallet_store::load_saved_wallet,
             wallet_store::delete_saved_wallet,
