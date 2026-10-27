@@ -30,12 +30,19 @@ pub(crate) fn parse_snapshot(json: &str) -> Result<UtxoSnapshot, String> {
     let snap: UtxoSnapshot =
         serde_json::from_str(json).map_err(|e| format!("Not a UTXO snapshot file: {}", e))?;
     if !wallet::is_valid_address(&snap.address) {
-        return Err(format!("Snapshot address '{}' is not a valid Dogecoin address", snap.address));
+        return Err(format!(
+            "Snapshot address '{}' is not a valid Dogecoin address",
+            snap.address
+        ));
     }
     if snap.utxos.is_empty() {
         return Err("Snapshot has no UTXOs — nothing to spend".to_string());
     }
-    if let Some(u) = snap.utxos.iter().find(|u| u.txid.len() != 64 || !u.txid.chars().all(|c| c.is_ascii_hexdigit())) {
+    if let Some(u) = snap
+        .utxos
+        .iter()
+        .find(|u| u.txid.len() != 64 || !u.txid.chars().all(|c| c.is_ascii_hexdigit()))
+    {
         return Err(format!("Snapshot has a malformed txid: {}", u.txid));
     }
     Ok(snap)
@@ -53,7 +60,9 @@ pub(crate) async fn sign_payload(
 ) -> Result<Vec<u8>, String> {
     let snap = snapshot.lock().await.clone();
     if let Some(s) = snap {
-        let from = wallet::import_wif(wif).map_err(|e| format!("Transaction signing failed: {}", e))?.address;
+        let from = wallet::import_wif(wif)
+            .map_err(|e| format!("Transaction signing failed: {}", e))?
+            .address;
         if from == s.address {
             let fee = fee_doge.ok_or_else(|| {
                 "Offline snapshot loaded: enter a network fee (e.g. 0.01 DOGE) — there is no internet to estimate one."
@@ -63,14 +72,19 @@ pub(crate) async fn sign_payload(
                 .map_err(|e| format!("Offline signing failed: {}", e));
         }
     }
-    Ok(wallet::build_signed_transaction_with_fee(wif, to, amount_doge, fee_doge)
-        .await
-        .map_err(|e| format!("Transaction signing failed: {}", e))?
-        .0)
+    Ok(
+        wallet::build_signed_transaction_with_fee(wif, to, amount_doge, fee_doge)
+            .await
+            .map_err(|e| format!("Transaction signing failed: {}", e))?
+            .0,
+    )
 }
 
 #[tauri::command]
-pub(crate) async fn import_utxo_snapshot(json: String, state: State<'_, AppState>) -> Result<SnapshotInfo, String> {
+pub(crate) async fn import_utxo_snapshot(
+    json: String,
+    state: State<'_, AppState>,
+) -> Result<SnapshotInfo, String> {
     let snap = parse_snapshot(&json)?;
     let i = info(&snap);
     *state.utxo_snapshot.lock().await = Some(snap);
@@ -78,7 +92,9 @@ pub(crate) async fn import_utxo_snapshot(json: String, state: State<'_, AppState
 }
 
 #[tauri::command]
-pub(crate) async fn utxo_snapshot_info(state: State<'_, AppState>) -> Result<Option<SnapshotInfo>, String> {
+pub(crate) async fn utxo_snapshot_info(
+    state: State<'_, AppState>,
+) -> Result<Option<SnapshotInfo>, String> {
     Ok(state.utxo_snapshot.lock().await.as_ref().map(info))
 }
 
@@ -102,7 +118,13 @@ mod tests {
         UtxoSnapshot {
             address: addr.into(),
             fetched_at: 1,
-            utxos: vec![Utxo { txid: "ab".repeat(32), vout: 0, value: 500_000_000, confirmations: 10, coinbase: false }],
+            utxos: vec![Utxo {
+                txid: "ab".repeat(32),
+                vout: 0,
+                value: 500_000_000,
+                confirmations: 10,
+                coinbase: false,
+            }],
         }
     }
 

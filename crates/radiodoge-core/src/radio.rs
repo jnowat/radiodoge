@@ -42,25 +42,25 @@ pub const CMD_PING: u8 = 0x02;
 pub const CMD_MESSAGE: u8 = 0x03;
 pub const CMD_BROADCAST: u8 = 0x04;
 pub const CMD_MULTIPART: u8 = 0x05;
-pub const CMD_DOGE_TX: u8 = 0x10;     // Dogecoin transaction
+pub const CMD_DOGE_TX: u8 = 0x10; // Dogecoin transaction
 pub const CMD_REQUEST_BALANCE: u8 = 0x11; // Balance request
 pub const CMD_GET_FIRMWARE_VERSION: u8 = 0x20; // Query firmware version string
-pub const CMD_SET_LORA_PARAMS: u8 = 0x21;      // Set SF/BW/CR/frequency/TX-power (v0.3.3)
-pub const CMD_GET_SETTINGS: u8 = 0x22;         // v0.3.6: Query board live state (addr + gateway_mode)
-pub const CMD_SET_GATEWAY: u8 = 0x23;          // v0.3.6: Set/persist gateway_mode on board
-pub const CMD_WIFI_TOGGLE: u8 = 0x24;          // v0.3.7: Enable/disable WiFi radio (persists to NVS)
-pub const CMD_ADDR_CONFLICT: u8 = 0x25;        // v0.3.7: Board-initiated: duplicate node address detected
-pub const CMD_GET_BATTERY: u8 = 0x26;          // v0.3.8: Query battery voltage (2-byte u16 mV in payload)
-pub const CMD_GET_MAC: u8 = 0x27;              // v0.3.8: Query board MAC address (6 bytes in payload)
-pub const CMD_BLE_TOGGLE: u8 = 0x28;          // v0.3.16: Enable/disable BLE advertising (persists to NVS)
-pub const CMD_RECEIVED_ACK: u8 = 0x29;        // v0.4.0: Board-initiated: over-the-air ACK received from remote node
-pub const CMD_RECEIVED_PING: u8 = 0x2A;       // v0.4.0: Board-initiated: over-the-air Ping received from remote node
-pub const CMD_RAW_TX: u8 = 0x2B;              // v0.4.4 (FW12): transmit one raw LoRa frame on an explicit profile
-pub const CMD_RAW_RX_MODE: u8 = 0x2C;         // v0.4.4 (FW12): enter/leave volatile raw receive mode
-pub const CMD_RAW_RX: u8 = 0x2D;              // v0.4.4 (FW12): board-initiated raw frame received in raw mode
+pub const CMD_SET_LORA_PARAMS: u8 = 0x21; // Set SF/BW/CR/frequency/TX-power (v0.3.3)
+pub const CMD_GET_SETTINGS: u8 = 0x22; // v0.3.6: Query board live state (addr + gateway_mode)
+pub const CMD_SET_GATEWAY: u8 = 0x23; // v0.3.6: Set/persist gateway_mode on board
+pub const CMD_WIFI_TOGGLE: u8 = 0x24; // v0.3.7: Enable/disable WiFi radio (persists to NVS)
+pub const CMD_ADDR_CONFLICT: u8 = 0x25; // v0.3.7: Board-initiated: duplicate node address detected
+pub const CMD_GET_BATTERY: u8 = 0x26; // v0.3.8: Query battery voltage (2-byte u16 mV in payload)
+pub const CMD_GET_MAC: u8 = 0x27; // v0.3.8: Query board MAC address (6 bytes in payload)
+pub const CMD_BLE_TOGGLE: u8 = 0x28; // v0.3.16: Enable/disable BLE advertising (persists to NVS)
+pub const CMD_RECEIVED_ACK: u8 = 0x29; // v0.4.0: Board-initiated: over-the-air ACK received from remote node
+pub const CMD_RECEIVED_PING: u8 = 0x2A; // v0.4.0: Board-initiated: over-the-air Ping received from remote node
+pub const CMD_RAW_TX: u8 = 0x2B; // v0.4.4 (FW12): transmit one raw LoRa frame on an explicit profile
+pub const CMD_RAW_RX_MODE: u8 = 0x2C; // v0.4.4 (FW12): enter/leave volatile raw receive mode
+pub const CMD_RAW_RX: u8 = 0x2D; // v0.4.4 (FW12): board-initiated raw frame received in raw mode
 pub const CMD_RECEIVED_ACK_SIGNAL: u8 = 0x2F; // FW13: board-initiated ACK with signal: header + rssi i16 BE + snr i8. The host folds it into CMD_RECEIVED_ACK.
-pub const CMD_RX_SIGNAL: u8 = 0x30;            // FW14: board-initiated: signal of the LoRa frame forwarded next: header (src = sender) + rssi i16 BE + snr i8
-pub const CMD_DISCOVER: u8 = 0x2E;            // Node discovery: board transmits a broadcast PING; every node in range ACKs
+pub const CMD_RX_SIGNAL: u8 = 0x30; // FW14: board-initiated: signal of the LoRa frame forwarded next: header (src = sender) + rssi i16 BE + snr i8
+pub const CMD_DISCOVER: u8 = 0x2E; // Node discovery: board transmits a broadcast PING; every node in range ACKs
 
 // ─── Firmware legacy serial enum ─────────────────────────────────────────────
 //
@@ -157,7 +157,12 @@ pub fn build_get_node_addr(src: &NodeAddress) -> Vec<u8> {
 /// Build a GET_FIRMWARE_VERSION command (CMD 0x20).
 /// The device should respond with a packet whose payload is the version string.
 pub fn build_get_firmware_version(src: &NodeAddress) -> Vec<u8> {
-    build_header(CMD_GET_FIRMWARE_VERSION, FLAG_STANDARD, src, &NodeAddress::broadcast())
+    build_header(
+        CMD_GET_FIRMWARE_VERSION,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    )
 }
 
 /// Build a PING packet to check if the device is alive.
@@ -220,13 +225,23 @@ pub fn build_doge_tx(src: &NodeAddress, dst: &NodeAddress, tx_payload: &[u8]) ->
 /// The `wifi_enabled` byte was added in v0.3.7; parsers accept a 4-byte payload
 /// from older firmware and default `wifi_enabled` to true.
 pub fn build_get_settings(src: &NodeAddress) -> Vec<u8> {
-    build_header(CMD_GET_SETTINGS, FLAG_STANDARD, src, &NodeAddress::broadcast())
+    build_header(
+        CMD_GET_SETTINGS,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    )
 }
 
 /// Build a SET_GATEWAY command (CMD 0x23) — v0.3.6.
 /// Payload byte: 1 = enable gateway mode, 0 = disable.
 pub fn build_set_gateway(src: &NodeAddress, enable: bool) -> Vec<u8> {
-    let mut packet = build_header(CMD_SET_GATEWAY, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    let mut packet = build_header(
+        CMD_SET_GATEWAY,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    );
     packet.push(if enable { 1u8 } else { 0u8 });
     packet
 }
@@ -234,7 +249,12 @@ pub fn build_set_gateway(src: &NodeAddress, enable: bool) -> Vec<u8> {
 /// Build a WIFI_TOGGLE command (CMD 0x24) — v0.3.7.
 /// Payload byte: 1 = enable WiFi radio, 0 = disable (power saving).
 pub fn build_wifi_toggle(src: &NodeAddress, enable: bool) -> Vec<u8> {
-    let mut packet = build_header(CMD_WIFI_TOGGLE, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    let mut packet = build_header(
+        CMD_WIFI_TOGGLE,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    );
     packet.push(if enable { 1u8 } else { 0u8 });
     packet
 }
@@ -242,7 +262,12 @@ pub fn build_wifi_toggle(src: &NodeAddress, enable: bool) -> Vec<u8> {
 /// Build a GET_BATTERY command (CMD 0x26) — v0.3.8.
 /// Board replies with 2-byte big-endian u16 (battery voltage in mV).
 pub fn build_get_battery(src: &NodeAddress) -> Vec<u8> {
-    build_header(CMD_GET_BATTERY, FLAG_STANDARD, src, &NodeAddress::broadcast())
+    build_header(
+        CMD_GET_BATTERY,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    )
 }
 
 /// Build a GET_MAC command (CMD 0x27) — v0.3.8.
@@ -255,7 +280,12 @@ pub fn build_get_mac(src: &NodeAddress) -> Vec<u8> {
 /// Payload byte: 1 = enable BLE advertising, 0 = disable (power saving).
 /// Board persists setting to NVS.
 pub fn build_ble_toggle(src: &NodeAddress, enable: bool) -> Vec<u8> {
-    let mut packet = build_header(CMD_BLE_TOGGLE, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    let mut packet = build_header(
+        CMD_BLE_TOGGLE,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    );
     packet.push(if enable { 1u8 } else { 0u8 });
     packet
 }
@@ -270,7 +300,11 @@ pub fn build_request_balance(src: &NodeAddress, doge_address: &str) -> Vec<u8> {
 /// [`build_request_balance`] addressed to one gateway. Firmware up to FW11 only
 /// hands a received 0x10/0x11 to its daemon when the packet is addressed to that
 /// board, so a broadcast request is heard but never answered.
-pub fn build_request_balance_to(src: &NodeAddress, dst: &NodeAddress, doge_address: &str) -> Vec<u8> {
+pub fn build_request_balance_to(
+    src: &NodeAddress,
+    dst: &NodeAddress,
+    doge_address: &str,
+) -> Vec<u8> {
     let mut packet = build_header(CMD_REQUEST_BALANCE, FLAG_STANDARD, src, dst);
     let addr_bytes = doge_address.as_bytes();
     packet.extend_from_slice(&addr_bytes[..addr_bytes.len().min(MAX_SINGLE_PAYLOAD_LEN)]);
@@ -283,25 +317,25 @@ pub fn build_request_balance_to(src: &NodeAddress, dst: &NodeAddress, doge_addre
 /// packet-boundary drift when multiple responses arrive in the same read.
 pub fn exact_packet_len(cmd: u8) -> Option<usize> {
     match cmd {
-        CMD_GET_NODE_ADDR   => Some(8),  // header only
-        CMD_PING            => Some(8),  // header only (ACK)
+        CMD_GET_NODE_ADDR => Some(8), // header only
+        CMD_PING => Some(8),          // header only (ACK)
         // CMD_REQUEST_BALANCE has a variable-length payload (Dogecoin address) — handled as variable
-        CMD_SET_LORA_PARAMS => Some(8),  // header only (ACK)
-        CMD_ADDR_CONFLICT   => Some(8),  // header only
-        CMD_SET_NODE_ADDRS  => Some(8),  // header only (ACK)
-        CMD_SET_GATEWAY     => Some(9),  // header + 1 byte (gateway_mode)
-        CMD_WIFI_TOGGLE     => Some(9),  // header + 1 byte (wifi_enabled)
-        CMD_GET_SETTINGS    => Some(13), // header + 5 bytes [region, community, node, gw, wifi]
-        CMD_GET_BATTERY     => Some(10), // header + 2 bytes (voltage_mv big-endian)
-        CMD_GET_MAC         => Some(14), // header + 6 bytes (MAC address)
-        CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
+        CMD_SET_LORA_PARAMS => Some(8),      // header only (ACK)
+        CMD_ADDR_CONFLICT => Some(8),        // header only
+        CMD_SET_NODE_ADDRS => Some(8),       // header only (ACK)
+        CMD_SET_GATEWAY => Some(9),          // header + 1 byte (gateway_mode)
+        CMD_WIFI_TOGGLE => Some(9),          // header + 1 byte (wifi_enabled)
+        CMD_GET_SETTINGS => Some(13),        // header + 5 bytes [region, community, node, gw, wifi]
+        CMD_GET_BATTERY => Some(10),         // header + 2 bytes (voltage_mv big-endian)
+        CMD_GET_MAC => Some(14),             // header + 6 bytes (MAC address)
+        CMD_BLE_TOGGLE => Some(9),           // header + 1 byte (ble_enabled)
         CMD_RECEIVED_ACK_SIGNAL => Some(11), // header + rssi i16 BE + snr i8
-        CMD_RX_SIGNAL       => Some(11), // header + rssi i16 BE + snr i8
-        CMD_RECEIVED_ACK    => Some(8),  // header only; src = remote node that sent the ACK
-        CMD_RECEIVED_PING   => Some(8),  // header only; src = remote node that sent the Ping
-        CMD_RAW_TX          => Some(9),  // header + 1 byte (status: 1 = sent)
-        CMD_RAW_RX_MODE     => Some(9),  // header + 1 byte (raw RX active)
-        CMD_DISCOVER        => Some(8),  // header only (echo)
+        CMD_RX_SIGNAL => Some(11),           // header + rssi i16 BE + snr i8
+        CMD_RECEIVED_ACK => Some(8),         // header only; src = remote node that sent the ACK
+        CMD_RECEIVED_PING => Some(8),        // header only; src = remote node that sent the Ping
+        CMD_RAW_TX => Some(9),               // header + 1 byte (status: 1 = sent)
+        CMD_RAW_RX_MODE => Some(9),          // header + 1 byte (raw RX active)
+        CMD_DISCOVER => Some(8),             // header only (echo)
 
         // The firmware's legacy result code: `[0xFE, 1, ACK|NAK]`, three bytes,
         // not a desktop packet at all. A gateway board emits one every time it
@@ -314,11 +348,11 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         // it. Framed at its real length the three bytes are consumed and
         // discarded (`parse_incoming` rejects anything shorter than a header),
         // and the stream stays aligned.
-        LEGACY_RESULT_CODE   => Some(3),
+        LEGACY_RESULT_CODE => Some(3),
         // Legacy hardware-info reply: `[0x3F, 3, 'h', board, firmware]`.
         LEGACY_HARDWARE_INFO => Some(5),
 
-        _ => None,                       // variable length (0x03 MSG, 0x20 FW version, etc.)
+        _ => None, // variable length (0x03 MSG, 0x20 FW version, etc.)
     }
 }
 
@@ -588,7 +622,11 @@ pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
         }
         let chunk_len = (buf[MULTIPART_LEN_OFFSET] as usize).min(MULTIPART_CHUNK_LEN);
         let total = MULTIPART_HDR_LEN + chunk_len;
-        return if buf.len() >= total { Some(total) } else { None };
+        return if buf.len() >= total {
+            Some(total)
+        } else {
+            None
+        };
     }
 
     if let Some(n) = exact_packet_len(cmd) {
@@ -605,7 +643,11 @@ pub fn frame_packet_len(cmd: u8, buf: &[u8]) -> Option<usize> {
             return None;
         }
         let total = SINGLE_HDR_LEN + RAW_RX_META_LEN + after_hdr[3] as usize;
-        return if buf.len() >= total { Some(total) } else { None };
+        return if buf.len() >= total {
+            Some(total)
+        } else {
+            None
+        };
     }
 
     if cmd == CMD_GET_FIRMWARE_VERSION {
@@ -672,38 +714,83 @@ pub struct RawProfile {
 impl RawProfile {
     /// Meshtastic LongFast on the US default slot (906.875 MHz).
     pub fn meshtastic_longfast_us() -> Self {
-        RawProfile { sync_word: 0x2B, sf: 11, bw_idx: 1, cr: 1, freq_khz: 906_875, power_dbm: 17, preamble: 16 }
+        RawProfile {
+            sync_word: 0x2B,
+            sf: 11,
+            bw_idx: 1,
+            cr: 1,
+            freq_khz: 906_875,
+            power_dbm: 17,
+            preamble: 16,
+        }
     }
 
     /// Same checks the firmware applies; a profile that fails here would be NACKed.
     pub fn validate(&self) -> Result<(), String> {
-        if !(7..=12).contains(&self.sf) { return Err(format!("SF {} out of range 7–12", self.sf)); }
-        if self.bw_idx > 2 { return Err("bandwidth index must be 0–2".into()); }
-        if !(1..=4).contains(&self.cr) { return Err("coding rate must be 1–4 (4/5–4/8)".into()); }
-        if !(2..=22).contains(&self.power_dbm) { return Err(format!("TX power {} dBm out of range 2–22", self.power_dbm)); }
-        if !(6..=64).contains(&self.preamble) { return Err(format!("preamble {} out of range 6–64", self.preamble)); }
-        if !(150_000..=960_000).contains(&self.freq_khz) { return Err(format!("frequency {} kHz out of range", self.freq_khz)); }
+        if !(7..=12).contains(&self.sf) {
+            return Err(format!("SF {} out of range 7–12", self.sf));
+        }
+        if self.bw_idx > 2 {
+            return Err("bandwidth index must be 0–2".into());
+        }
+        if !(1..=4).contains(&self.cr) {
+            return Err("coding rate must be 1–4 (4/5–4/8)".into());
+        }
+        if !(2..=22).contains(&self.power_dbm) {
+            return Err(format!("TX power {} dBm out of range 2–22", self.power_dbm));
+        }
+        if !(6..=64).contains(&self.preamble) {
+            return Err(format!("preamble {} out of range 6–64", self.preamble));
+        }
+        if !(150_000..=960_000).contains(&self.freq_khz) {
+            return Err(format!("frequency {} kHz out of range", self.freq_khz));
+        }
         Ok(())
     }
 
     pub fn encode(&self) -> [u8; RAW_PROFILE_LEN] {
         let f = self.freq_khz.to_be_bytes();
         let p = self.preamble.to_be_bytes();
-        [self.sync_word, self.sf, self.bw_idx, self.cr, f[0], f[1], f[2], f[3], self.power_dbm as u8, p[0], p[1], 0]
+        [
+            self.sync_word,
+            self.sf,
+            self.bw_idx,
+            self.cr,
+            f[0],
+            f[1],
+            f[2],
+            f[3],
+            self.power_dbm as u8,
+            p[0],
+            p[1],
+            0,
+        ]
     }
 }
 
 /// `true` when the connected board understands raw LoRa commands.
 pub fn firmware_supports_raw(version: Option<&str>) -> bool {
-    version.and_then(firmware_build_number).is_some_and(|b| b >= MIN_RAW_LORA_FIRMWARE)
+    version
+        .and_then(firmware_build_number)
+        .is_some_and(|b| b >= MIN_RAW_LORA_FIRMWARE)
 }
 
 /// Build a CMD_RAW_TX packet: header + profile + frame.
-pub fn build_raw_tx(src: &NodeAddress, profile: &RawProfile, frame: &[u8]) -> Result<Vec<u8>, String> {
+pub fn build_raw_tx(
+    src: &NodeAddress,
+    profile: &RawProfile,
+    frame: &[u8],
+) -> Result<Vec<u8>, String> {
     profile.validate()?;
-    if frame.is_empty() { return Err("nothing to send: the raw frame is empty".into()); }
+    if frame.is_empty() {
+        return Err("nothing to send: the raw frame is empty".into());
+    }
     if frame.len() > MAX_RAW_TX_LEN {
-        return Err(format!("raw frame is {} bytes; the board accepts at most {}", frame.len(), MAX_RAW_TX_LEN));
+        return Err(format!(
+            "raw frame is {} bytes; the board accepts at most {}",
+            frame.len(),
+            MAX_RAW_TX_LEN
+        ));
     }
     let mut pkt = build_header(CMD_RAW_TX, FLAG_STANDARD, src, &NodeAddress::broadcast());
     pkt.extend_from_slice(&profile.encode());
@@ -712,8 +799,17 @@ pub fn build_raw_tx(src: &NodeAddress, profile: &RawProfile, frame: &[u8]) -> Re
 }
 
 /// Build a CMD_RAW_RX_MODE packet. `profile: None` leaves raw mode.
-pub fn build_raw_rx_mode(src: &NodeAddress, profile: Option<&RawProfile>, timeout_s: u16) -> Result<Vec<u8>, String> {
-    let mut pkt = build_header(CMD_RAW_RX_MODE, FLAG_STANDARD, src, &NodeAddress::broadcast());
+pub fn build_raw_rx_mode(
+    src: &NodeAddress,
+    profile: Option<&RawProfile>,
+    timeout_s: u16,
+) -> Result<Vec<u8>, String> {
+    let mut pkt = build_header(
+        CMD_RAW_RX_MODE,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    );
     match profile {
         Some(p) => {
             p.validate()?;
@@ -739,10 +835,16 @@ pub struct RawRxFrame {
 
 /// Parse the payload (bytes after the 8-byte header) of a CMD_RAW_RX packet.
 pub fn parse_raw_rx(payload: &[u8]) -> Option<RawRxFrame> {
-    if payload.len() < RAW_RX_META_LEN { return None; }
+    if payload.len() < RAW_RX_META_LEN {
+        return None;
+    }
     let n = payload[3] as usize;
     let data = payload.get(RAW_RX_META_LEN..RAW_RX_META_LEN + n)?.to_vec();
-    Some(RawRxFrame { rssi: i16::from_be_bytes([payload[0], payload[1]]), snr: payload[2] as i8, data })
+    Some(RawRxFrame {
+        rssi: i16::from_be_bytes([payload[0], payload[1]]),
+        snr: payload[2] as i8,
+        data,
+    })
 }
 
 /// Build a SET_LORA_PARAMS packet (CMD 0x21).
@@ -771,7 +873,12 @@ pub fn build_set_lora_params(
     freq_khz: u32,
     tx_power: u8,
 ) -> Vec<u8> {
-    let mut packet = build_header(CMD_SET_LORA_PARAMS, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    let mut packet = build_header(
+        CMD_SET_LORA_PARAMS,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    );
     packet.extend_from_slice(&[sf, bw_idx, cr]);
     packet.extend_from_slice(&freq_khz.to_be_bytes());
     packet.push(tx_power);
@@ -790,7 +897,12 @@ pub fn parse_set_lora_params(payload: &[u8]) -> Option<(u8, u8, u8, u32, u8)> {
 
 /// Build a SET_NODE_ADDRS packet to configure the device's LoRa address.
 pub fn build_set_node_addr(src: &NodeAddress, new_addr: &NodeAddress) -> Vec<u8> {
-    let mut packet = build_header(CMD_SET_NODE_ADDRS, FLAG_STANDARD, src, &NodeAddress::broadcast());
+    let mut packet = build_header(
+        CMD_SET_NODE_ADDRS,
+        FLAG_STANDARD,
+        src,
+        &NodeAddress::broadcast(),
+    );
     // Payload: the new address bytes
     packet.push(new_addr.region);
     packet.push(new_addr.community);
@@ -800,7 +912,8 @@ pub fn build_set_node_addr(src: &NodeAddress, new_addr: &NodeAddress) -> Vec<u8>
 
 /// Payload bytes carried by one multipart part (the 4 extra multipart header
 /// bytes come out of the single-packet payload budget).
-pub const MULTIPART_CHUNK_LEN: usize = MAX_SINGLE_PAYLOAD_LEN - (MULTIPART_HDR_LEN - SINGLE_HDR_LEN);
+pub const MULTIPART_CHUNK_LEN: usize =
+    MAX_SINGLE_PAYLOAD_LEN - (MULTIPART_HDR_LEN - SINGLE_HDR_LEN);
 
 /// The largest payload that can be expressed as a multipart sequence.
 pub const MAX_MULTIPART_PAYLOAD_LEN: usize = MULTIPART_CHUNK_LEN * MAX_MULTIPART_PARTS as usize;
@@ -1252,7 +1365,12 @@ pub fn ingest_with_signal(
         return None;
     }
     let signal = latch.take_for(buf, now_ms);
-    let mut p = ingest_packet(buf, signal.map(|s| s.0).unwrap_or(rssi), reassembler, now_ms / 1000)?;
+    let mut p = ingest_packet(
+        buf,
+        signal.map(|s| s.0).unwrap_or(rssi),
+        reassembler,
+        now_ms / 1000,
+    )?;
     if let Some((_, snr)) = signal {
         p.snr = Some(snr);
     }
@@ -1314,20 +1432,25 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
         CMD_GET_NODE_ADDR => Some("📍 GET NODE ADDRESS".to_string()),
         CMD_SET_NODE_ADDRS => {
             if payload.len() >= 3 {
-                Some(format!("📍 SET ADDR: {}.{}.{}", payload[0], payload[1], payload[2]))
+                Some(format!(
+                    "📍 SET ADDR: {}.{}.{}",
+                    payload[0], payload[1], payload[2]
+                ))
             } else {
                 None
             }
         }
         #[cfg(not(feature = "native"))]
-        CMD_DOGE_TX => Some(format!("🐕 Dogecoin transaction payload ({} bytes)", payload.len())),
+        CMD_DOGE_TX => Some(format!(
+            "🐕 Dogecoin transaction payload ({} bytes)",
+            payload.len()
+        )),
         #[cfg(feature = "native")]
         CMD_DOGE_TX => {
             if crate::wallet::is_signed_tx_payload(payload) {
                 Some(format!("🐕 {}", crate::wallet::describe_signed_tx(payload)))
             } else {
-                crate::wallet::decode_transaction_payload(payload)
-                    .map(|s| format!("🐕 {}", s))
+                crate::wallet::decode_transaction_payload(payload).map(|s| format!("🐕 {}", s))
             }
         }
         CMD_REQUEST_BALANCE => {
@@ -1341,39 +1464,55 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
                 Some(format!("💰 REQUEST BALANCE: {}", addr))
             }
         }
-        CMD_GET_FIRMWARE_VERSION => {
-            std::str::from_utf8(payload)
-                .ok()
-                .map(|s| format!("🔧 FW: {}", s.trim_matches('\0').trim()))
-        }
+        CMD_GET_FIRMWARE_VERSION => std::str::from_utf8(payload)
+            .ok()
+            .map(|s| format!("🔧 FW: {}", s.trim_matches('\0').trim())),
         CMD_GET_SETTINGS => {
             if payload.len() >= 4 {
                 let gw = if payload[3] != 0 { "GW ON" } else { "GW OFF" };
                 let wifi = if payload.len() >= 5 {
-                    if payload[4] != 0 { " WiFi ON" } else { " WiFi OFF" }
-                } else { "" };
-                Some(format!("⚙️ SETTINGS: addr={}.{}.{} {}{}", payload[0], payload[1], payload[2], gw, wifi))
+                    if payload[4] != 0 {
+                        " WiFi ON"
+                    } else {
+                        " WiFi OFF"
+                    }
+                } else {
+                    ""
+                };
+                Some(format!(
+                    "⚙️ SETTINGS: addr={}.{}.{} {}{}",
+                    payload[0], payload[1], payload[2], gw, wifi
+                ))
             } else {
                 Some("⚙️ GET_SETTINGS".to_string())
             }
         }
         CMD_SET_GATEWAY => {
             if !payload.is_empty() {
-                Some(format!("🌐 SET_GATEWAY: {}", if payload[0] != 0 { "ON" } else { "OFF" }))
+                Some(format!(
+                    "🌐 SET_GATEWAY: {}",
+                    if payload[0] != 0 { "ON" } else { "OFF" }
+                ))
             } else {
                 Some("🌐 SET_GATEWAY".to_string())
             }
         }
         CMD_WIFI_TOGGLE => {
             if !payload.is_empty() {
-                Some(format!("📡 WIFI: {}", if payload[0] != 0 { "ON" } else { "OFF" }))
+                Some(format!(
+                    "📡 WIFI: {}",
+                    if payload[0] != 0 { "ON" } else { "OFF" }
+                ))
             } else {
                 Some("📡 WIFI_TOGGLE".to_string())
             }
         }
         CMD_ADDR_CONFLICT => {
             if payload.len() >= 3 {
-                Some(format!("⚠️ ADDR CONFLICT: {}.{}.{}", payload[0], payload[1], payload[2]))
+                Some(format!(
+                    "⚠️ ADDR CONFLICT: {}.{}.{}",
+                    payload[0], payload[1], payload[2]
+                ))
             } else {
                 Some("⚠️ ADDR CONFLICT".to_string())
             }
@@ -1388,37 +1527,54 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
         }
         CMD_GET_MAC => {
             if payload.len() >= 6 {
-                Some(format!("🔑 MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                    payload[0], payload[1], payload[2], payload[3], payload[4], payload[5]))
+                Some(format!(
+                    "🔑 MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    payload[0], payload[1], payload[2], payload[3], payload[4], payload[5]
+                ))
             } else {
                 Some("🔑 GET_MAC".to_string())
             }
         }
         CMD_BLE_TOGGLE => {
             if !payload.is_empty() {
-                Some(format!("📶 BLE: {}", if payload[0] != 0 { "ON" } else { "OFF" }))
+                Some(format!(
+                    "📶 BLE: {}",
+                    if payload[0] != 0 { "ON" } else { "OFF" }
+                ))
             } else {
                 Some("📶 BLE_TOGGLE".to_string())
             }
         }
-        CMD_RECEIVED_ACK  => Some("📨 ACK received".to_string()),
+        CMD_RECEIVED_ACK => Some("📨 ACK received".to_string()),
         CMD_RECEIVED_PING => Some("🏓 Ping received".to_string()),
-        CMD_RAW_TX => Some(format!("📡 Raw TX {}", if payload.first() == Some(&1) { "sent" } else { "failed" })),
-        CMD_RAW_RX_MODE => Some(format!("📡 Raw RX mode {}", if payload.first() == Some(&1) { "ON" } else { "OFF" })),
-        CMD_RAW_RX => Some(match parse_raw_rx(payload) { Some(r) => format!("📡 Raw frame {} B, RSSI {} dBm", r.data.len(), r.rssi), None => "📡 Raw frame".to_string() }),
-        CMD_DISCOVER      => Some("📡 Discovery ping sent".to_string()),
-        CMD_RX_SIGNAL     => Some("📶 Signal report".to_string()),
+        CMD_RAW_TX => Some(format!(
+            "📡 Raw TX {}",
+            if payload.first() == Some(&1) {
+                "sent"
+            } else {
+                "failed"
+            }
+        )),
+        CMD_RAW_RX_MODE => Some(format!(
+            "📡 Raw RX mode {}",
+            if payload.first() == Some(&1) {
+                "ON"
+            } else {
+                "OFF"
+            }
+        )),
+        CMD_RAW_RX => Some(match parse_raw_rx(payload) {
+            Some(r) => format!("📡 Raw frame {} B, RSSI {} dBm", r.data.len(), r.rssi),
+            None => "📡 Raw frame".to_string(),
+        }),
+        CMD_DISCOVER => Some("📡 Discovery ping sent".to_string()),
+        CMD_RX_SIGNAL => Some("📶 Signal report".to_string()),
         _ => None,
     }
 }
 
 /// Build a standard 8-byte packet header.
-fn build_header(
-    cmd: u8,
-    flags: u8,
-    src: &NodeAddress,
-    dst: &NodeAddress,
-) -> Vec<u8> {
+fn build_header(cmd: u8, flags: u8, src: &NodeAddress, dst: &NodeAddress) -> Vec<u8> {
     vec![
         cmd,
         flags,
@@ -1456,7 +1612,16 @@ mod tests {
         let sig = [CMD_RX_SIGNAL, 0, 10, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 9];
         assert_eq!(exact_packet_len(CMD_RX_SIGNAL), Some(11));
         assert!(is_known_command(CMD_RX_SIGNAL));
-        let mut msg = vec![CMD_MESSAGE, 0, gw.region, gw.community, gw.node, me.region, me.community, me.node];
+        let mut msg = vec![
+            CMD_MESSAGE,
+            0,
+            gw.region,
+            gw.community,
+            gw.node,
+            me.region,
+            me.community,
+            me.node,
+        ];
         msg.extend_from_slice(b"TX_ACK:abc");
         let mut latch = RxSignalLatch::new();
         let mut rx = MultipartReassembler::new();
@@ -1468,26 +1633,57 @@ mod tests {
         assert_eq!((p.rssi, p.snr), (0, None));
         // stale
         ingest_with_signal(&sig, 0, &mut latch, &mut rx, 1_000);
-        let p = ingest_with_signal(&msg, 0, &mut latch, &mut rx, 1_000 + RX_SIGNAL_MAX_AGE_MS + 1).unwrap();
+        let p = ingest_with_signal(
+            &msg,
+            0,
+            &mut latch,
+            &mut rx,
+            1_000 + RX_SIGNAL_MAX_AGE_MS + 1,
+        )
+        .unwrap();
         assert_eq!(p.snr, None);
         // different sender
         let mut other = sig;
         other[4] = 7;
         ingest_with_signal(&other, 0, &mut latch, &mut rx, 5_000);
-        assert_eq!(ingest_with_signal(&msg, 0, &mut latch, &mut rx, 5_010).unwrap().snr, None);
+        assert_eq!(
+            ingest_with_signal(&msg, 0, &mut latch, &mut rx, 5_010)
+                .unwrap()
+                .snr,
+            None
+        );
     }
 
     #[test]
     fn test_received_ack_signal_carries_snr() {
-        let ack = [CMD_RECEIVED_ACK_SIGNAL, 0, 10, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 0xFB];
+        let ack = [
+            CMD_RECEIVED_ACK_SIGNAL,
+            0,
+            10,
+            0,
+            1,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xAA,
+            0xFB,
+        ];
         let p = parse_incoming(&ack, 0).unwrap();
-        assert_eq!((p.command, p.rssi, p.snr), (CMD_RECEIVED_ACK, -86, Some(-5)));
+        assert_eq!(
+            (p.command, p.rssi, p.snr),
+            (CMD_RECEIVED_ACK, -86, Some(-5))
+        );
     }
 
     use super::*;
 
-    fn test_src() -> NodeAddress { NodeAddress::new(10, 0, 1) }
-    fn test_dst() -> NodeAddress { NodeAddress::new(10, 0, 2) }
+    fn test_src() -> NodeAddress {
+        NodeAddress::new(10, 0, 1)
+    }
+    fn test_dst() -> NodeAddress {
+        NodeAddress::new(10, 0, 2)
+    }
 
     #[test]
     fn test_build_discover() {
@@ -1520,7 +1716,10 @@ mod tests {
     fn test_multipart_splitting() {
         let big_payload = vec![0xAA; 400];
         let parts = build_multipart_packets(&test_src(), &test_dst(), CMD_MESSAGE, &big_payload);
-        assert!(parts.len() > 1, "Large payload should be split into multiple parts");
+        assert!(
+            parts.len() > 1,
+            "Large payload should be split into multiple parts"
+        );
         for part in &parts {
             assert!(part.len() <= MAX_SINGLE_PAYLOAD_LEN + SINGLE_HDR_LEN + 4);
         }
@@ -1542,7 +1741,7 @@ mod tests {
         assert_eq!(hops_from_flags(0x01), 0); // multipart flag, 0 hops
         assert_eq!(hops_from_flags(0x30), 3);
         assert_eq!(hops_from_flags(0x31), 3); // 3 hops + multipart flag
-        // Round-trip: base flag preserved in the low nibble, hops in the high nibble.
+                                              // Round-trip: base flag preserved in the low nibble, hops in the high nibble.
         let f = flags_with_hops(FLAG_MULTIPART, 5);
         assert_eq!(f & 0x0F, FLAG_MULTIPART);
         assert_eq!(hops_from_flags(f), 5);
@@ -1589,10 +1788,25 @@ mod tests {
     /// the raw bytes of every subsequent packet.
     #[test]
     fn test_ack_signal_folds_into_received_ack() {
-        let pkt = [CMD_RECEIVED_ACK_SIGNAL, 0, 10, 0, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xB5, 0x07];
+        let pkt = [
+            CMD_RECEIVED_ACK_SIGNAL,
+            0,
+            10,
+            0,
+            2,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xB5,
+            0x07,
+        ];
         assert_eq!(exact_packet_len(CMD_RECEIVED_ACK_SIGNAL), Some(pkt.len()));
         let p = parse_incoming(&pkt, 0).expect("parses");
-        assert_eq!((p.command, p.rssi, p.payload_hex.as_str()), (CMD_RECEIVED_ACK, -75, ""));
+        assert_eq!(
+            (p.command, p.rssi, p.payload_hex.as_str()),
+            (CMD_RECEIVED_ACK, -75, "")
+        );
         assert_eq!(p.source, NodeAddress::new(10, 0, 2));
         assert!(parse_incoming(&pkt[..9], 0).is_none());
     }
@@ -1610,8 +1824,8 @@ mod tests {
         let msg_len = SINGLE_HDR_LEN + b"hello".len();
 
         // Parse only the first packet's bytes.
-        let parsed = parse_incoming(&combined[..msg_len], 0)
-            .expect("Should parse valid CMD_MESSAGE");
+        let parsed =
+            parse_incoming(&combined[..msg_len], 0).expect("Should parse valid CMD_MESSAGE");
 
         assert_eq!(parsed.command, CMD_MESSAGE);
         // payload_hex must be exactly "hello" — not "hello" + the PING header bytes.
@@ -1664,7 +1878,10 @@ mod tests {
         assert_eq!(frame_packet_len(CMD_GET_FIRMWARE_VERSION, &pkt), None);
 
         pkt.push(0);
-        assert_eq!(frame_packet_len(CMD_GET_FIRMWARE_VERSION, &pkt), Some(pkt.len()));
+        assert_eq!(
+            frame_packet_len(CMD_GET_FIRMWARE_VERSION, &pkt),
+            Some(pkt.len())
+        );
 
         // A board that never sends a terminator must not wedge the stream forever.
         let mut runaway = vec![CMD_GET_FIRMWARE_VERSION, 0x00, 10, 0, 1, 0xFF, 0xFF, 0xFF];
@@ -1689,7 +1906,9 @@ mod tests {
                     assert!(
                         n <= buf.len(),
                         "cmd 0x{:02X} with {} bytes returned length {}",
-                        cmd, len, n
+                        cmd,
+                        len,
+                        n
                     );
                 }
             }
@@ -1699,7 +1918,10 @@ mod tests {
     #[test]
     fn test_raw_profile_encoding_and_framing() {
         let p = RawProfile::meshtastic_longfast_us();
-        assert_eq!(p.encode(), [0x2B, 11, 1, 1, 0x00, 0x0D, 0xD6, 0x7B, 17, 0, 16, 0]);
+        assert_eq!(
+            p.encode(),
+            [0x2B, 11, 1, 1, 0x00, 0x0D, 0xD6, 0x7B, 17, 0, 16, 0]
+        );
         let src = NodeAddress::new(1, 2, 3);
         let tx = build_raw_tx(&src, &p, &[9, 8, 7]).unwrap();
         assert_eq!(tx[0], CMD_RAW_TX);
@@ -1720,7 +1942,9 @@ mod tests {
 
     #[test]
     fn test_raw_rx_frame_is_length_framed() {
-        let mut f = vec![CMD_RAW_RX, 0, 1, 2, 3, 0xFF, 0xFF, 0xFF, 0xFF, 0xA6, 0xFB, 3, 0xAA, 0xBB];
+        let mut f = vec![
+            CMD_RAW_RX, 0, 1, 2, 3, 0xFF, 0xFF, 0xFF, 0xFF, 0xA6, 0xFB, 3, 0xAA, 0xBB,
+        ];
         assert_eq!(frame_packet_len(CMD_RAW_RX, &f), None, "waits for the tail");
         assert!(!is_unbounded_frame(CMD_RAW_RX, &f));
         f.push(0xCC);
@@ -1736,20 +1960,45 @@ mod tests {
     #[test]
     fn test_is_known_command_covers_all_protocol_commands() {
         for cmd in [
-            CMD_GET_NODE_ADDR, CMD_SET_NODE_ADDRS, CMD_PING, CMD_MESSAGE,
-            CMD_BROADCAST, CMD_MULTIPART, CMD_DOGE_TX, CMD_REQUEST_BALANCE,
-            CMD_GET_FIRMWARE_VERSION, CMD_SET_LORA_PARAMS, CMD_GET_SETTINGS,
-            CMD_SET_GATEWAY, CMD_WIFI_TOGGLE, CMD_ADDR_CONFLICT, CMD_GET_BATTERY,
-            CMD_GET_MAC, CMD_BLE_TOGGLE, CMD_RECEIVED_ACK, CMD_RECEIVED_PING,
-            CMD_RECEIVED_ACK_SIGNAL, CMD_RAW_TX, CMD_RAW_RX_MODE, CMD_RAW_RX,
+            CMD_GET_NODE_ADDR,
+            CMD_SET_NODE_ADDRS,
+            CMD_PING,
+            CMD_MESSAGE,
+            CMD_BROADCAST,
+            CMD_MULTIPART,
+            CMD_DOGE_TX,
+            CMD_REQUEST_BALANCE,
+            CMD_GET_FIRMWARE_VERSION,
+            CMD_SET_LORA_PARAMS,
+            CMD_GET_SETTINGS,
+            CMD_SET_GATEWAY,
+            CMD_WIFI_TOGGLE,
+            CMD_ADDR_CONFLICT,
+            CMD_GET_BATTERY,
+            CMD_GET_MAC,
+            CMD_BLE_TOGGLE,
+            CMD_RECEIVED_ACK,
+            CMD_RECEIVED_PING,
+            CMD_RECEIVED_ACK_SIGNAL,
+            CMD_RAW_TX,
+            CMD_RAW_RX_MODE,
+            CMD_RAW_RX,
             CMD_DISCOVER,
         ] {
-            assert!(is_known_command(cmd), "CMD 0x{:02X} must be recognised", cmd);
+            assert!(
+                is_known_command(cmd),
+                "CMD 0x{:02X} must be recognised",
+                cmd
+            );
         }
         // Any command with a fixed reply length is by definition a real command.
         for cmd in 0u8..=255 {
             if exact_packet_len(cmd).is_some() {
-                assert!(is_known_command(cmd), "CMD 0x{:02X} has a length but is unknown", cmd);
+                assert!(
+                    is_known_command(cmd),
+                    "CMD 0x{:02X} has a length but is unknown",
+                    cmd
+                );
             }
         }
         assert!(!is_known_command(0x99), "arbitrary bytes are not commands");
@@ -1798,8 +2047,16 @@ mod tests {
         assert!(check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN, Some(OLD_FW)).is_ok());
         let err = check_host_payload_fits(MAX_SINGLE_PAYLOAD_LEN + 1, Some(OLD_FW))
             .expect_err("oversized payloads must be rejected on old firmware");
-        assert!(err.contains("193"), "the error should name the actual size: {}", err);
-        assert!(err.contains("v0.4.2"), "the error should say what to flash: {}", err);
+        assert!(
+            err.contains("193"),
+            "the error should name the actual size: {}",
+            err
+        );
+        assert!(
+            err.contains("v0.4.2"),
+            "the error should say what to flash: {}",
+            err
+        );
 
         // Unknown firmware is treated as old — guessing optimistically would
         // transmit a transaction no receiver could reconstruct.
@@ -1829,7 +2086,10 @@ mod tests {
         assert!(firmware_supports_multipart(Some("RadioDoge NV3FW12")));
 
         assert_eq!(max_host_payload_len(None), MAX_SINGLE_PAYLOAD_LEN);
-        assert_eq!(max_host_payload_len(Some(NEW_FW)), MAX_MULTIPART_PAYLOAD_LEN);
+        assert_eq!(
+            max_host_payload_len(Some(NEW_FW)),
+            MAX_MULTIPART_PAYLOAD_LEN
+        );
     }
 
     /// `build_tx_frames` is the single decision point for how a payload goes on
@@ -1843,7 +2103,10 @@ mod tests {
             let frames = build_tx_frames(&src, &dst, CMD_DOGE_TX, b"small", fw).unwrap();
             assert_eq!(frames.len(), 1);
             assert_eq!(frames[0][0], CMD_DOGE_TX);
-            assert_eq!(frames[0][1], FLAG_STANDARD, "a single frame is not multipart");
+            assert_eq!(
+                frames[0][1], FLAG_STANDARD,
+                "a single frame is not multipart"
+            );
             assert_eq!(&frames[0][SINGLE_HDR_LEN..], b"small");
         }
 
@@ -1896,8 +2159,7 @@ mod tests {
             let payload = &pkt[SINGLE_HDR_LEN..];
             assert_eq!(payload.len(), 8, "payload stays 8 bytes");
 
-            let (sf, bw, cr, freq, power) =
-                parse_set_lora_params(payload).expect("payload parses");
+            let (sf, bw, cr, freq, power) = parse_set_lora_params(payload).expect("payload parses");
             assert_eq!(sf, 9);
             assert_eq!(bw, 1);
             assert_eq!(cr, 7);
@@ -1915,7 +2177,10 @@ mod tests {
         assert_eq!(freq, 915_000);
         assert_ne!(freq, 63_032, "this was the truncated value before v0.4.1");
 
-        assert!(parse_set_lora_params(&[0u8; 7]).is_none(), "short payloads are rejected");
+        assert!(
+            parse_set_lora_params(&[0u8; 7]).is_none(),
+            "short payloads are rejected"
+        );
     }
 
     /// Resync skips noise and never runs past a real packet start.
@@ -1939,8 +2204,10 @@ mod tests {
             // 'x','y' cannot start a packet, so the packet begins at index 2.
             let buf = [b'x', b'y', cmd, 0x00];
             assert_eq!(
-                resync_offset(&buf), 2,
-                "cmd 0x{:02X} should be found at index 2", cmd
+                resync_offset(&buf),
+                2,
+                "cmd 0x{:02X} should be found at index 2",
+                cmd
             );
         }
     }
@@ -1957,7 +2224,9 @@ mod tests {
                 pkt[1] = flags_with_hops(base, hops);
                 assert!(
                     looks_like_packet_start(&pkt),
-                    "a packet with base {:#04x} and {} hops must be recognised", base, hops
+                    "a packet with base {:#04x} and {} hops must be recognised",
+                    base,
+                    hops
                 );
                 assert_eq!(resync_offset(&pkt), 0);
             }
@@ -1987,11 +2256,15 @@ mod tests {
         let mut with_flags = 0usize;
         for line in lines {
             cmd_only += line.iter().filter(|&&b| is_known_command(b)).count();
-            with_flags += (0..line.len()).filter(|&i| looks_like_packet_start(&line[i..])).count();
+            with_flags += (0..line.len())
+                .filter(|&i| looks_like_packet_start(&line[i..]))
+                .count();
         }
         assert!(
             with_flags < cmd_only,
-            "the flags check should reduce false starts ({} -> {})", cmd_only, with_flags
+            "the flags check should reduce false starts ({} -> {})",
+            cmd_only,
+            with_flags
         );
 
         // A real packet after log text is always reachable: repeatedly resyncing
@@ -2017,7 +2290,8 @@ mod tests {
                 pos += 1; // false start — step past it and keep scanning
             }
             assert_eq!(
-                found, Some(pkt_at),
+                found,
+                Some(pkt_at),
                 "the real packet after {:?} must still be found",
                 String::from_utf8_lossy(line)
             );
@@ -2049,11 +2323,18 @@ mod tests {
             }
         }
         let done = out.expect("final part completes the payload");
-        assert_eq!(done.payload, payload, "reassembled payload must be byte-exact");
+        assert_eq!(
+            done.payload, payload,
+            "reassembled payload must be byte-exact"
+        );
         assert_eq!(done.command, CMD_DOGE_TX);
         assert_eq!(done.source, test_src());
         assert_eq!(done.destination, test_dst());
-        assert_eq!(rx.pending_sessions(), 0, "completed session must be released");
+        assert_eq!(
+            rx.pending_sessions(),
+            0,
+            "completed session must be released"
+        );
     }
 
     #[test]
@@ -2101,7 +2382,8 @@ mod tests {
         let b_payload = vec![0xBBu8; 400];
         let src_b = NodeAddress::new(20, 5, 9);
 
-        let a = try_build_multipart_packets(&test_src(), &test_dst(), CMD_DOGE_TX, &a_payload).unwrap();
+        let a =
+            try_build_multipart_packets(&test_src(), &test_dst(), CMD_DOGE_TX, &a_payload).unwrap();
         let b = try_build_multipart_packets(&src_b, &test_dst(), CMD_MESSAGE, &b_payload).unwrap();
 
         let mut rx = MultipartReassembler::new();
@@ -2110,10 +2392,14 @@ mod tests {
         // Interleave the two streams.
         for i in 0..a.len().max(b.len()) {
             if let Some(p) = a.get(i) {
-                if let Some(d) = rx.push(&parse_multipart(p).unwrap(), 0) { a_done = Some(d); }
+                if let Some(d) = rx.push(&parse_multipart(p).unwrap(), 0) {
+                    a_done = Some(d);
+                }
             }
             if let Some(p) = b.get(i) {
-                if let Some(d) = rx.push(&parse_multipart(p).unwrap(), 0) { b_done = Some(d); }
+                if let Some(d) = rx.push(&parse_multipart(p).unwrap(), 0) {
+                    b_done = Some(d);
+                }
             }
         }
         let a_done = a_done.expect("stream A completes");
@@ -2137,7 +2423,11 @@ mod tests {
         // Long after the timeout, the abandoned session is dropped.
         let later = MULTIPART_SESSION_TIMEOUT_SECS + 1;
         rx.push(&parse_multipart(&packets[1]).unwrap(), later);
-        assert_eq!(rx.pending_sessions(), 1, "the expired session was replaced, not added to");
+        assert_eq!(
+            rx.pending_sessions(),
+            1,
+            "the expired session was replaced, not added to"
+        );
 
         // A clean retransmission of the whole sequence still assembles correctly.
         let mut out = None;
@@ -2187,7 +2477,10 @@ mod tests {
         // index >= total_parts would index past the session buffer.
         let mut oob = good[0].clone();
         oob[9] = oob[8];
-        assert!(parse_multipart(&oob).is_none(), "out-of-range index must be rejected");
+        assert!(
+            parse_multipart(&oob).is_none(),
+            "out-of-range index must be rejected"
+        );
 
         // total_parts beyond the protocol maximum.
         let mut huge = good[0].clone();
@@ -2207,7 +2500,10 @@ mod tests {
         let mut out = None;
         for pkt in &packets {
             let relayed = relay_packet(pkt).expect("multipart frames relay");
-            assert!(is_multipart_flags(relayed[1]), "relay must preserve the multipart bit");
+            assert!(
+                is_multipart_flags(relayed[1]),
+                "relay must preserve the multipart bit"
+            );
             if let Some(d) = rx.push(&parse_multipart(&relayed).unwrap(), 0) {
                 out = Some(d);
             }
@@ -2262,7 +2558,10 @@ mod tests {
         }
         let done = out.expect("transaction reassembles");
         let recovered = hex::decode(&done.payload_hex).unwrap();
-        assert_eq!(recovered, tx, "a signed transaction must survive byte-exact");
+        assert_eq!(
+            recovered, tx,
+            "a signed transaction must survive byte-exact"
+        );
         assert!(
             crate::wallet::is_signed_tx_payload(&recovered),
             "the gateway must still recognise it as a signed transaction"
@@ -2322,7 +2621,11 @@ mod tests {
         stream.extend_from_slice(&ack);
 
         let n = frame_packet_len(stream[0], &stream).expect("frame is complete");
-        assert_eq!(n, last.len(), "the short part must end where the sender ended it");
+        assert_eq!(
+            n,
+            last.len(),
+            "the short part must end where the sender ended it"
+        );
 
         // And the whole stream still decodes into both packets, in order.
         let mut rx = MultipartReassembler::new();
@@ -2341,7 +2644,10 @@ mod tests {
         }
         assert_eq!(decoded.len(), 2, "the transaction and the ACK both survive");
         assert_eq!(hex::decode(&decoded[0].payload_hex).unwrap(), payload);
-        assert_eq!(decoded[1].decoded.as_deref(), Some("✅ TX confirmed: txid=deadbeef"));
+        assert_eq!(
+            decoded[1].decoded.as_deref(),
+            Some("✅ TX confirmed: txid=deadbeef")
+        );
     }
 
     /// A frame whose declared chunk length is impossible must be rejected, not
@@ -2407,7 +2713,10 @@ mod tests {
             stream.drain(..len);
         }
         assert_eq!(decoded.len(), 1, "only the MESSAGE is a packet");
-        assert_eq!(decoded[0].decoded.as_deref(), Some("✅ TX confirmed: txid=c0ffee"));
+        assert_eq!(
+            decoded[0].decoded.as_deref(),
+            Some("✅ TX confirmed: txid=c0ffee")
+        );
     }
 
     /// Verify exact_packet_len returns the correct size for every fixed-length command
@@ -2416,37 +2725,44 @@ mod tests {
     fn test_exact_packet_len_coverage() {
         // Fixed-length commands and their expected total byte counts
         let fixed = [
-            (CMD_GET_NODE_ADDR,   8usize),
-            (CMD_PING,            8),
+            (CMD_GET_NODE_ADDR, 8usize),
+            (CMD_PING, 8),
             (CMD_SET_LORA_PARAMS, 8),
-            (CMD_ADDR_CONFLICT,   8),
-            (CMD_SET_NODE_ADDRS,  8),
-            (CMD_SET_GATEWAY,     9),
-            (CMD_WIFI_TOGGLE,     9),
-            (CMD_BLE_TOGGLE,      9),
-            (CMD_GET_SETTINGS,    13),
-            (CMD_GET_BATTERY,     10),
-            (CMD_GET_MAC,         14),
-            (CMD_DISCOVER,        8),
+            (CMD_ADDR_CONFLICT, 8),
+            (CMD_SET_NODE_ADDRS, 8),
+            (CMD_SET_GATEWAY, 9),
+            (CMD_WIFI_TOGGLE, 9),
+            (CMD_BLE_TOGGLE, 9),
+            (CMD_GET_SETTINGS, 13),
+            (CMD_GET_BATTERY, 10),
+            (CMD_GET_MAC, 14),
+            (CMD_DISCOVER, 8),
         ];
         for (cmd, expected) in fixed {
             assert_eq!(
                 exact_packet_len(cmd),
                 Some(expected),
-                "CMD 0x{:02X} should have fixed length {}", cmd, expected
+                "CMD 0x{:02X} should have fixed length {}",
+                cmd,
+                expected
             );
         }
 
         // Variable-length commands must return None
         let variable = [
-            CMD_MESSAGE, CMD_BROADCAST, CMD_MULTIPART,
-            CMD_DOGE_TX, CMD_REQUEST_BALANCE, CMD_GET_FIRMWARE_VERSION,
+            CMD_MESSAGE,
+            CMD_BROADCAST,
+            CMD_MULTIPART,
+            CMD_DOGE_TX,
+            CMD_REQUEST_BALANCE,
+            CMD_GET_FIRMWARE_VERSION,
         ];
         for cmd in variable {
             assert_eq!(
                 exact_packet_len(cmd),
                 None,
-                "CMD 0x{:02X} should be variable-length (None)", cmd
+                "CMD 0x{:02X} should be variable-length (None)",
+                cmd
             );
         }
     }
@@ -2482,8 +2798,7 @@ mod tests {
         // Payload must be only "v1.2.3\0", not "v1.2.3\0" + GET_SETTINGS bytes
         let raw_payload = hex::decode(&parsed.payload_hex).expect("valid hex");
         assert_eq!(
-            raw_payload,
-            ver_string,
+            raw_payload, ver_string,
             "Firmware version payload must end at the null terminator"
         );
     }
@@ -2495,12 +2810,25 @@ mod unbounded_frame_tests {
 
     #[test]
     fn message_is_unbounded_fixed_and_multipart_are_not() {
-        let m = build_message(&NodeAddress::new(10, 0, 1), &NodeAddress::new(10, 0, 2), "much hello");
+        let m = build_message(
+            &NodeAddress::new(10, 0, 1),
+            &NodeAddress::new(10, 0, 2),
+            "much hello",
+        );
         assert!(is_unbounded_frame(CMD_MESSAGE, &m));
         let p = build_ping(&NodeAddress::new(10, 0, 1), &NodeAddress::new(10, 0, 2));
         assert!(!is_unbounded_frame(CMD_PING, &p));
-        let mp = try_build_multipart_packets(&NodeAddress::new(10, 0, 1), &NodeAddress::new(10, 0, 2), CMD_MESSAGE, &[b'x'; 400]).unwrap();
+        let mp = try_build_multipart_packets(
+            &NodeAddress::new(10, 0, 1),
+            &NodeAddress::new(10, 0, 2),
+            CMD_MESSAGE,
+            &[b'x'; 400],
+        )
+        .unwrap();
         assert!(!is_unbounded_frame(CMD_MESSAGE, &mp[0]));
-        assert!(!is_unbounded_frame(CMD_GET_FIRMWARE_VERSION, &build_get_firmware_version(&NodeAddress::new(10, 0, 1))));
+        assert!(!is_unbounded_frame(
+            CMD_GET_FIRMWARE_VERSION,
+            &build_get_firmware_version(&NodeAddress::new(10, 0, 1))
+        ));
     }
 }

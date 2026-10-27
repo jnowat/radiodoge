@@ -123,7 +123,11 @@ impl Outbox {
     /// Broadcasts whose retry time has come, cloned so the caller can work on them
     /// without holding a lock.
     pub fn due_broadcasts(&self, now: u64) -> Vec<PendingBroadcast> {
-        self.broadcasts.iter().filter(|b| b.next_attempt <= now).cloned().collect()
+        self.broadcasts
+            .iter()
+            .filter(|b| b.next_attempt <= now)
+            .cloned()
+            .collect()
     }
 
     /// The network accepted (or already had) `txid`: stop retrying it.
@@ -142,10 +146,18 @@ impl Outbox {
 
     /// Hold a reply for `node` until it is next heard.
     pub fn queue_reply(&mut self, node: &str, text: &str, now: u64) {
-        if self.replies.iter().any(|r| r.node == node && r.text == text) {
+        if self
+            .replies
+            .iter()
+            .any(|r| r.node == node && r.text == text)
+        {
             return;
         }
-        self.replies.push(PendingReply { node: node.to_string(), text: text.to_string(), queued_at: now });
+        self.replies.push(PendingReply {
+            node: node.to_string(),
+            text: text.to_string(),
+            queued_at: now,
+        });
         // Per node, keep the newest few.
         let for_node = self.replies.iter().filter(|r| r.node == node).count();
         if for_node > MAX_REPLIES_PER_NODE {
@@ -161,7 +173,9 @@ impl Outbox {
 
     /// `node` was just heard: hand back everything held for it, oldest first.
     pub fn take_replies_for(&mut self, node: &str) -> Vec<PendingReply> {
-        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.replies).into_iter().partition(|r| r.node == node);
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.replies)
+            .into_iter()
+            .partition(|r| r.node == node);
         self.replies = rest;
         mine
     }
@@ -169,9 +183,11 @@ impl Outbox {
     /// Drop expired entries. Returns how many broadcasts and replies were removed.
     pub fn expire(&mut self, now: u64) -> (usize, usize) {
         let b0 = self.broadcasts.len();
-        self.broadcasts.retain(|b| now.saturating_sub(b.queued_at) < BROADCAST_TTL_SECS);
+        self.broadcasts
+            .retain(|b| now.saturating_sub(b.queued_at) < BROADCAST_TTL_SECS);
         let r0 = self.replies.len();
-        self.replies.retain(|r| now.saturating_sub(r.queued_at) < REPLY_TTL_SECS);
+        self.replies
+            .retain(|r| now.saturating_sub(r.queued_at) < REPLY_TTL_SECS);
         (b0 - self.broadcasts.len(), r0 - self.replies.len())
     }
 
@@ -187,7 +203,10 @@ mod tests {
     #[test]
     fn node_strings_parse() {
         assert_eq!(parse_node("10.0.2"), Some(NodeAddress::new(10, 0, 2)));
-        assert_eq!(parse_node(&NodeAddress::new(1, 2, 3).to_display_string()), Some(NodeAddress::new(1, 2, 3)));
+        assert_eq!(
+            parse_node(&NodeAddress::new(1, 2, 3).to_display_string()),
+            Some(NodeAddress::new(1, 2, 3))
+        );
         assert_eq!(parse_node("10.0"), None);
         assert_eq!(parse_node("10.0.2.1"), None);
         assert_eq!(parse_node("10.0.256"), None);
@@ -206,7 +225,10 @@ mod tests {
     fn broadcast_lifecycle() {
         let mut o = Outbox::new();
         assert!(o.queue_broadcast("aa", "0100", "1.2.3", 1000));
-        assert!(!o.queue_broadcast("aa", "0100", "1.2.3", 1001), "no duplicates");
+        assert!(
+            !o.queue_broadcast("aa", "0100", "1.2.3", 1001),
+            "no duplicates"
+        );
         assert!(o.due_broadcasts(1000).is_empty(), "first retry waits");
         assert_eq!(o.due_broadcasts(1030).len(), 1);
         o.broadcast_failed("aa", 1030);
@@ -225,7 +247,10 @@ mod tests {
         o.queue_reply("1.1.1", "TX_ACK:aa", 12); // duplicate ignored
         o.queue_reply("1.1.1", "TX_ACK:bb", 13);
         let got = o.take_replies_for("1.1.1");
-        assert_eq!(got.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["TX_ACK:aa", "TX_ACK:bb"]);
+        assert_eq!(
+            got.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+            ["TX_ACK:aa", "TX_ACK:bb"]
+        );
         assert_eq!(o.replies.len(), 1);
         assert!(o.take_replies_for("1.1.1").is_empty());
     }

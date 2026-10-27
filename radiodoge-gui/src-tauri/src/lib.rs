@@ -17,8 +17,8 @@
 //!
 //! All protocol, wallet, and serial logic lives in `radiodoge-core`.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -28,12 +28,12 @@ use tokio::sync::Mutex;
 #[cfg(desktop)]
 mod tray;
 
-use radiodoge_core::{radio, tx_reply, wallet};
 use radiodoge_core::serial::SerialManager;
 use radiodoge_core::types::{
-    BoardSettings, ConnectionStatusEvent, IncomingPacket, LoraSettings, NeighborEntry,
-    NodeAddress, PortInfo, RadioStats, SendOutcome, TransactionRequest, TxHistoryEntry, WalletInfo,
+    BoardSettings, ConnectionStatusEvent, IncomingPacket, LoraSettings, NeighborEntry, NodeAddress,
+    PortInfo, RadioStats, SendOutcome, TransactionRequest, TxHistoryEntry, WalletInfo,
 };
+use radiodoge_core::{radio, tx_reply, wallet};
 
 mod gateway;
 
@@ -152,12 +152,15 @@ fn emit_debug_traffic(app: &AppHandle, direction: &str, raw_hex: &str, parsed: &
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let _ = app.emit("debug-serial-traffic", serde_json::json!({
-        "timestamp": ts,
-        "direction": direction,
-        "rawHex": raw_hex,
-        "parsed": parsed,
-    }));
+    let _ = app.emit(
+        "debug-serial-traffic",
+        serde_json::json!({
+            "timestamp": ts,
+            "direction": direction,
+            "rawHex": raw_hex,
+            "parsed": parsed,
+        }),
+    );
 }
 
 /// Milliseconds since the Unix epoch.
@@ -190,10 +193,7 @@ async fn write_file_atomically(path: &std::path::Path, contents: &str) -> Result
     // with a shared `wallet.tmp` two overlapping saves interleave: the slower
     // writer can rename a file the faster one had only half written.
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
-    let tmp = path.with_extension(format!(
-        "tmp{}",
-        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
+    let tmp = path.with_extension(format!("tmp{}", TMP_SEQ.fetch_add(1, Ordering::Relaxed)));
     if let Err(e) = tokio::fs::write(&tmp, contents).await {
         let _ = tokio::fs::remove_file(&tmp).await;
         return Err(format!("could not write {}: {}", tmp.display(), e));
@@ -217,7 +217,10 @@ async fn load_history_from_disk(app: &AppHandle) -> Vec<TxHistoryEntry> {
         Ok(json) => match serde_json::from_str(&json) {
             Ok(entries) => entries,
             Err(e) => {
-                eprintln!("[history] tx_history.json parse failed ({}), starting fresh", e);
+                eprintln!(
+                    "[history] tx_history.json parse failed ({}), starting fresh",
+                    e
+                );
                 vec![]
             }
         },
@@ -278,7 +281,10 @@ async fn connect_port(
 ) -> Result<(), String> {
     log::info!("connect_port: {}", port);
 
-    let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&port));
+    let _ = app.emit(
+        "connection-status",
+        ConnectionStatusEvent::connecting(&port),
+    );
 
     state.reconnect_enabled.store(true, Ordering::Relaxed);
 
@@ -308,50 +314,52 @@ async fn connect_port(
 
         // v0.3.7 — Emit addr-conflict event to frontend when board detects duplicate addr
         if packet.command == radio::CMD_ADDR_CONFLICT {
-            let addr_str = packet.decoded.clone().unwrap_or_else(|| "unknown".to_string());
-            let _ = app_for_packets.emit("addr-conflict", serde_json::json!({
-                "detected": true,
-                "address": addr_str,
-            }));
+            let addr_str = packet
+                .decoded
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let _ = app_for_packets.emit(
+                "addr-conflict",
+                serde_json::json!({
+                    "detected": true,
+                    "address": addr_str,
+                }),
+            );
         }
     });
 
-    state
-        .serial
-        .connect(&port, on_packet)
-        .await
-        .map_err(|e| {
-            let raw = e.to_string();
-            if raw.contains("Access is denied") || raw.contains("Permission denied") {
-                format!(
-                    "Access denied on {}.\n\
+    state.serial.connect(&port, on_packet).await.map_err(|e| {
+        let raw = e.to_string();
+        if raw.contains("Access is denied") || raw.contains("Permission denied") {
+            format!(
+                "Access denied on {}.\n\
                      Hint: Another program (Arduino IDE, PuTTY, device manager) may \
                      already have this port open. Close it and try again.",
-                    port
-                )
-            } else if raw.contains("could not open")
-                || raw.contains("No such file")
-                || raw.contains("The system cannot find")
-            {
-                format!(
-                    "Could not open {}.\n\
+                port
+            )
+        } else if raw.contains("could not open")
+            || raw.contains("No such file")
+            || raw.contains("The system cannot find")
+        {
+            format!(
+                "Could not open {}.\n\
                      Hint: Install the CP210x or CH340 USB driver for your Heltec board.\n\
                      CP210x: https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers\n\
                      CH340: https://www.wch-ic.com/products/CH340.html",
-                    port
-                )
-            } else if raw.contains("The device is not connected")
-                || raw.contains("device has been removed")
-            {
-                format!(
-                    "Device disconnected unexpectedly on {}.\n\
+                port
+            )
+        } else if raw.contains("The device is not connected")
+            || raw.contains("device has been removed")
+        {
+            format!(
+                "Device disconnected unexpectedly on {}.\n\
                      Hint: Check the USB cable — some USB-C cables are power-only.",
-                    port
-                )
-            } else {
-                radiodoge_core::errors::friendly(raw)
-            }
-        })?;
+                port
+            )
+        } else {
+            radiodoge_core::errors::friendly(raw)
+        }
+    })?;
 
     *state.current_port.lock().await = Some(port.clone());
 
@@ -361,7 +369,9 @@ async fn connect_port(
         emit_debug_traffic(
             &app,
             "TX",
-            &hex::encode(radio::build_get_firmware_version(&NodeAddress::default_local())),
+            &hex::encode(radio::build_get_firmware_version(
+                &NodeAddress::default_local(),
+            )),
             &format!("CMD_GET_FIRMWARE_VERSION (attempt {})", attempt),
         );
         // request_firmware_version, not send_raw: it opens the window in which a
@@ -370,7 +380,11 @@ async fn connect_port(
         tokio::time::sleep(Duration::from_millis(400)).await;
         firmware_version = state.serial.get_firmware_version().await;
         if firmware_version.is_some() {
-            log::info!("Firmware version received on attempt {}: {:?}", attempt, firmware_version);
+            log::info!(
+                "Firmware version received on attempt {}: {:?}",
+                attempt,
+                firmware_version
+            );
             break;
         }
     }
@@ -379,7 +393,12 @@ async fn connect_port(
     // Board is source of truth. App syncs node address + gateway_mode from board reply.
     let settings_query = radio::build_get_settings(&NodeAddress::default_local());
     let sq_hex = hex::encode(&settings_query);
-    emit_debug_traffic(&app, "TX", &sq_hex, "CMD_GET_SETTINGS (0x22) — board-sync on connect");
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &sq_hex,
+        "CMD_GET_SETTINGS (0x22) — board-sync on connect",
+    );
     state.serial.send_raw(settings_query).await.ok();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let board_settings = state.serial.get_board_settings().await;
@@ -387,9 +406,16 @@ async fn connect_port(
     // If board reported settings, emit board-sync event and update node address.
     // Board wins on mismatch — no local cache overrides board state.
     if let Some(ref bs) = board_settings {
-        log::info!("Board sync: addr={} gateway={}", bs.node_address.to_display_string(), bs.gateway_mode);
+        log::info!(
+            "Board sync: addr={} gateway={}",
+            bs.node_address.to_display_string(),
+            bs.gateway_mode
+        );
         let _ = app.emit("board-sync", bs);
-        state.serial.update_node_address(bs.node_address.clone()).await;
+        state
+            .serial
+            .update_node_address(bs.node_address.clone())
+            .await;
     }
 
     let node_addr = state.serial.get_node_address().await;
@@ -409,8 +435,12 @@ async fn connect_port(
         loop {
             // Exit if this connection has been superseded, otherwise a poller
             // from an old session keeps emitting alongside the current one.
-            if gen_poll.load(Ordering::SeqCst) != generation { break; }
-            if !serial_poll.is_connected() { break; }
+            if gen_poll.load(Ordering::SeqCst) != generation {
+                break;
+            }
+            if !serial_poll.is_connected() {
+                break;
+            }
             let stats = serial_poll.get_stats().await;
             let _ = app_for_poll.emit("radio-stats-update", &stats);
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -431,15 +461,22 @@ async fn connect_port(
             // This watchdog belongs to one connection. If the user has since
             // connected to a different port, `port_wr` is stale — exit rather
             // than reconnecting the device they switched away from.
-            if gen_wr.load(Ordering::SeqCst) != generation { break; }
-            if !reconnect_enabled_wr.load(Ordering::Relaxed) { break; }
+            if gen_wr.load(Ordering::SeqCst) != generation {
+                break;
+            }
+            if !reconnect_enabled_wr.load(Ordering::Relaxed) {
+                break;
+            }
             if serial_wr.is_connected() {
                 backoff = Duration::from_secs(5);
                 continue;
             }
 
             log::info!("Auto-reconnect: connection lost on {}, retrying…", port_wr);
-            let _ = app_wr.emit("connection-status", ConnectionStatusEvent::reconnecting(&port_wr));
+            let _ = app_wr.emit(
+                "connection-status",
+                ConnectionStatusEvent::reconnecting(&port_wr),
+            );
 
             let app_inner = app_wr.clone();
             let on_pkt = Arc::new(move |packet: IncomingPacket| {
@@ -447,16 +484,28 @@ async fn connect_port(
                 let parsed = packet.decoded.clone().unwrap_or_default();
                 emit_debug_traffic(&app_inner, "RX", &packet.payload_hex, &parsed);
                 if is_incoming_doge_tx(&packet) {
-                    let body = packet.decoded.clone().unwrap_or_else(|| "Incoming Dogecoin transaction".to_string());
-                    let _ = app_inner.notification().builder().title("🐕 DOGE Transaction Received!").body(&body).show();
+                    let body = packet
+                        .decoded
+                        .clone()
+                        .unwrap_or_else(|| "Incoming Dogecoin transaction".to_string());
+                    let _ = app_inner
+                        .notification()
+                        .builder()
+                        .title("🐕 DOGE Transaction Received!")
+                        .body(&body)
+                        .show();
                 }
             });
 
             // Re-check after building the callback — disconnect_port or a
             // connect to a different port may have happened in the narrow
             // window between the checks above and here.
-            if !reconnect_enabled_wr.load(Ordering::Relaxed) { break; }
-            if gen_wr.load(Ordering::SeqCst) != generation { break; }
+            if !reconnect_enabled_wr.load(Ordering::Relaxed) {
+                break;
+            }
+            if gen_wr.load(Ordering::SeqCst) != generation {
+                break;
+            }
 
             match serial_wr.connect(&port_wr, on_pkt).await {
                 Ok(_) => {
@@ -470,7 +519,10 @@ async fn connect_port(
                         serial_wr.update_node_address(bs.node_address).await;
                     }
                     let node_addr = serial_wr.get_node_address().await;
-                    let _ = app_wr.emit("connection-status", ConnectionStatusEvent::connected(&port_wr, node_addr, None));
+                    let _ = app_wr.emit(
+                        "connection-status",
+                        ConnectionStatusEvent::connected(&port_wr, node_addr, None),
+                    );
                     #[cfg(desktop)]
                     tray::update_tray_status(&app_wr, true, Some(&port_wr));
                     backoff = Duration::from_secs(5);
@@ -497,13 +549,14 @@ async fn connect_port(
 }
 
 #[tauri::command]
-async fn disconnect_port(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+async fn disconnect_port(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     log::info!("disconnect_port");
     state.reconnect_enabled.store(false, Ordering::Relaxed);
-    state.serial.disconnect().await.map_err(radiodoge_core::errors::friendly)?;
+    state
+        .serial
+        .disconnect()
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     *state.current_port.lock().await = None;
     let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
     #[cfg(desktop)]
@@ -536,14 +589,22 @@ async fn query_firmware_version(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Option<String>, String> {
-    if !state.serial.is_connected() { return Ok(None); }
+    if !state.serial.is_connected() {
+        return Ok(None);
+    }
     emit_debug_traffic(
         &app,
         "TX",
-        &hex::encode(radio::build_get_firmware_version(&NodeAddress::default_local())),
+        &hex::encode(radio::build_get_firmware_version(
+            &NodeAddress::default_local(),
+        )),
         "CMD_GET_FIRMWARE_VERSION (manual re-query)",
     );
-    state.serial.request_firmware_version().await.map_err(radiodoge_core::errors::friendly)?;
+    state
+        .serial
+        .request_firmware_version()
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_firmware_version().await)
 }
@@ -551,7 +612,10 @@ async fn query_firmware_version(
 // ─── v0.3.25 — Meshtastic bridge mode over raw LoRa (firmware FW12) ─────────
 
 fn bridge_profile(freq_khz: u32) -> Result<radio::RawProfile, String> {
-    let p = radio::RawProfile { freq_khz, ..radio::RawProfile::meshtastic_longfast_us() };
+    let p = radio::RawProfile {
+        freq_khz,
+        ..radio::RawProfile::meshtastic_longfast_us()
+    };
     p.validate()?;
     Ok(p)
 }
@@ -564,7 +628,8 @@ async fn require_raw_firmware(state: &State<'_, AppState>) -> Result<NodeAddress
     if !radio::firmware_supports_raw(fw.as_deref()) {
         return Err(format!(
             "Bridge mode needs firmware FW{} (v0.4.4) or newer; this board reports {}.",
-            radio::MIN_RAW_LORA_FIRMWARE, fw.as_deref().unwrap_or("no version")
+            radio::MIN_RAW_LORA_FIRMWARE,
+            fw.as_deref().unwrap_or("no version")
         ));
     }
     Ok(state.serial.get_node_address().await)
@@ -574,12 +639,20 @@ async fn require_raw_firmware(state: &State<'_, AppState>) -> Result<NodeAddress
 /// Returns whether raw RX is active. Never changes the board's saved settings.
 #[tauri::command]
 async fn meshtastic_bridge_listen(
-    state: State<'_, AppState>, enable: bool, freq_khz: u32, timeout_s: u16,
+    state: State<'_, AppState>,
+    enable: bool,
+    freq_khz: u32,
+    timeout_s: u16,
 ) -> Result<bool, String> {
     let host = require_raw_firmware(&state).await?;
     let profile = bridge_profile(freq_khz)?;
     let pkt = radio::build_raw_rx_mode(&host, enable.then_some(&profile), timeout_s)?;
-    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_RX_MODE, 3000).await.map_err(radiodoge_core::errors::friendly)? {
+    match state
+        .serial
+        .send_and_get_reply(pkt, radio::CMD_RAW_RX_MODE, 3000)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?
+    {
         Some(r) => Ok(r.payload_hex == "01"),
         None => Err("The board did not answer the raw-mode command.".into()),
     }
@@ -588,7 +661,9 @@ async fn meshtastic_bridge_listen(
 /// Send a Meshtastic text message on LongFast via a single raw transmit.
 #[tauri::command]
 async fn meshtastic_bridge_send_text(
-    state: State<'_, AppState>, text: String, freq_khz: u32,
+    state: State<'_, AppState>,
+    text: String,
+    freq_khz: u32,
 ) -> Result<bool, String> {
     if text.trim().is_empty() {
         return Err("Message is empty.".into());
@@ -597,9 +672,19 @@ async fn meshtastic_bridge_send_text(
     let profile = bridge_profile(freq_khz)?;
     let ch = radiodoge_core::meshtastic::Channel::default_longfast();
     let pkt = radiodoge_core::meshtastic::bridge_text_command(
-        &host, 0x5244_0000 | u32::from(host.node), radiodoge_core::meshtastic::new_packet_id(), &text, &ch, &profile,
+        &host,
+        0x5244_0000 | u32::from(host.node),
+        radiodoge_core::meshtastic::new_packet_id(),
+        &text,
+        &ch,
+        &profile,
     )?;
-    match state.serial.send_and_get_reply(pkt, radio::CMD_RAW_TX, 8000).await.map_err(radiodoge_core::errors::friendly)? {
+    match state
+        .serial
+        .send_and_get_reply(pkt, radio::CMD_RAW_TX, 8000)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?
+    {
         Some(r) => Ok(r.payload_hex == "01"),
         None => Err("No reply to the raw transmit.".into()),
     }
@@ -621,12 +706,22 @@ fn meshtastic_bridge_decode(payload_hex: String) -> Option<BridgeDecoded> {
     use radiodoge_core::meshtastic::{bridge_decode, BridgeEvent, Channel};
     let f = radio::parse_raw_rx(&hex::decode(payload_hex).ok()?)?;
     let (kind, from, text) = match bridge_decode(&f.data, &Channel::default_longfast()) {
-        BridgeEvent::RadioDoge { from, packet } => ("radiodoge", Some(from), Some(hex::encode(packet))),
+        BridgeEvent::RadioDoge { from, packet } => {
+            ("radiodoge", Some(from), Some(hex::encode(packet)))
+        }
         BridgeEvent::Text { from, text } => ("text", Some(from), Some(text)),
-        BridgeEvent::Other { from, portnum } => ("other", Some(from), Some(format!("portnum {}", portnum))),
+        BridgeEvent::Other { from, portnum } => {
+            ("other", Some(from), Some(format!("portnum {}", portnum)))
+        }
         BridgeEvent::Undecodable => ("undecodable", None, None),
     };
-    Some(BridgeDecoded { kind, from: from.map(|n| format!("!{:08x}", n)), text, rssi: f.rssi, snr: f.snr })
+    Some(BridgeDecoded {
+        kind,
+        from: from.map(|n| format!("!{:08x}", n)),
+        text,
+        rssi: f.rssi,
+        snr: f.snr,
+    })
 }
 
 #[tauri::command]
@@ -640,9 +735,14 @@ async fn ping_device(state: State<'_, AppState>, app: AppHandle) -> Result<bool,
     emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_PING → device health check");
     let ok = state.serial.ping().await;
     emit_debug_traffic(
-        &app, "RX", "",
-        if ok { "✅ PONG — device responded within 1500 ms 🐕" }
-        else  { "❌ No PONG within 1500 ms — firmware may be busy" },
+        &app,
+        "RX",
+        "",
+        if ok {
+            "✅ PONG — device responded within 1500 ms 🐕"
+        } else {
+            "❌ No PONG within 1500 ms — firmware may be busy"
+        },
     );
     Ok(ok)
 }
@@ -701,7 +801,11 @@ fn resolve_fee(fee_doge: Option<f64>) -> Result<Option<f64>, String> {
     match fee_doge {
         None => Ok(None),
         Some(f) if f.is_finite() && (0.0..=wallet::MAX_AUTO_FEE_DOGE).contains(&f) => Ok(Some(f)),
-        Some(f) => Err(format!("Invalid fee {} DOGE (must be 0 to {} DOGE)", f, wallet::MAX_AUTO_FEE_DOGE)),
+        Some(f) => Err(format!(
+            "Invalid fee {} DOGE (must be 0 to {} DOGE)",
+            f,
+            wallet::MAX_AUTO_FEE_DOGE
+        )),
     }
 }
 
@@ -709,11 +813,16 @@ fn resolve_fee(fee_doge: Option<f64>) -> Result<Option<f64>, String> {
 /// using the configured backends' current fee rate (display only; signing
 /// with no explicit fee recomputes it).
 #[tauri::command]
-async fn estimate_fee(from_address: String, amount_doge: f64) -> Result<wallet::FeeEstimate, String> {
+async fn estimate_fee(
+    from_address: String,
+    amount_doge: f64,
+) -> Result<wallet::FeeEstimate, String> {
     if !wallet::is_valid_address(&from_address) {
         return Err("Invalid Dogecoin address".to_string());
     }
-    wallet::estimate_fee(&from_address, amount_doge).await.map_err(radiodoge_core::errors::friendly)
+    wallet::estimate_fee(&from_address, amount_doge)
+        .await
+        .map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.4.3 — Override the chain backend list for this session, e.g.
@@ -825,18 +934,17 @@ async fn send_transaction(
         )
         .await?
     } else {
-        wallet::encode_transaction_payload(
-            &tx.to_address,
-            tx.amount_doge,
-            tx.memo.as_deref(),
-        )
-        .map_err(radiodoge_core::errors::friendly)?
+        wallet::encode_transaction_payload(&tx.to_address, tx.amount_doge, tx.memo.as_deref())
+            .map_err(radiodoge_core::errors::friendly)?
     };
 
     // Duplicate-broadcast guard: the same signed bytes radioed twice in a short
     // window is almost always a double click or an impatient retry. The network
     // would drop the copy, but it costs airtime and confuses the ACK display.
-    let txid = tx.from_private_key_wif.as_ref().map(|_| wallet::compute_txid(&payload));
+    let txid = tx
+        .from_private_key_wif
+        .as_ref()
+        .map(|_| wallet::compute_txid(&payload));
     if let Some(id) = txid.as_deref() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -984,8 +1092,9 @@ async fn send_transaction(
 }
 
 /// Txids radioed this session, for the duplicate-broadcast guard.
-static RECENT_SENDS: std::sync::LazyLock<tokio::sync::Mutex<radiodoge_core::tx_reply::RecentSends>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(Default::default()));
+static RECENT_SENDS: std::sync::LazyLock<
+    tokio::sync::Mutex<radiodoge_core::tx_reply::RecentSends>,
+> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(Default::default()));
 
 // ── v0.3.22 — Multi-channel scanning ───────────────────────────────────────
 
@@ -997,9 +1106,15 @@ static SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
 async fn retune_radio(state: &AppState, app: &AppHandle, s: &LoraSettings) -> Result<bool, String> {
     let (sf, bw, cr, khz, pwr) = radiodoge_core::scan::lora_param_fields(s);
     let pkt = radio::build_set_lora_params(&s.node_address, sf, bw, cr, khz, pwr);
-    emit_debug_traffic(app, "TX", &hex::encode(&pkt), &format!(
-        "CMD_SET_LORA_PARAMS (scan) → SF{} BW{}kHz {}MHz", sf, s.bandwidth_khz, s.frequency_mhz
-    ));
+    emit_debug_traffic(
+        app,
+        "TX",
+        &hex::encode(&pkt),
+        &format!(
+            "CMD_SET_LORA_PARAMS (scan) → SF{} BW{}kHz {}MHz",
+            sf, s.bandwidth_khz, s.frequency_mhz
+        ),
+    );
     state
         .serial
         .send_and_await_reply(pkt, radio::CMD_SET_LORA_PARAMS, 1500)
@@ -1028,14 +1143,24 @@ async fn scan_channels(
         return Err("Connect to a board first".into());
     }
     let fw = state.serial.get_firmware_version().await;
-    if !fw.as_deref().and_then(radio::firmware_build_number).is_some_and(|b| b >= 10) {
-        return Err("Channel scanning needs firmware v0.4.1 or newer (older boards ignore radio retuning).".into());
+    if !fw
+        .as_deref()
+        .and_then(radio::firmware_build_number)
+        .is_some_and(|b| b >= 10)
+    {
+        return Err(
+            "Channel scanning needs firmware v0.4.1 or newer (older boards ignore radio retuning)."
+                .into(),
+        );
     }
     if channels.is_empty() || channels.len() > MAX_CHANNELS {
         return Err(format!("Pick 1–{MAX_CHANNELS} channels"));
     }
     if let Some(bad) = channels.iter().find(|c| !c.is_valid()) {
-        return Err(format!("{} is outside the board's ranges (SF 7–12, 125/250/500 kHz, 150–960 MHz)", bad.label));
+        return Err(format!(
+            "{} is outside the board's ranges (SF 7–12, 125/250/500 kHz, 150–960 MHz)",
+            bad.label
+        ));
     }
     if SCAN_RUNNING.swap(true, Ordering::SeqCst) {
         return Err("A scan is already running".into());
@@ -1050,9 +1175,12 @@ async fn scan_channels(
         if SCAN_CANCEL.load(Ordering::SeqCst) || !state.serial.is_connected() {
             break;
         }
-        let _ = app.emit("scan-progress", serde_json::json!({
-            "index": i, "total": total, "label": ch.label, "dwellSecs": dwell,
-        }));
+        let _ = app.emit(
+            "scan-progress",
+            serde_json::json!({
+                "index": i, "total": total, "label": ch.label, "dwellSecs": dwell,
+            }),
+        );
         match retune_radio(&state, &app, &ch.apply_to(&home)).await {
             Ok(true) => {}
             Ok(false) => {
@@ -1084,7 +1212,10 @@ async fn scan_channels(
         false
     };
     SCAN_RUNNING.store(false, Ordering::SeqCst);
-    let _ = app.emit("scan-progress", serde_json::json!({ "index": total, "total": total, "done": true }));
+    let _ = app.emit(
+        "scan-progress",
+        serde_json::json!({ "index": total, "total": total, "done": true }),
+    );
     Ok(serde_json::json!({
         "results": results, "cancelled": cancelled, "restored": restored,
         "home": { "frequencyMhz": home.frequency_mhz, "spreadingFactor": home.spreading_factor, "bandwidthKhz": home.bandwidth_khz },
@@ -1113,31 +1244,52 @@ async fn update_lora_settings(
     let pkt = radio::build_set_node_addr(&current_addr, &settings.node_address);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(
-        &app, "TX", &pkt_hex,
-        &format!("CMD_SET_NODE_ADDRS → {}.{}.{}",
-            settings.node_address.region, settings.node_address.community, settings.node_address.node),
+        &app,
+        "TX",
+        &pkt_hex,
+        &format!(
+            "CMD_SET_NODE_ADDRS → {}.{}.{}",
+            settings.node_address.region,
+            settings.node_address.community,
+            settings.node_address.node
+        ),
     );
-    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
+    state
+        .serial
+        .send_raw(pkt)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
 
     let freq_khz = (settings.frequency_mhz * 1000.0).round() as u32;
     let bw_idx: u8 = match settings.bandwidth_khz as u32 {
         250 => 1,
         500 => 2,
-        _   => 0,
+        _ => 0,
     };
-    let cr: u8 = settings.coding_rate
+    let cr: u8 = settings
+        .coding_rate
         .trim_start_matches("4/")
         .parse::<u8>()
         .unwrap_or(5);
     let tx_power = settings.power_dbm.clamp(2, 22) as u8;
     let lora_pkt = radio::build_set_lora_params(
-        &settings.node_address, settings.spreading_factor, bw_idx, cr, freq_khz, tx_power,
+        &settings.node_address,
+        settings.spreading_factor,
+        bw_idx,
+        cr,
+        freq_khz,
+        tx_power,
     );
     let lora_pkt_hex = hex::encode(&lora_pkt);
-    emit_debug_traffic(&app, "TX", &lora_pkt_hex, &format!(
-        "CMD_SET_LORA_PARAMS → SF{} BW{}kHz CR4/{} {}MHz {}dBm",
-        settings.spreading_factor, settings.bandwidth_khz, cr, settings.frequency_mhz, tx_power,
-    ));
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &lora_pkt_hex,
+        &format!(
+            "CMD_SET_LORA_PARAMS → SF{} BW{}kHz CR4/{} {}MHz {}dBm",
+            settings.spreading_factor, settings.bandwidth_khz, cr, settings.frequency_mhz, tx_power,
+        ),
+    );
     // The board validates these before applying them and answers a legacy NACK,
     // not a 0x21 packet, when they are out of range — it leaves the radio
     // untouched rather than retuning to somewhere it can never be reached again.
@@ -1172,17 +1324,27 @@ async fn update_lora_settings(
         .await;
 
     if verified {
-        state.serial.update_node_address(settings.node_address.clone()).await;
+        state
+            .serial
+            .update_node_address(settings.node_address.clone())
+            .await;
         let port = state.current_port.lock().await.clone().unwrap_or_default();
         let fw = state.serial.get_firmware_version().await;
         let _ = app.emit(
             "connection-status",
             ConnectionStatusEvent::connected(&port, settings.node_address.clone(), fw),
         );
-        emit_debug_traffic(&app, "RX", "", &format!(
-            "✅ Node address verified: {}.{}.{}",
-            settings.node_address.region, settings.node_address.community, settings.node_address.node
-        ));
+        emit_debug_traffic(
+            &app,
+            "RX",
+            "",
+            &format!(
+                "✅ Node address verified: {}.{}.{}",
+                settings.node_address.region,
+                settings.node_address.community,
+                settings.node_address.node
+            ),
+        );
     }
 
     log::info!(
@@ -1220,7 +1382,9 @@ async fn get_board_settings(
     if is_mobile_connected {
         let cached = state.serial.get_board_settings().await;
         emit_debug_traffic(
-            &app, "INFO", "",
+            &app,
+            "INFO",
+            "",
             "get_board_settings: Android path — returning cached settings from last board-sync",
         );
         return Ok(cached);
@@ -1234,8 +1398,17 @@ async fn get_board_settings(
     let src = state.serial.get_node_address().await;
     let pkt = radio::build_get_settings(&src);
     let pkt_hex = hex::encode(&pkt);
-    emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_GET_SETTINGS (0x22) — manual query");
-    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &pkt_hex,
+        "CMD_GET_SETTINGS (0x22) — manual query",
+    );
+    state
+        .serial
+        .send_raw(pkt)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_board_settings().await)
 }
@@ -1254,8 +1427,20 @@ async fn set_gateway_mode(
     let src = state.serial.get_node_address().await;
     let pkt = radio::build_set_gateway(&src, enable);
     let pkt_hex = hex::encode(&pkt);
-    emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_SET_GATEWAY (0x23) → {}", if enable { "ON" } else { "OFF" }));
-    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &pkt_hex,
+        &format!(
+            "CMD_SET_GATEWAY (0x23) → {}",
+            if enable { "ON" } else { "OFF" }
+        ),
+    );
+    state
+        .serial
+        .send_raw(pkt)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Re-query to confirm board saved the setting
@@ -1269,7 +1454,11 @@ async fn set_gateway_mode(
         let _ = app.emit("board-sync", bs);
     }
 
-    log::info!("Gateway mode set: enable={} confirmed={}", enable, confirmed);
+    log::info!(
+        "Gateway mode set: enable={} confirmed={}",
+        enable,
+        confirmed
+    );
     Ok(confirmed)
 }
 
@@ -1299,10 +1488,7 @@ async fn get_connection_type(state: State<'_, AppState>) -> Result<String, Strin
 }
 
 #[tauri::command]
-async fn set_connection_type(
-    conn_type: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+async fn set_connection_type(conn_type: String, state: State<'_, AppState>) -> Result<(), String> {
     if conn_type != "usb" && conn_type != "ble" {
         return Err("Connection type must be 'usb' or 'ble'".to_string());
     }
@@ -1324,7 +1510,15 @@ async fn set_wifi_enabled(
     let src = state.serial.get_node_address().await;
     let pkt = radio::build_wifi_toggle(&src, enable);
     let pkt_hex = hex::encode(&pkt);
-    emit_debug_traffic(&app, "TX", &pkt_hex, &format!("CMD_WIFI_TOGGLE (0x24) → {}", if enable { "ON" } else { "OFF" }));
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &pkt_hex,
+        &format!(
+            "CMD_WIFI_TOGGLE (0x24) → {}",
+            if enable { "ON" } else { "OFF" }
+        ),
+    );
     // Wait for the board's own 0x24 reply. Without it this returned the value
     // that had been *requested* — `unwrap_or(enable)` — so a board that never
     // answered still flipped the toggle in the UI, and the user was looking at a
@@ -1358,9 +1552,16 @@ async fn set_wifi_enabled(
 /// Node discovery: broadcast a PING and return the nodes that answered within
 /// `listen_ms` (clamped to 1–30 s; default 6 s), strongest first.
 #[tauri::command]
-async fn discover_nodes(state: State<'_, AppState>, listen_ms: Option<u64>) -> Result<Vec<NeighborEntry>, String> {
+async fn discover_nodes(
+    state: State<'_, AppState>,
+    listen_ms: Option<u64>,
+) -> Result<Vec<NeighborEntry>, String> {
     let ms = listen_ms.unwrap_or(6000).clamp(1000, 30_000);
-    state.serial.discover_nodes(std::time::Duration::from_millis(ms)).await.map_err(radiodoge_core::errors::friendly)
+    state
+        .serial
+        .discover_nodes(std::time::Duration::from_millis(ms))
+        .await
+        .map_err(radiodoge_core::errors::friendly)
 }
 
 /// v0.3.7 — Return recently heard mesh neighbors.
@@ -1388,12 +1589,25 @@ async fn share_position(
     let local = state.serial.get_node_address().await;
     let text = pos.to_message();
     let pkt = radio::build_broadcast(&local, &text);
-    emit_debug_traffic(&app, "TX", &hex::encode(&pkt), &format!("CMD_MESSAGE → broadcast {}", pos.describe()));
-    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &hex::encode(&pkt),
+        &format!("CMD_MESSAGE → broadcast {}", pos.describe()),
+    );
+    state
+        .serial
+        .send_raw(pkt)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     Ok(text)
 }
 
-fn parse_position(lat: f64, lon: f64, accuracy_m: Option<f64>) -> Result<radiodoge_core::geo::Position, String> {
+fn parse_position(
+    lat: f64,
+    lon: f64,
+    accuracy_m: Option<f64>,
+) -> Result<radiodoge_core::geo::Position, String> {
     let acc = accuracy_m
         .filter(|a| a.is_finite() && *a >= 0.0)
         .map(|a| a.round().min(u32::MAX as f64) as u32);
@@ -1442,7 +1656,11 @@ async fn query_battery(state: State<'_, AppState>, app: AppHandle) -> Result<Opt
     let pkt = radio::build_get_battery(&src);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_GET_BATTERY (0x26)");
-    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
+    state
+        .serial
+        .send_raw(pkt)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     Ok(state.serial.get_battery_mv().await)
 }
@@ -1467,8 +1685,12 @@ async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
     let pkt = radio::build_get_mac(&src);
     let pkt_hex = hex::encode(&pkt);
     emit_debug_traffic(&app, "TX", &pkt_hex, "CMD_GET_MAC (0x27)");
-    state.serial.send_raw(pkt).await.map_err(radiodoge_core::errors::friendly)?;
-    tokio::time::sleep(Duration::from_millis(600)).await;  // raised from 400ms (too tight)
+    state
+        .serial
+        .send_raw(pkt)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
+    tokio::time::sleep(Duration::from_millis(600)).await; // raised from 400ms (too tight)
     Ok(state.serial.get_board_mac().await)
 }
 

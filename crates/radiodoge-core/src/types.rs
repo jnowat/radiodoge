@@ -57,17 +57,29 @@ pub struct NodeAddress {
 
 impl NodeAddress {
     pub fn new(region: u8, community: u8, node: u8) -> Self {
-        NodeAddress { region, community, node }
+        NodeAddress {
+            region,
+            community,
+            node,
+        }
     }
 
     /// Broadcast address: 255.255.255
     pub fn broadcast() -> Self {
-        NodeAddress { region: 0xFF, community: 0xFF, node: 0xFF }
+        NodeAddress {
+            region: 0xFF,
+            community: 0xFF,
+            node: 0xFF,
+        }
     }
 
     /// Default local address: 10.0.1
     pub fn default_local() -> Self {
-        NodeAddress { region: 10, community: 0, node: 1 }
+        NodeAddress {
+            region: 10,
+            community: 0,
+            node: 1,
+        }
     }
 
     pub fn to_display_string(&self) -> String {
@@ -194,7 +206,9 @@ pub struct BoardSettings {
     pub wifi_enabled: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// v0.3.7 — A recently heard mesh neighbor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,6 +413,9 @@ mod tests {
         assert_eq!(c.status, "connected");
         assert_eq!(c.port.as_deref(), Some("COM3"));
         assert_eq!(ConnectionStatusEvent::disconnected().status, "disconnected");
-        assert!(ConnectionStatusEvent::error("boom").message.unwrap().contains("boom"));
+        assert!(ConnectionStatusEvent::error("boom")
+            .message
+            .unwrap()
+            .contains("boom"));
     }
 }

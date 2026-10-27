@@ -113,7 +113,12 @@ pub struct GatewayStats {
 
 impl GatewayStats {
     pub fn new(port: &str, now: u64) -> Self {
-        Self { port: port.to_string(), started_at: now, updated_at: now, ..Self::default() }
+        Self {
+            port: port.to_string(),
+            started_at: now,
+            updated_at: now,
+            ..Self::default()
+        }
     }
 
     /// Count any packet heard from `node`.
@@ -132,7 +137,13 @@ impl GatewayStats {
     }
 
     /// Record an event and bump the counter that goes with it.
-    pub fn record(&mut self, kind: GatewayEventKind, node: &str, detail: impl Into<String>, now: u64) {
+    pub fn record(
+        &mut self,
+        kind: GatewayEventKind,
+        node: &str,
+        detail: impl Into<String>,
+        now: u64,
+    ) {
         use GatewayEventKind::*;
         match kind {
             TxReceived => {
@@ -152,7 +163,15 @@ impl GatewayStats {
             ReplyForwarded => self.replies_forwarded += 1,
             ReplyQueued | Expired => {}
         }
-        self.events.insert(0, GatewayEvent { at: now, kind, node: node.to_string(), detail: detail.into() });
+        self.events.insert(
+            0,
+            GatewayEvent {
+                at: now,
+                kind,
+                node: node.to_string(),
+                detail: detail.into(),
+            },
+        );
         self.events.truncate(MAX_EVENTS);
         self.updated_at = now;
     }
@@ -200,7 +219,10 @@ mod tests {
         assert_eq!(s.packets_heard, 3);
         assert_eq!(s.packets_relayed_in, 1);
         let n = &s.nodes["10.0.2"];
-        assert_eq!((n.packets, n.last_seen, n.last_rssi, n.last_hops), (2, 105, -85, 2));
+        assert_eq!(
+            (n.packets, n.last_seen, n.last_rssi, n.last_hops),
+            (2, 105, -85, 2)
+        );
         assert_eq!(s.updated_at, 106);
     }
 
@@ -214,7 +236,16 @@ mod tests {
         s.record(TxReceived, "10.0.2", "def", 4);
         s.record(TxFailed, "10.0.2", "def", 5);
         s.record_duplicate(6);
-        assert_eq!((s.tx_received, s.tx_broadcast, s.tx_failed, s.acks_sent, s.tx_duplicates), (2, 1, 1, 1, 1));
+        assert_eq!(
+            (
+                s.tx_received,
+                s.tx_broadcast,
+                s.tx_failed,
+                s.acks_sent,
+                s.tx_duplicates
+            ),
+            (2, 1, 1, 1, 1)
+        );
         assert_eq!(s.nodes["10.0.2"].transactions, 2);
         assert_eq!(s.events[0].kind, TxFailed);
         assert_eq!(s.success_rate(), Some(50.0));

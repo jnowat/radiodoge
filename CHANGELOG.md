@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.47] - 2026-10-27
+
+### Changed
+- Ran `cargo fmt` across the whole Rust workspace (formatting only, no behavior change).
+- Added `scripts/check.ps1`, the pre-push gate: `cargo fmt --check`, tests, clippy `-D warnings`, svelte-check, `npm run test:unit` and a private-key scan.
+
 ## [0.3.46] - 2026-10-27
 
 ### Changed

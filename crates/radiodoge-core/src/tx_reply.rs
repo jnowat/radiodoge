@@ -49,7 +49,11 @@ impl TxReply {
             TxReply::Ack { txid } => format!("TX_ACK:{}", txid),
             TxReply::Queued { txid } => format!("TX_QUEUED:{}", txid),
             TxReply::Nack { txid, reason } => {
-                let r: String = reason.replace(['\r', '\n'], " ").chars().take(MAX_NACK_REASON).collect();
+                let r: String = reason
+                    .replace(['\r', '\n'], " ")
+                    .chars()
+                    .take(MAX_NACK_REASON)
+                    .collect();
                 format!("TX_NACK:{}:{}", txid, r.trim())
             }
         }
@@ -61,12 +65,19 @@ impl TxReply {
         let after = |tag: &str| t.find(tag).map(|i| t[i + tag.len()..].trim());
         if let Some(rest) = after("TX_NACK:") {
             let (id, why) = rest.split_once(':').unwrap_or((rest, ""));
-            return Some(TxReply::Nack { txid: id.trim().to_string(), reason: why.trim().to_string() });
+            return Some(TxReply::Nack {
+                txid: id.trim().to_string(),
+                reason: why.trim().to_string(),
+            });
         }
         if let Some(rest) = after("TX_QUEUED:") {
-            return Some(TxReply::Queued { txid: rest.to_string() });
+            return Some(TxReply::Queued {
+                txid: rest.to_string(),
+            });
         }
-        after("TX_ACK:").map(|rest| TxReply::Ack { txid: rest.to_string() })
+        after("TX_ACK:").map(|rest| TxReply::Ack {
+            txid: rest.to_string(),
+        })
     }
 }
 
@@ -77,9 +88,19 @@ impl TxReply {
 pub fn is_permanent_rejection(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
     [
-        "bad-txns", "missing inputs", "missingorspent", "insufficient fee", "min relay fee",
-        "mandatory-script-verify", "non-mandatory-script-verify", "dust", "txn-mempool-conflict",
-        "non-final", "absurdly-high-fee", "invalid transaction", "tx decode failed",
+        "bad-txns",
+        "missing inputs",
+        "missingorspent",
+        "insufficient fee",
+        "min relay fee",
+        "mandatory-script-verify",
+        "non-mandatory-script-verify",
+        "dust",
+        "txn-mempool-conflict",
+        "non-final",
+        "absurdly-high-fee",
+        "invalid transaction",
+        "tx decode failed",
     ]
     .iter()
     .any(|k| e.contains(k))
@@ -93,7 +114,9 @@ pub struct RecentSends {
 
 impl RecentSends {
     pub fn from_json(s: &str) -> Self {
-        RecentSends { sent: serde_json::from_str(s).unwrap_or_default() }
+        RecentSends {
+            sent: serde_json::from_str(s).unwrap_or_default(),
+        }
     }
 
     pub fn to_json(&self) -> String {
@@ -102,7 +125,10 @@ impl RecentSends {
 
     /// Seconds since `txid` was last radioed, if within the guard window.
     pub fn recently_sent(&self, txid: &str, now: u64) -> Option<u64> {
-        self.sent.get(txid).map(|&t| now.saturating_sub(t)).filter(|&age| age < RESEND_GUARD_SECS)
+        self.sent
+            .get(txid)
+            .map(|&t| now.saturating_sub(t))
+            .filter(|&age| age < RESEND_GUARD_SECS)
     }
 
     /// Forget a send that never fully reached the air.
@@ -127,25 +153,42 @@ mod tests {
         for r in [
             TxReply::Ack { txid: ID.into() },
             TxReply::Queued { txid: ID.into() },
-            TxReply::Nack { txid: ID.into(), reason: "bad-txns-inputs-missingorspent".into() },
+            TxReply::Nack {
+                txid: ID.into(),
+                reason: "bad-txns-inputs-missingorspent".into(),
+            },
         ] {
             assert_eq!(TxReply::parse(&r.to_text()), Some(r.clone()));
         }
-        let long = TxReply::Nack { txid: ID.into(), reason: "x".repeat(500) };
+        let long = TxReply::Nack {
+            txid: ID.into(),
+            reason: "x".repeat(500),
+        };
         assert!(long.to_text().len() <= 8 + 64 + 1 + MAX_NACK_REASON);
         assert!(long.to_text().len() <= crate::radio::MULTIPART_CHUNK_LEN);
     }
 
     #[test]
     fn parses_padded_and_legacy() {
-        assert_eq!(TxReply::parse(&format!("TX_ACK:{}\0\0", ID)), Some(TxReply::Ack { txid: ID.into() }));
+        assert_eq!(
+            TxReply::parse(&format!("TX_ACK:{}\0\0", ID)),
+            Some(TxReply::Ack { txid: ID.into() })
+        );
         assert_eq!(TxReply::parse("hello"), None);
-        assert_eq!(TxReply::parse("TX_NACK:abc"), Some(TxReply::Nack { txid: "abc".into(), reason: String::new() }));
+        assert_eq!(
+            TxReply::parse("TX_NACK:abc"),
+            Some(TxReply::Nack {
+                txid: "abc".into(),
+                reason: String::new()
+            })
+        );
     }
 
     #[test]
     fn classifies_rejections() {
-        assert!(is_permanent_rejection("RPC error -26: bad-txns-inputs-missingorspent"));
+        assert!(is_permanent_rejection(
+            "RPC error -26: bad-txns-inputs-missingorspent"
+        ));
         assert!(is_permanent_rejection("Missing inputs"));
         assert!(!is_permanent_rejection("connection timed out"));
         assert!(!is_permanent_rejection("HTTP 503"));
@@ -166,6 +209,9 @@ mod tests {
 
     #[test]
     fn explorer_link() {
-        assert_eq!(explorer_url(ID), format!("https://dogechain.info/tx/{}", ID));
+        assert_eq!(
+            explorer_url(ID),
+            format!("https://dogechain.info/tx/{}", ID)
+        );
     }
 }

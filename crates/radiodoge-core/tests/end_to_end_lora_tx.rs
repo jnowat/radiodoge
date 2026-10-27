@@ -20,7 +20,7 @@
 
 use radiodoge_core::radio::{
     self, frame_packet_len, ingest_packet, resync_offset, MultipartReassembler, CMD_DOGE_TX,
-    MULTIPART_EXTRA_LEN, MULTIPART_CHUNK_LEN, MULTIPART_HDR_LEN, SINGLE_HDR_LEN,
+    MULTIPART_CHUNK_LEN, MULTIPART_EXTRA_LEN, MULTIPART_HDR_LEN, SINGLE_HDR_LEN,
 };
 use radiodoge_core::types::NodeAddress;
 
@@ -100,7 +100,15 @@ fn board_read_and_transmit(stream: &[u8]) -> Result<Vec<Vec<u8>>, String> {
             e
         };
 
-        on_air.push(BoardFrame { cmd, flags, hdr_rest, extra }.to_air());
+        on_air.push(
+            BoardFrame {
+                cmd,
+                flags,
+                hdr_rest,
+                extra,
+            }
+            .to_air(),
+        );
     }
 
     Ok(on_air)
@@ -119,7 +127,10 @@ impl BoardFrame {
 
 /// Mirrors `isDesktopCommandByte` in the firmware.
 fn is_desktop_command_byte(b: u8) -> bool {
-    matches!(b, 0x10 | 0x11 | 0x20 | 0x21 | 0x22 | 0x23 | 0x24 | 0x26 | 0x27 | 0x28)
+    matches!(
+        b,
+        0x10 | 0x11 | 0x20 | 0x21 | 0x22 | 0x23 | 0x24 | 0x26 | 0x27 | 0x28
+    )
 }
 
 /// Mirrors `desktopCommandLength` in the firmware: total packet size, or `None`
@@ -201,9 +212,8 @@ fn signed_transaction_survives_host_to_board_to_air_to_gateway() {
             size
         );
 
-        let frames =
-            radio::build_tx_frames(&sender, &broadcast, CMD_DOGE_TX, &tx, Some(FW_NEW))
-                .unwrap_or_else(|e| panic!("{}-byte transaction should encode: {}", size, e));
+        let frames = radio::build_tx_frames(&sender, &broadcast, CMD_DOGE_TX, &tx, Some(FW_NEW))
+            .unwrap_or_else(|e| panic!("{}-byte transaction should encode: {}", size, e));
 
         // Host → board: every frame written back to back, no gaps.
         let host_stream: Vec<u8> = frames.concat();
@@ -260,7 +270,11 @@ fn tx_ack_reaches_the_sender_through_the_same_framing() {
     stream.extend_from_slice(&ack);
 
     let packets = host_read_stream(&stream);
-    assert_eq!(packets.len(), 1, "the result code is consumed, the ACK survives");
+    assert_eq!(
+        packets.len(),
+        1,
+        "the result code is consumed, the ACK survives"
+    );
     assert_eq!(
         packets[0].decoded.as_deref(),
         Some(format!("✅ TX confirmed: txid={}", txid).as_str()),
@@ -367,9 +381,14 @@ fn old_firmware_is_refused_rather_than_mis_framed() {
 
     // The same board still accepts a transaction that fits in one packet.
     let small = tx_like(150);
-    let frames =
-        radio::build_tx_frames(&sender, &broadcast, CMD_DOGE_TX, &small, Some("RadioDoge NV3FW10"))
-            .expect("a single-packet transaction is still fine on old firmware");
+    let frames = radio::build_tx_frames(
+        &sender,
+        &broadcast,
+        CMD_DOGE_TX,
+        &small,
+        Some("RadioDoge NV3FW10"),
+    )
+    .expect("a single-packet transaction is still fine on old firmware");
     assert_eq!(frames.len(), 1);
     let packets = host_read_stream(&board_read_and_transmit(&frames.concat()).unwrap().concat());
     assert_eq!(hex::decode(&packets[0].payload_hex).unwrap(), small);
@@ -387,19 +406,28 @@ fn every_frame_fits_the_radio_and_the_board_buffer() {
     let broadcast = NodeAddress::broadcast();
 
     for size in [193usize, 500, 2000, radio::MAX_MULTIPART_PAYLOAD_LEN] {
-        let frames =
-            radio::build_tx_frames(&sender, &broadcast, CMD_DOGE_TX, &tx_like(size), Some(FW_NEW))
-                .unwrap();
+        let frames = radio::build_tx_frames(
+            &sender,
+            &broadcast,
+            CMD_DOGE_TX,
+            &tx_like(size),
+            Some(FW_NEW),
+        )
+        .unwrap();
         for (i, f) in frames.iter().enumerate() {
             assert!(
                 f.len() <= 255,
                 "frame {} of a {}-byte transaction is {} bytes — past the radio's length field",
-                i, size, f.len()
+                i,
+                size,
+                f.len()
             );
             assert!(
                 f.len() <= BOARD_BUFFER_SIZE,
                 "frame {} of a {}-byte transaction is {} bytes — past the board's buffer",
-                i, size, f.len()
+                i,
+                size,
+                f.len()
             );
             assert_eq!(
                 f.len(),
@@ -445,10 +473,23 @@ fn a_spoofed_firmware_version_would_lift_the_payload_ceiling() {
     // The spoof packet is a well-formed, forwardable broadcast — this is not a
     // malformed frame the framer would reject, which is exactly why the host has
     // to correlate replies with requests rather than filter on shape.
-    let mut spoof = vec![radio::CMD_GET_FIRMWARE_VERSION, 0x00, 9, 9, 9, 0xFF, 0xFF, 0xFF];
+    let mut spoof = vec![
+        radio::CMD_GET_FIRMWARE_VERSION,
+        0x00,
+        9,
+        9,
+        9,
+        0xFF,
+        0xFF,
+        0xFF,
+    ];
     spoof.extend_from_slice(spoofed.as_bytes());
     spoof.push(0);
     let seen = host_read_stream(&spoof);
-    assert_eq!(seen.len(), 1, "it frames cleanly — the defence cannot be in the framer");
+    assert_eq!(
+        seen.len(),
+        1,
+        "it frames cleanly — the defence cannot be in the framer"
+    );
     assert_eq!(seen[0].command, radio::CMD_GET_FIRMWARE_VERSION);
 }

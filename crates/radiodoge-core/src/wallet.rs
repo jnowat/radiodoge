@@ -8,9 +8,9 @@
 //! No FFI to libdogecoin is needed — everything is done in pure Rust.
 
 use anyhow::Result;
-use argon2::{Argon2, Algorithm, Version, Params};
+use argon2::{Algorithm, Argon2, Params, Version};
 use bip39::Mnemonic;
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, KeyInit, aead::AeadInPlace};
+use chacha20poly1305::{aead::AeadInPlace, ChaCha20Poly1305, Key, KeyInit, Nonce};
 use hmac::{Hmac, Mac};
 use rand::{rngs::OsRng, RngCore};
 use ripemd::{Digest as RipemdDigest, Ripemd160};
@@ -23,7 +23,7 @@ use crate::types::WalletInfo;
 
 // Dogecoin mainnet network bytes
 const DOGE_MAINNET_ADDR_VERSION: u8 = 0x1E; // 30 decimal — P2PKH "D..." addresses
-const DOGE_MAINNET_WIF_VERSION: u8 = 0x9E;  // 158 decimal — compressed WIF "Q..."
+const DOGE_MAINNET_WIF_VERSION: u8 = 0x9E; // 158 decimal — compressed WIF "Q..."
 
 /// Generate a brand new Dogecoin keypair.
 ///
@@ -69,9 +69,7 @@ fn pubkey_to_address(public_key: &PublicKey) -> Result<String> {
     payload.extend_from_slice(&pubkey_hash);
 
     // Step 4: Base58Check encode (adds 4-byte SHA256d checksum + encodes)
-    let address = bs58::encode(payload)
-        .with_check()
-        .into_string();
+    let address = bs58::encode(payload).with_check().into_string();
 
     Ok(address)
 }
@@ -127,7 +125,11 @@ pub fn import_wif(wif: &str) -> Result<WalletInfo> {
     let public_key_hex = hex::encode(public_key.serialize());
     let private_key_wif = secret_key_to_wif(&secret_key)?;
 
-    Ok(WalletInfo { address, public_key_hex, private_key_wif })
+    Ok(WalletInfo {
+        address,
+        public_key_hex,
+        private_key_wif,
+    })
 }
 
 /// Validate that a string is a valid Dogecoin address.
@@ -138,9 +140,7 @@ pub fn import_wif(wif: &str) -> Result<WalletInfo> {
 /// 3. Total decoded length is 21 bytes (1 version + 20 hash)
 pub fn is_valid_address(address: &str) -> bool {
     match bs58::decode(address).with_check(None).into_vec() {
-        Ok(decoded) => {
-            decoded.len() == 21 && decoded[0] == DOGE_MAINNET_ADDR_VERSION
-        }
+        Ok(decoded) => decoded.len() == 21 && decoded[0] == DOGE_MAINNET_ADDR_VERSION,
         Err(_) => false,
     }
 }
@@ -253,7 +253,10 @@ pub async fn build_signed_transaction_with_fee(
     fee_doge: Option<f64>,
 ) -> Result<(Vec<u8>, f64)> {
     match fee_doge {
-        Some(f) => Ok((build_signed_transaction(from_wif, to_address, amount_doge, f).await?, f)),
+        Some(f) => Ok((
+            build_signed_transaction(from_wif, to_address, amount_doge, f).await?,
+            f,
+        )),
         None => build_signed_transaction_auto_fee(from_wif, to_address, amount_doge).await,
     }
 }
@@ -485,8 +488,7 @@ pub fn build_signed_transaction_from_utxos(
     }
 
     // Sign each input (SIGHASH_ALL)
-    let outputs_ref: Vec<(u64, &[u8])> =
-        outputs.iter().map(|(v, s)| (*v, s.as_slice())).collect();
+    let outputs_ref: Vec<(u64, &[u8])> = outputs.iter().map(|(v, s)| (*v, s.as_slice())).collect();
     let mut script_sigs: Vec<Vec<u8>> = Vec::with_capacity(input_txids.len());
     for i in 0..input_txids.len() {
         let preimage = sighash_preimage(&input_txids, &outputs_ref, i, &from_script);
@@ -564,7 +566,10 @@ pub async fn network_fee_rate() -> u64 {
             MIN_FEE_RATE_KOINUS_PER_KB
         }
         Err(e) => {
-            log::info!("Fee estimate unavailable ({}); using the recommended rate", e);
+            log::info!(
+                "Fee estimate unavailable ({}); using the recommended rate",
+                e
+            );
             MIN_FEE_RATE_KOINUS_PER_KB
         }
     }
@@ -583,7 +588,11 @@ pub struct FeeEstimate {
 /// Pure coin-selection + sizing step of [`estimate_fee`]: mirrors
 /// `build_signed_transaction` (largest spendable coins first, change output
 /// assumed). `values` are spendable UTXO values in koinus.
-pub fn estimate_fee_for(mut values: Vec<u64>, amount_koinus: u64, rate_koinus_per_kb: u64) -> Result<FeeEstimate> {
+pub fn estimate_fee_for(
+    mut values: Vec<u64>,
+    amount_koinus: u64,
+    rate_koinus_per_kb: u64,
+) -> Result<FeeEstimate> {
     values.sort_unstable_by(|a, b| b.cmp(a));
     let mut sum: u64 = 0;
     for (i, v) in values.iter().enumerate() {
@@ -613,7 +622,9 @@ pub async fn estimate_fee(from_address: &str, amount_doge: f64) -> Result<FeeEst
     if !amount_doge.is_finite() || amount_doge <= 0.0 {
         anyhow::bail!("Invalid send amount: {}", amount_doge);
     }
-    let rate = crate::backend::fetch_fee_rate().await?.max(MIN_FEE_RATE_KOINUS_PER_KB);
+    let rate = crate::backend::fetch_fee_rate()
+        .await?
+        .max(MIN_FEE_RATE_KOINUS_PER_KB);
     let values: Vec<u64> = crate::backend::fetch_utxos(from_address)
         .await?
         .into_iter()
@@ -623,7 +634,11 @@ pub async fn estimate_fee(from_address: &str, amount_doge: f64) -> Result<FeeEst
         .collect();
     let est = estimate_fee_for(values, (amount_doge * 1e8).round() as u64, rate)?;
     if est.fee_doge > MAX_AUTO_FEE_DOGE {
-        anyhow::bail!("Estimated fee {:.8} DOGE exceeds the {} DOGE safety cap", est.fee_doge, MAX_AUTO_FEE_DOGE);
+        anyhow::bail!(
+            "Estimated fee {:.8} DOGE exceeds the {} DOGE safety cap",
+            est.fee_doge,
+            MAX_AUTO_FEE_DOGE
+        );
     }
     Ok(est)
 }
@@ -672,7 +687,8 @@ pub fn encrypt_wallet(wallet: &WalletInfo, passphrase: &str) -> Result<Encrypted
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
     let nonce = Nonce::from_slice(&nonce_bytes);
     let mut buffer: Vec<u8> = wallet.private_key_wif.as_bytes().to_vec();
-    cipher.encrypt_in_place(nonce, b"", &mut buffer)
+    cipher
+        .encrypt_in_place(nonce, b"", &mut buffer)
         .map_err(|_| anyhow::anyhow!("encryption failed"))?;
 
     Ok(EncryptedWalletFile {
@@ -692,7 +708,10 @@ pub fn decrypt_wallet(encrypted: &EncryptedWalletFile, passphrase: &str) -> Resu
     let nonce_bytes = hex::decode(&encrypted.nonce)
         .map_err(|_| anyhow::anyhow!("corrupted wallet: invalid nonce encoding"))?;
     if nonce_bytes.len() != 12 {
-        anyhow::bail!("corrupted wallet: nonce must be 12 bytes, got {}", nonce_bytes.len());
+        anyhow::bail!(
+            "corrupted wallet: nonce must be 12 bytes, got {}",
+            nonce_bytes.len()
+        );
     }
     let mut buffer = hex::decode(&encrypted.encrypted_wif)
         .map_err(|_| anyhow::anyhow!("corrupted wallet: invalid ciphertext encoding"))?;
@@ -700,14 +719,17 @@ pub fn decrypt_wallet(encrypted: &EncryptedWalletFile, passphrase: &str) -> Resu
     let key = derive_encryption_key(passphrase, &salt)?;
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
     let nonce = Nonce::from_slice(&nonce_bytes);
-    cipher.decrypt_in_place(nonce, b"", &mut buffer)
+    cipher
+        .decrypt_in_place(nonce, b"", &mut buffer)
         .map_err(|_| anyhow::anyhow!("Wrong passphrase or corrupted wallet file."))?;
 
     let wif = String::from_utf8(buffer)
         .map_err(|_| anyhow::anyhow!("corrupted wallet: decrypted data is not valid UTF-8"))?;
     let info = import_wif(&wif)?;
     if info.address != encrypted.address {
-        anyhow::bail!("Wallet integrity check failed: decrypted key does not match stored address.");
+        anyhow::bail!(
+            "Wallet integrity check failed: decrypted key does not match stored address."
+        );
     }
     Ok(info)
 }
@@ -717,7 +739,8 @@ fn derive_encryption_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
         .map_err(|e| anyhow::anyhow!("argon2 params error: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; 32];
-    argon2.hash_password_into(passphrase.as_bytes(), salt, &mut key)
+    argon2
+        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
         .map_err(|e| anyhow::anyhow!("key derivation failed: {}", e))?;
     Ok(key)
 }
@@ -733,8 +756,8 @@ pub fn generate_mnemonic() -> Result<Mnemonic> {
 /// Path: m/44'/3'/0'/0/0  (BIP44, Dogecoin coin-type 3, account 0, first external address).
 /// No BIP39 passphrase is used (empty string).
 pub fn wallet_from_mnemonic(phrase: &str) -> Result<WalletInfo> {
-    let mnemonic = Mnemonic::parse(phrase.trim())
-        .map_err(|e| anyhow::anyhow!("Invalid mnemonic: {}", e))?;
+    let mnemonic =
+        Mnemonic::parse(phrase.trim()).map_err(|e| anyhow::anyhow!("Invalid mnemonic: {}", e))?;
     let seed = mnemonic.to_seed(""); // 64-byte BIP32 seed
     let secret_key = derive_dogecoin_key(&seed)?;
     let secp = Secp256k1::new();
@@ -764,14 +787,19 @@ fn bip32_master(seed: &[u8]) -> Result<(SecretKey, [u8; 32])> {
         .map_err(|e| anyhow::anyhow!("HMAC init: {}", e))?;
     mac.update(seed);
     let result = mac.finalize().into_bytes();
-    let chain: [u8; 32] = result[32..].try_into()
+    let chain: [u8; 32] = result[32..]
+        .try_into()
         .expect("HMAC-SHA512 always produces 64 bytes; chain slice is always exactly 32");
     let key = SecretKey::from_slice(&result[..32])
         .map_err(|e| anyhow::anyhow!("master key invalid: {}", e))?;
     Ok((key, chain))
 }
 
-fn bip32_ckd_private(parent: &SecretKey, chain: &[u8; 32], index: u32) -> Result<(SecretKey, [u8; 32])> {
+fn bip32_ckd_private(
+    parent: &SecretKey,
+    chain: &[u8; 32],
+    index: u32,
+) -> Result<(SecretKey, [u8; 32])> {
     let secp = Secp256k1::new();
     let mut data = Vec::with_capacity(37);
     if index >= 0x8000_0000 {
@@ -789,9 +817,11 @@ fn bip32_ckd_private(parent: &SecretKey, chain: &[u8; 32], index: u32) -> Result
     let result = mac.finalize().into_bytes();
     let il_key = SecretKey::from_slice(&result[..32])
         .map_err(|e| anyhow::anyhow!("BIP32 child IL invalid: {}", e))?;
-    let child = parent.add_tweak(&secp256k1::Scalar::from(il_key))
+    let child = parent
+        .add_tweak(&secp256k1::Scalar::from(il_key))
         .map_err(|e| anyhow::anyhow!("BIP32 child key derivation failed: {}", e))?;
-    let new_chain: [u8; 32] = result[32..].try_into()
+    let new_chain: [u8; 32] = result[32..]
+        .try_into()
         .expect("HMAC-SHA512 always produces 64 bytes; chain slice is always exactly 32");
     Ok((child, new_chain))
 }
@@ -860,7 +890,10 @@ fn parse_p2pkh_scriptsig(ss: &[u8]) -> Result<(Vec<u8>, u8, [u8; 33])> {
 
     let pubkey_push = ss[1 + sig_push] as usize;
     if pubkey_push != 33 {
-        anyhow::bail!("expected 33-byte compressed pubkey, got {} bytes", pubkey_push);
+        anyhow::bail!(
+            "expected 33-byte compressed pubkey, got {} bytes",
+            pubkey_push
+        );
     }
     if ss.len() < 1 + sig_push + 1 + 33 {
         anyhow::bail!("scriptSig truncated at pubkey");
@@ -934,7 +967,8 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
 
     // Inputs
     let input_count = parse_varint_at(raw_tx, &mut pos)
-        .ok_or_else(|| anyhow::anyhow!("failed to parse input count"))? as usize;
+        .ok_or_else(|| anyhow::anyhow!("failed to parse input count"))?
+        as usize;
     if input_count == 0 || input_count > 200 {
         anyhow::bail!("invalid input count: {}", input_count);
     }
@@ -962,7 +996,8 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
 
     // Outputs
     let output_count = parse_varint_at(raw_tx, &mut pos)
-        .ok_or_else(|| anyhow::anyhow!("failed to parse output count"))? as usize;
+        .ok_or_else(|| anyhow::anyhow!("failed to parse output count"))?
+        as usize;
     if output_count == 0 || output_count > 200 {
         anyhow::bail!("invalid output count: {}", output_count);
     }
@@ -986,20 +1021,31 @@ pub fn verify_signed_tx(raw_tx: &[u8]) -> Result<(String, Vec<(u64, String)>)> {
     // Verify each input's ECDSA signature
     let secp = Secp256k1::verification_only();
     let mut sender_address: Option<String> = None;
-    let all_inputs_for_sighash: Vec<([u8; 32], u32)> =
-        inputs.iter().map(|(txid, vout, _)| (*txid, *vout)).collect();
+    let all_inputs_for_sighash: Vec<([u8; 32], u32)> = inputs
+        .iter()
+        .map(|(txid, vout, _)| (*txid, *vout))
+        .collect();
     let outputs_for_sighash: Vec<(u64, &[u8])> =
         outputs.iter().map(|(v, s)| (*v, s.as_slice())).collect();
 
     for (i, (_, _, scriptsig)) in inputs.iter().enumerate() {
         let (sig_der, hashtype, pubkey_bytes) = parse_p2pkh_scriptsig(scriptsig)?;
         if hashtype != 0x01 {
-            anyhow::bail!("input {} uses unsupported SIGHASH type 0x{:02x}", i, hashtype);
+            anyhow::bail!(
+                "input {} uses unsupported SIGHASH type 0x{:02x}",
+                i,
+                hashtype
+            );
         }
         let pubkey = PublicKey::from_slice(&pubkey_bytes)
             .map_err(|e| anyhow::anyhow!("input {} invalid pubkey: {}", i, e))?;
         let utxo_script = p2pkh_script_from_pubkey(&pubkey);
-        let preimage = sighash_preimage(&all_inputs_for_sighash, &outputs_for_sighash, i, &utxo_script);
+        let preimage = sighash_preimage(
+            &all_inputs_for_sighash,
+            &outputs_for_sighash,
+            i,
+            &utxo_script,
+        );
         let hash = sha256d(&preimage);
         let msg = secp256k1::Message::from_digest(hash);
         let sig = secp256k1::ecdsa::Signature::from_der(&sig_der)
@@ -1098,7 +1144,10 @@ pub fn decode_transaction_payload(payload: &[u8]) -> Option<String> {
         if memo.is_empty() {
             Some(format!("DOGE TX: {:.8} DOGE → {}", amount_doge, addr))
         } else {
-            Some(format!("DOGE TX: {:.8} DOGE → {} [{}]", amount_doge, addr, memo))
+            Some(format!(
+                "DOGE TX: {:.8} DOGE → {} [{}]",
+                amount_doge, addr, memo
+            ))
         }
     }
 }
@@ -1114,7 +1163,10 @@ mod tests {
         assert_eq!(fee_for_size(0, 0), 1_000_000);
         // Rounds up to whole kB, matching recommended_fee_doge.
         assert_eq!(fee_for_size(2_000_000, 1001), 4_000_000);
-        assert_eq!(fee_for_size(MIN_FEE_RATE_KOINUS_PER_KB, 1001) as f64 / 1e8, recommended_fee_doge(1001));
+        assert_eq!(
+            fee_for_size(MIN_FEE_RATE_KOINUS_PER_KB, 1001) as f64 / 1e8,
+            recommended_fee_doge(1001)
+        );
         let e = estimate_fee_for(vec![5_000_000, 200_000_000], 100_000_000, 2_000_000).unwrap();
         assert_eq!(e.inputs, 1);
         assert_eq!(e.size_bytes, 226);
@@ -1131,9 +1183,17 @@ mod tests {
     fn test_generate_keypair() {
         let wallet = generate_keypair().expect("keypair generation should succeed");
         // Dogecoin mainnet addresses start with "D"
-        assert!(wallet.address.starts_with('D'), "address should start with D, got: {}", wallet.address);
+        assert!(
+            wallet.address.starts_with('D'),
+            "address should start with D, got: {}",
+            wallet.address
+        );
         // Compressed WIF for Dogecoin mainnet starts with "Q"
-        assert!(wallet.private_key_wif.starts_with('Q'), "WIF should start with Q, got: {}", wallet.private_key_wif);
+        assert!(
+            wallet.private_key_wif.starts_with('Q'),
+            "WIF should start with Q, got: {}",
+            wallet.private_key_wif
+        );
         // Compressed pubkey hex = 33 bytes = 66 hex chars
         assert_eq!(wallet.public_key_hex.len(), 66);
     }
@@ -1152,7 +1212,8 @@ mod tests {
             "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L",
             100.0,
             Some("much wow"),
-        ).expect("encode should succeed");
+        )
+        .expect("encode should succeed");
 
         let decoded = decode_transaction_payload(&payload).expect("decode should succeed");
         assert!(decoded.contains("100.00000000"));
@@ -1166,8 +1227,14 @@ mod tests {
         // BIP39 12-word mnemonic = 12 space-separated words
         assert_eq!(phrase.split_whitespace().count(), 12);
         let w1 = wallet_from_mnemonic(&phrase).expect("derive wallet from mnemonic");
-        assert!(w1.address.starts_with('D'), "Dogecoin address should start with D");
-        assert!(w1.private_key_wif.starts_with('Q'), "WIF should start with Q");
+        assert!(
+            w1.address.starts_with('D'),
+            "Dogecoin address should start with D"
+        );
+        assert!(
+            w1.private_key_wif.starts_with('Q'),
+            "WIF should start with Q"
+        );
         // Deterministic: same phrase always produces same wallet
         let w2 = wallet_from_mnemonic(&phrase).expect("re-derive wallet");
         assert_eq!(w1.address, w2.address);
@@ -1181,7 +1248,10 @@ mod tests {
         let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let wallet = wallet_from_mnemonic(phrase).expect("derive from known phrase");
         // Must be a valid Dogecoin address
-        assert!(is_valid_address(&wallet.address), "derived address should be valid");
+        assert!(
+            is_valid_address(&wallet.address),
+            "derived address should be valid"
+        );
         assert!(wallet.address.starts_with('D'));
         assert!(wallet.private_key_wif.starts_with('Q'));
     }
@@ -1189,7 +1259,8 @@ mod tests {
     #[test]
     fn test_mnemonic_invalid_rejected() {
         assert!(wallet_from_mnemonic("not a valid mnemonic phrase at all ok").is_err());
-        assert!(wallet_from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon").is_err()); // 13 words
+        assert!(wallet_from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon").is_err());
+        // 13 words
     }
 
     #[test]
@@ -1305,7 +1376,9 @@ mod tests {
 
         // Build a fake 1-input transaction manually (UTXO from self)
         let decoded_wif = bs58::decode(&sender.private_key_wif)
-            .with_check(None).into_vec().unwrap();
+            .with_check(None)
+            .into_vec()
+            .unwrap();
         let secp = Secp256k1::new();
         let secret_key = SecretKey::from_slice(&decoded_wif[1..33]).unwrap();
         let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
@@ -1350,10 +1423,16 @@ mod tests {
 
         let (verified_sender, recipients) = verify_signed_tx(&tx)
             .expect("verification should succeed for a properly signed transaction");
-        assert_eq!(verified_sender, sender.address, "sender address should match");
+        assert_eq!(
+            verified_sender, sender.address,
+            "sender address should match"
+        );
         assert_eq!(recipients.len(), 1, "should have 1 recipient");
         assert_eq!(recipients[0].0, amount_koinus, "amount should match");
-        assert_eq!(recipients[0].1, recipient.address, "recipient address should match");
+        assert_eq!(
+            recipients[0].1, recipient.address,
+            "recipient address should match"
+        );
 
         // describe_signed_tx should return a verified description
         let desc = describe_signed_tx(&tx);
