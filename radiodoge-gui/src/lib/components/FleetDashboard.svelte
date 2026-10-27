@@ -6,6 +6,7 @@
   Read-only: nothing here talks to a board or the network.
 -->
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
 
@@ -49,7 +50,7 @@
     try {
       const r = await invoke<{ now: number; gateways: GatewayRow[]; summary: FleetSummary }>('get_fleet_stats', { paths });
       rows = r.gateways; summary = r.summary; now = r.now; error = null;
-    } catch (e) { error = String(e); }
+    } catch (e) { error = errorMessage(e); }
   }
   onMount(() => { refresh(); const id = setInterval(refresh, 5000); return () => clearInterval(id); });
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   // v0.3.19 — Broadcast this node's GPS position to the mesh (ROADMAP: GPS location embedding).
   // Opt-in only: nothing is sent until the user presses Broadcast.
   import { invoke } from '@tauri-apps/api/core';
@@ -62,7 +63,7 @@
       }
       status = { ok: true, text: `Broadcast ${text}` };
     } catch (e) {
-      status = { ok: false, text: String(e) };
+      status = { ok: false, text: errorMessage(e) };
     } finally {
       sending = false;
     }

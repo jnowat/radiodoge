@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   import ChannelScan from './ChannelScan.svelte';
   import { bridge as scanBridge } from '$lib/device/connection-bridge';
   // Scanning drives the desktop serial link; the Android bridge is not wired for it.
@@ -51,7 +52,7 @@
         : 'No nodes answered (they need discovery-capable firmware and the same LoRa settings)';
       await refreshNeighbors();
     } catch (e) {
-      scanResult = `Scan failed: ${e}`;
+      scanResult = `Scan failed: ${errorMessage(e)}`;
     } finally {
       isScanning = false;
     }
