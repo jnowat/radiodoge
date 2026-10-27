@@ -11,11 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
-## [0.3.43] - 2026-10-27
+## [0.3.41] - 2026-10-27
 
 ### Added
 - **Offline signing in the app (Android and desktop).** The Send tab has an *Offline signing* panel: import a UTXO snapshot written by `radiodoge-cli utxo-snapshot` (0.3.40) and the app signs from it with no internet, the same way the CLI does with `RADIODOGE_UTXO_FILE`. It is used only when the snapshot's address matches the loaded wallet, an explicit fee is required (no rate can be fetched offline), and the snapshot is kept in memory only. The panel shows the UTXO count, total and age, and warns that coins spent since the snapshot make the transaction invalid.
 - Core: `wallet::build_signed_transaction_from_utxos` signs from a given UTXO list; `build_signed_transaction` now wraps it.
+
 ## [0.3.40] - 2026-10-26
 
 ### Added
