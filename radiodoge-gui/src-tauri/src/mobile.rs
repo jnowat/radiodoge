@@ -436,15 +436,14 @@ pub(crate) async fn mobile_build_tx_packets(
     let dst = NodeAddress::broadcast();
 
     let payload = if let Some(ref wif) = tx.from_private_key_wif {
-        wallet::build_signed_transaction_with_fee(
+        offline_utxos::sign_payload(
+            &state.utxo_snapshot,
             wif,
             &tx.to_address,
             tx.amount_doge,
             resolve_fee(tx.fee_doge)?,
         )
-        .await
-        .map_err(|e| format!("Transaction signing failed: {}", e))?
-        .0
+        .await?
     } else {
         wallet::encode_transaction_payload(
             &tx.to_address,

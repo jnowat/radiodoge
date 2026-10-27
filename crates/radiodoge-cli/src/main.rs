@@ -74,6 +74,7 @@ async fn main() -> Result<()> {
         Commands::SignTx { to_address, amount, out, fee } => cmd_sign_tx(&to_address, amount, &out, fee).await,
         Commands::Connect { port } => cmd_connect(&port).await,
         Commands::Daemon { port, stats_file, outbox_file } => cmd_daemon(&port, stats_file, outbox_file).await,
+        Commands::UtxoSnapshot { address, out } => cmd_utxo_snapshot(&address, &out).await,
         Commands::Balance { address } => cmd_balance(&address).await,
         Commands::VerifyTx { txid } => cmd_verify_tx(&txid).await,
         Commands::Broadcast { wif, to_address, amount, fee } => cmd_broadcast(&wif, &to_address, amount, fee).await,
@@ -451,6 +452,23 @@ async fn cmd_lora_balance(port: &str, address: &str, gateway: Option<&str>, time
         }
         None => anyhow::bail!("No balance reply within {} s", timeout),
     }
+}
+
+/// Save an address's UTXOs for offline signing (RADIODOGE_UTXO_FILE).
+async fn cmd_utxo_snapshot(address: &str, out: &str) -> Result<()> {
+    if !wallet::is_valid_address(address) {
+        anyhow::bail!("'{}' is not a valid Dogecoin address", address);
+    }
+    let utxos = radiodoge_core::backend::fetch_utxos(address).await?;
+    let total: u64 = utxos.iter().map(|u| u.value).sum();
+    let fetched_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let snap = radiodoge_core::backend::UtxoSnapshot { address: address.to_string(), fetched_at, utxos };
+    std::fs::write(out, serde_json::to_string_pretty(&snap)?).with_context(|| format!("writing {}", out))?;
+    for u in &snap.utxos {
+        println!("   {}:{}  {:.8} DOGE  {} conf", u.txid, u.vout, u.value as f64 / 1e8, u.confirmations);
+    }
+    println!("✅ {} UTXO(s), {:.8} DOGE, saved to {}", snap.utxos.len(), total as f64 / 1e8, out);
+    Ok(())
 }
 
 /// Sign without broadcasting.
