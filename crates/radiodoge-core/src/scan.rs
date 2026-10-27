@@ -124,6 +124,7 @@ mod tests {
             decoded: None,
             rssi,
             hops: 0,
+            snr: None,
         }
     }
 

@@ -369,6 +369,20 @@ pub async fn build_signed_transaction(
     amount_doge: f64,
     fee_doge: f64,
 ) -> Result<Vec<u8>> {
+    let from_address = import_wif(from_wif)?.address;
+    let raw_utxos = crate::backend::fetch_utxos(&from_address).await?;
+    build_signed_transaction_from_utxos(from_wif, to_address, amount_doge, fee_doge, raw_utxos)
+}
+
+/// Same as [`build_signed_transaction`] but spends from a UTXO list the caller
+/// already has (e.g. an imported snapshot), so it needs no network at all.
+pub fn build_signed_transaction_from_utxos(
+    from_wif: &str,
+    to_address: &str,
+    amount_doge: f64,
+    fee_doge: f64,
+    raw_utxos: Vec<crate::backend::Utxo>,
+) -> Result<Vec<u8>> {
     if !amount_doge.is_finite() || amount_doge <= 0.0 {
         anyhow::bail!("Invalid send amount: {}", amount_doge);
     }
@@ -397,8 +411,7 @@ pub async fn build_signed_transaction(
         .checked_add(fee_koinus)
         .ok_or_else(|| anyhow::anyhow!("Amount + fee overflow"))?;
 
-    // Fetch UTXOs and greedily select coins (largest first)
-    let raw_utxos = crate::backend::fetch_utxos(&from_address).await?;
+    // Greedily select coins (largest first)
     if raw_utxos.is_empty() {
         anyhow::bail!("No UTXOs found for {}. Balance may be zero.", from_address);
     }

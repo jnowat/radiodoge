@@ -358,7 +358,9 @@ struct PendingRequest {
 // radio::MIN_RAW_LORA_FIRMWARE (12) adds raw LoRa TX/RX (0x2B/0x2C/0x2D), used
 // by the host's Meshtastic bridge.
 // 13 reports over-the-air ACKs as RECEIVED_ACK_SIGNAL (0x2F) with RSSI/SNR.
-#define FIRMWARE_VERSION 13
+// 14 precedes every LoRa frame it forwards to the host (TX_ACK / BAL replies,
+// CMD_DOGE_TX and balance requests, multipart parts) with RX_SIGNAL (0x30).
+#define FIRMWARE_VERSION 14
 
 #ifdef WIFI_LoRa_32_V2
 #define HELTEC_BOARD_VERSION 2
@@ -2272,6 +2274,23 @@ void ReceivedACK() {
                         0xFF, 0xFF, 0xFF,
                         (uint8_t)((uint16_t)rssi >> 8), (uint8_t)rssi, (uint8_t)lastSnr};
   Serial.write(ackMsg, 11);
+}
+
+// FW14 — Tell the host the signal the LoRa frame it is about to receive was
+// heard at: CMD_RX_SIGNAL (0x30), standard 8-byte header with src = the frame's
+// sender, then RSSI (i16 BE) and SNR (i8). Sent *before* the frame, followed by
+// a short quiet gap, because forwarded frames such as "TX_ACK:<txid>" have no
+// length on the wire: a host frames them on line silence, so bytes appended
+// after one would be read as part of its text.
+void EmitRxSignal() {
+  if (rxSize < 5) return;
+  uint8_t sig[11] = {0x30, 0x00,
+                     (uint8_t)rxPacket[2], (uint8_t)rxPacket[3], (uint8_t)rxPacket[4],
+                     0xFF, 0xFF, 0xFF,
+                     (uint8_t)((uint16_t)rssi >> 8), (uint8_t)rssi, (uint8_t)lastSnr};
+  Serial.write(sig, 11);
+  Serial.flush();
+  delay(60);  // > the host's 40 ms quiet-gap framing window
 }
 
 // Indicate to the host that a ping was received and display it on the screen
@@ -4445,6 +4464,7 @@ void ForwardReceivedPacketToHost() {
     forward = true;
   }
   if (forward) {
+    EmitRxSignal();
     Serial.write(rxPacket, rxSize);
     addLog("[HOST] Forwarded LoRa cmd 0x" + String(cmd, HEX) + " to serial host (" + String(rxSize) + " bytes)");
   }
@@ -4476,6 +4496,7 @@ void ParseReceivedMessage() {
       uint8_t cmd   = (uint8_t)rxPacket[0];
       uint8_t total = (uint8_t)rxPacket[SINGLE_PACKET_HEADER_SIZE];
       uint8_t part  = (uint8_t)rxPacket[SINGLE_PACKET_HEADER_SIZE + 1] + 1;  // 0-based on the wire
+      EmitRxSignal();
       Serial.write(rxPacket, rxSize);
       SetSenderAddress();
       char partLabel[32];

@@ -174,6 +174,10 @@ pub struct IncomingPacket {
     /// directly from the source). Carried in the header flags byte's upper nibble.
     #[serde(default)]
     pub hops: u8,
+    /// FW13+/FW14+ — SNR in dB the board heard this packet at, when it reported
+    /// one (RECEIVED_ACK_SIGNAL, or an RX_SIGNAL frame ahead of a forwarded frame).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snr: Option<i8>,
 }
 
 /// v0.3.6 — Board-is-source-of-truth: live state reported by the Heltec device

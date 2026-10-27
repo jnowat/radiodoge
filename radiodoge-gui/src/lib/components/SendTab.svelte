@@ -22,6 +22,38 @@
   let amountDoge = $state('');
   let memo = $state('');
   let feeDoge = $state('');  // empty = network-estimated rate (min 0.01 DOGE per started kB)
+
+  // ── Offline signing: UTXO snapshot from `radiodoge-cli utxo-snapshot` ──
+  interface SnapshotInfo { address: string; fetchedAt: number; utxoCount: number; totalDoge: number }
+  let snapshot = $state<SnapshotInfo | null>(null);
+  let snapshotError = $state<string | null>(null);
+  const snapshotMatches = $derived(!!snapshot && snapshot.address === wallet.address);
+
+  async function importSnapshot(ev: Event) {
+    const input = ev.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    snapshotError = null;
+    try {
+      snapshot = await invoke<SnapshotInfo>('import_utxo_snapshot', { json: await file.text() });
+    } catch (e: unknown) {
+      snapshotError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function clearSnapshot() {
+    await invoke('clear_utxo_snapshot');
+    snapshot = null;
+    snapshotError = null;
+  }
+
+  onMount(() => { invoke<SnapshotInfo | null>('utxo_snapshot_info').then((s) => (snapshot = s)).catch(() => {}); });
+
+  function snapshotAge(s: SnapshotInfo): string {
+    const h = Math.max(0, (Date.now() / 1000 - s.fetchedAt) / 3600);
+    return h < 1 ? `${Math.round(h * 60)} min old` : h < 48 ? `${h.toFixed(1)} h old` : `${Math.round(h / 24)} days old`;
+  }
   let isSending = $state(false);
   let reviewing = $state(false);
   let success = $state<string | null>(null);
@@ -502,6 +534,41 @@
       {/if}
     {/if}
 
+    <!-- Offline signing (UTXO snapshot) -->
+    {#if wallet.isGenerated}
+      <details class="offline-snap" open={!!snapshot}>
+        <summary>📴 Offline signing {snapshot ? (snapshotMatches ? '— snapshot loaded' : '— snapshot is for another address') : ''}</summary>
+        <p class="snap-help">
+          No internet here? On a connected machine run
+          <code>radiodoge-cli utxo-snapshot -a &lt;your address&gt; -o utxos.json</code>,
+          copy the file to this device and import it. Signing then uses it instead of the network;
+          enter the fee by hand. The file holds only public chain data and is kept in memory only.
+        </p>
+        <div class="snap-row">
+          <label class="btn-doge snap-btn">
+            Import snapshot…
+            <input type="file" accept=".json,application/json" onchange={importSnapshot} hidden />
+          </label>
+          {#if snapshot}
+            <button class="btn-doge snap-btn" onclick={clearSnapshot}>Clear</button>
+          {/if}
+        </div>
+        {#if snapshot}
+          <p class="snap-status" class:warn={!snapshotMatches}>
+            {snapshot.utxoCount} UTXO(s), {snapshot.totalDoge.toFixed(8)} DOGE, {snapshotAge(snapshot)}.
+            {#if !snapshotMatches}
+              It does not match the loaded wallet, so signing will use the network.
+            {:else}
+              Coins spent since the snapshot was taken make the transaction invalid — use a fresh one, and only one send per snapshot.
+            {/if}
+          </p>
+        {/if}
+        {#if snapshotError}
+          <p class="snap-status warn">⚠️ {snapshotError}</p>
+        {/if}
+      </details>
+    {/if}
+
     <!-- Send button -->
     <button
       onclick={reviewTransaction}
@@ -658,4 +725,11 @@
   .mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
   .warn { margin: 12px 0 0; color: var(--doge-orange); font-size: var(--fs-sm); }
   .note { margin: 12px 0 0; color: var(--doge-muted); font-size: var(--fs-xs); }
+  .offline-snap { font-size: var(--fs-sm); color: var(--doge-muted); border: 1px solid rgba(245, 197, 24, 0.15); border-radius: 8px; padding: 8px 14px; }
+  .offline-snap summary { cursor: pointer; color: var(--doge-text); }
+  .snap-help { margin: 8px 0; font-size: var(--fs-xs); }
+  .snap-row { display: flex; gap: 8px; }
+  .snap-btn { padding: 6px 12px; font-size: var(--fs-sm); cursor: pointer; }
+  .snap-status { margin: 8px 0 0; font-size: var(--fs-xs); }
+  .snap-status.warn { color: var(--doge-red); }
 </style>

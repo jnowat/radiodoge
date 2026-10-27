@@ -83,8 +83,23 @@ pub(crate) async fn start_gateway(
         daemon_args.push(outbox.to_string_lossy().into_owned());
     }
 
-    let child = tokio::process::Command::new(&cli_path)
-        .args(&daemon_args)
+    let mut cmd = tokio::process::Command::new(&cli_path);
+    cmd.args(&daemon_args).stdin(std::process::Stdio::null());
+    // The release GUI is a windowed (non-console) app, so a console child would
+    // pop up its own black console window — and closing that window kills the
+    // gateway. Run it windowless and keep its output in a log file instead.
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Some((out, err)) = daemon_log_path(&app).and_then(|p| {
+        let f = std::fs::File::create(&p).ok()?;
+        Some((f.try_clone().ok()?, f))
+    }) {
+        cmd.stdout(out).stderr(err);
+    }
+    let child = cmd
         // Without this the daemon outlives the app: closing the window would
         // leave an orphan holding the serial port, and the next launch could not
         // open the board at all.
@@ -110,6 +125,11 @@ pub(crate) async fn start_gateway(
                  is using the port.",
                 status, port
             );
+            if let Some(tail) = daemon_log_path(&app).and_then(|p| std::fs::read_to_string(p).ok()).map(|t| log_tail(&t, 3)) {
+                if !tail.is_empty() {
+                    msg.push_str(&format!(" Daemon said: {}", tail));
+                }
+            }
             // We took the port away for it; give it back rather than leaving the
             // app disconnected after a failure it did not cause.
             if holding_this_port {
@@ -132,6 +152,11 @@ pub(crate) async fn start_gateway(
     );
     log::info!("Gateway daemon started on port {}", port);
     Ok(())
+}
+
+/// Where the gateway daemon's console output goes (overwritten on each start).
+pub(crate) fn daemon_log_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    gateway_stats_path(app).and_then(|p| p.parent().map(|d| d.join("gateway-daemon.log")))
 }
 
 /// Where the gateway daemon writes its dashboard snapshot.
@@ -279,4 +304,20 @@ pub(crate) async fn stop_gateway(
         }
     }
     Ok(())
+}
+
+/// The last `n` non-empty lines of a log, joined with " | ".
+fn log_tail(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    lines[lines.len().saturating_sub(n)..].join(" | ")
+}
+
+#[cfg(test)]
+mod log_tail_tests {
+    #[test]
+    fn keeps_last_non_empty_lines() {
+        assert_eq!(super::log_tail("a\n\nb\r\nc\n  \n", 2), "b | c");
+        assert_eq!(super::log_tail("", 3), "");
+        assert_eq!(super::log_tail("only", 3), "only");
+    }
 }
