@@ -35,7 +35,7 @@ internet on your device required. It pairs a friendly desktop/mobile app with lo
 phone or PC builds and signs a transaction locally, beams the raw bytes to a nearby Heltec node, and the mesh
 relays it — hop by hop — until it reaches a gateway node that pushes it to the Dogecoin network.
 
-> **What's real today (v0.3.40):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
+> **What's real today (v0.3.43):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
 > `m/44'/3'/0'/0/0`. It builds, signs (secp256k1, `SIGHASH_ALL`), and broadcasts genuine P2PKH transactions.
 > Private keys are encrypted at rest with ChaCha20-Poly1305 + argon2id. Incoming signed transactions are
 > verified in-process. Balances, UTXOs and broadcasts go through your own Dogecoin Core node (JSON-RPC) with a public-API fallback ([chain backends](docs/BACKENDS.md)), or are relayed over LoRa by a gateway.
