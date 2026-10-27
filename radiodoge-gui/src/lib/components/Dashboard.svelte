@@ -136,7 +136,7 @@
   ]);
 </script>
 
-<div style="padding: 24px; max-width: 1000px; margin: 0 auto;">
+<div class="tab-page wide">
 
   {#if !connection.isConnected}
     <!-- ── Disconnected empty state ──────────────────────────────────────── -->

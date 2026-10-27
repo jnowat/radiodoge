@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.48] - 2026-10-27
+
+### Changed
+- Desktop layout: every tab now uses one shared `.tab-page` container (24px padding, 16px/12px on narrow windows) with three widths (narrow 640px for Connect/Send/Settings, 880px default, wide 1040px for Dashboard/Radio log/Gateways), replacing seven different ad-hoc paddings and widths.
+- Tab organization: the gateway stats and multi-gateway Fleet views moved out of Settings into a new **Gateways** tab in the Device group. Gateway start/stop stays in Settings.
+- Fleet table empty state now uses the shared EmptyState card with clear next steps instead of a one-line note.
+
 ## [0.3.47] - 2026-10-27
 
 ### Changed

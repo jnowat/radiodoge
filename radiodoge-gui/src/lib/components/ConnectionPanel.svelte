@@ -357,7 +357,7 @@
   });
 </script>
 
-<div style="max-width: 620px; margin: 0 auto; padding: clamp(12px, 3.5vw, 32px) clamp(12px, 4vw, 24px);">
+<div class="tab-page narrow">
 
   <!-- ── Hero ─────────────────────────────────────────────────────────────── -->
   <div style="text-align: center; margin-bottom: clamp(20px, 5vw, 40px);">
