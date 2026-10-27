@@ -205,6 +205,18 @@ pub(crate) enum Commands {
         fee: Option<f64>,
     },
 
+    /// Save an address's UTXOs (public chain data) to a JSON file for offline signing.
+    ///
+    /// Later, set RADIODOGE_UTXO_FILE to that file and sign-tx signs from it with
+    /// no network (pass --fee so no fee estimate is fetched either).
+    /// Example: radiodoge-cli utxo-snapshot -a D... -o utxos.json
+    UtxoSnapshot {
+        #[arg(short, long)]
+        address: String,
+        #[arg(short, long)]
+        out: String,
+    },
+
     /// Print the board's node address and firmware version (read-only, nothing is aired)
     ///
     /// With --expect, exits non-zero unless the address matches (used by the

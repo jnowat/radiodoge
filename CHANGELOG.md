@@ -15,6 +15,30 @@ _Waiting on hardware validation before merge: firmware REST route authentication
 
 ### Fixed
 - **Windows: no console window for the gateway.** Starting the gateway from the app no longer pops up a black console window (closing it killed the gateway). The daemon now runs windowless, its output goes to `gateway-daemon.log` next to `gateway-stats.json` (overwritten each start), and if it exits right away the error message includes its last log lines.
+
+## [0.3.43] - 2026-10-27
+
+### Fixed
+- Android (USB and BLE): the FW14 signal latch is cleared whenever the radio connection opens, closes or its buffer is reset, so a stale RX_SIGNAL can never be attached to the next session's first frame.
+- Android Dashboard now shows the RSSI/SNR FW14 boards report per forwarded frame (previously SNR was always -- on mobile); the reading is cleared on connect/disconnect.
+
+## [0.3.42] - 2026-10-27
+
+### Added
+- **Signal strength on every gateway reply (firmware 14).** Before forwarding a LoRa frame to the host (TX_ACK, balance replies, multipart parts, raw 0x10/0x11), the board now emits an 11-byte `RX_SIGNAL` frame (`0x30`, source address, RSSI big-endian, SNR) followed by a 60 ms gap. The host latches it and attaches RSSI/SNR to the next frame from the same sender (within 2 s, used once). `IncomingPacket` gains an optional `snr`; the CLI prints signal for `send-tx-hex` TX_ACK, `lora-ping` and `lora-balance`, and the daemon logs it.
+- Hosts older than 0.3.42 skip the unknown `0x30` byte-by-byte; the 60 ms gap keeps the following frame intact. **Hardware testing pending** — firmware compiled but not flashed.
+
+## [0.3.41] - 2026-10-27
+
+### Added
+- **Offline signing in the app (Android and desktop).** The Send tab has an *Offline signing* panel: import a UTXO snapshot written by `radiodoge-cli utxo-snapshot` (0.3.40) and the app signs from it with no internet, the same way the CLI does with `RADIODOGE_UTXO_FILE`. It is used only when the snapshot's address matches the loaded wallet, an explicit fee is required (no rate can be fetched offline), and the snapshot is kept in memory only. The panel shows the UTXO count, total and age, and warns that coins spent since the snapshot make the transaction invalid.
+- Core: `wallet::build_signed_transaction_from_utxos` signs from a given UTXO list; `build_signed_transaction` now wraps it.
+
+## [0.3.40] - 2026-10-26
+
+### Added
+- Offline signing. `utxo-snapshot -a D… -o utxos.json` saves an address's unspent outputs (public chain data only) while online; with `RADIODOGE_UTXO_FILE` pointing at that file, `sign-tx --fee …` signs with no network at all, so a sender with only a LoRa link can sign locally and radio the result with `send-tx-hex`. The snapshot is checked against the signing address.
+
 ## [0.3.39] - 2026-10-26
 
 ### Notes
