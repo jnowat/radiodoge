@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.43] - 2026-10-27
+
+### Fixed
+- Android (USB and BLE): the FW14 signal latch is cleared whenever the radio connection opens, closes or its buffer is reset, so a stale RX_SIGNAL can never be attached to the next session's first frame.
+- Android Dashboard now shows the RSSI/SNR FW14 boards report per forwarded frame (previously SNR was always -- on mobile); the reading is cleared on connect/disconnect.
+
 ## [0.3.42] - 2026-10-27
 
 ### Added

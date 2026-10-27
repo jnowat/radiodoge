@@ -33,9 +33,14 @@ pub(crate) async fn mobile_set_connected(
     // Clear any stale firmware version from a previous session
     *state.mobile_fw_version.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
+    // Signal readings from a previous session no longer describe this link.
+    *state.mobile_last_rssi.lock().await = 0;
+    *state.mobile_last_snr.lock().await = None;
     // Drop any half-assembled multipart sequences too — fragments from a
     // previous session must never be stitched onto the next connection's.
     *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
+    // FW14: a pending RX_SIGNAL belongs to the old session's next frame.
+    state.mobile_signal_latch.lock().await.clear();
     let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&device_path));
     log::info!("mobile_set_connected: {}", device_path);
     Ok(())
@@ -54,9 +59,12 @@ pub(crate) async fn mobile_set_disconnected(
     // Drop any half-assembled multipart sequences too — fragments from a
     // previous session must never be stitched onto the next connection's.
     *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
+    // FW14: a pending RX_SIGNAL belongs to the old session's next frame.
+    state.mobile_signal_latch.lock().await.clear();
     *state.mobile_packets_rx.lock().await = 0;
     *state.mobile_packets_tx.lock().await = 0;
     *state.mobile_last_rssi.lock().await = 0;
+    *state.mobile_last_snr.lock().await = None;
     let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
     log::info!("mobile_set_disconnected");
     Ok(())
@@ -69,6 +77,8 @@ pub(crate) async fn mobile_clear_accumulator(state: State<'_, AppState>) -> Resu
     // Drop any half-assembled multipart sequences too — fragments from a
     // previous session must never be stitched onto the next connection's.
     *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
+    // FW14: a pending RX_SIGNAL belongs to the old session's next frame.
+    state.mobile_signal_latch.lock().await.clear();
     Ok(())
 }
 
@@ -167,6 +177,13 @@ pub(crate) async fn mobile_push_bytes(
         let cmd = packet.command;
 
         packets_extracted += 1;
+
+        // FW14: the board reported this packet's own RSSI/SNR - keep it as the
+        // latest reading for the Dashboard (USB serial has no other source).
+        if let Some(snr) = packet.snr {
+            *state.mobile_last_rssi.lock().await = packet.rssi;
+            *state.mobile_last_snr.lock().await = Some(snr);
+        }
 
         // v0.3.20 — Mobile neighbor list (incl. shared POS: positions), same rules as desktop.
         state.serial.record_neighbor(&packet).await;
@@ -305,7 +322,8 @@ pub(crate) async fn mobile_push_bytes(
             bandwidth_khz: lora.bandwidth_khz,
             coding_rate: lora.coding_rate.clone(),
             rssi: rssi_snap,
-            snr: None, // SNR not available over USB serial or BLE
+            // FW14+ boards report SNR per forwarded frame; older firmware leaves it None.
+            snr: state.mobile_last_snr.lock().await.map(f32::from),
             packets_sent: tx_snap,
             packets_received: count_snap,
         };
@@ -542,10 +560,14 @@ pub(crate) async fn mobile_ble_connect(
     *state.connection_type.lock().await = "ble-android".to_string();
     *state.ble_device_address.lock().await = Some(address.clone());
     *state.mobile_fw_version.lock().await = None;
+    *state.mobile_last_rssi.lock().await = 0;
+    *state.mobile_last_snr.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
     // Drop any half-assembled multipart sequences too — fragments from a
     // previous session must never be stitched onto the next connection's.
     *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
+    // FW14: a pending RX_SIGNAL belongs to the old session's next frame.
+    state.mobile_signal_latch.lock().await.clear();
     let _ = app.emit("connection-status", ConnectionStatusEvent::connecting(&address));
     log::info!("mobile_ble_connect: {}", address);
     Ok(())
@@ -564,10 +586,14 @@ pub(crate) async fn mobile_ble_disconnect(
     *state.current_port.lock().await = None;
     *state.ble_device_address.lock().await = None;
     *state.mobile_fw_version.lock().await = None;
+    *state.mobile_last_rssi.lock().await = 0;
+    *state.mobile_last_snr.lock().await = None;
     state.mobile_accumulator.lock().await.clear();
     // Drop any half-assembled multipart sequences too — fragments from a
     // previous session must never be stitched onto the next connection's.
     *state.mobile_reassembler.lock().await = radio::MultipartReassembler::new();
+    // FW14: a pending RX_SIGNAL belongs to the old session's next frame.
+    state.mobile_signal_latch.lock().await.clear();
     let _ = app.emit("connection-status", ConnectionStatusEvent::disconnected());
     log::info!("mobile_ble_disconnect");
     Ok(())

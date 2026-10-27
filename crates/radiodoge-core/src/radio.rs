@@ -1202,6 +1202,17 @@ impl RxSignalLatch {
         Self::default()
     }
 
+    /// Forget any stored signal, e.g. when the radio connection resets, so a
+    /// reading from the previous session is never attached to the next one.
+    pub fn clear(&mut self) {
+        self.last = None;
+    }
+
+    /// `true` if any signal is currently stored (not yet used or cleared).
+    pub fn is_pending(&self) -> bool {
+        self.last.is_some()
+    }
+
     /// `true` if `frame` was an `RX_SIGNAL` frame (now stored, not a packet).
     pub fn observe(&mut self, frame: &[u8], now_ms: u64) -> bool {
         if frame.first() != Some(&CMD_RX_SIGNAL) {
@@ -1425,6 +1436,19 @@ mod tests {
 
     /// FW14: an RX_SIGNAL frame is consumed and its RSSI/SNR land on the next
     /// frame from the same sender; a stale or mismatched signal is dropped.
+    #[test]
+    fn test_rx_signal_latch_clear_drops_pending_signal() {
+        let sig = [CMD_RX_SIGNAL, 0, 10, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 9];
+        let mut latch = RxSignalLatch::new();
+        assert!(!latch.is_pending());
+        assert!(latch.observe(&sig, 1_000));
+        assert!(latch.is_pending());
+        latch.clear();
+        assert!(!latch.is_pending());
+        let next = [CMD_PING, 0, 10, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(latch.take_for(&next, 1_001), None);
+    }
+
     #[test]
     fn test_rx_signal_latch_attaches_to_next_frame() {
         let gw = NodeAddress::new(10, 0, 1);
