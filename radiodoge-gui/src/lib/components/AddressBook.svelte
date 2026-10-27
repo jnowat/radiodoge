@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * AddressBook tab — save and manage labelled Dogecoin addresses locally.
    * v0.3.8: Entries persisted via Tauri to address_book.json in app data dir.
@@ -42,7 +43,7 @@
       persistError = null;
       return true;
     } catch (e: unknown) {
-      persistError = e instanceof Error ? e.message : String(e);
+      persistError = e instanceof Error ? e.message : errorMessage(e);
       return false;
     }
   }

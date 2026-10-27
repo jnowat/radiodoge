@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.45] - 2026-10-27
+
+### Changed
+- Desktop/GUI: one shared `errorMessage()` helper (`src/lib/errors.ts`) now formats every error banner (14 components + connection bridge). Plugin errors that reject with `{ message }` objects no longer show as `[object Object]`, and duplicated `Error: ` prefixes are stripped.
+
 ## [0.3.44] - 2026-10-27
 
 ### Fixed

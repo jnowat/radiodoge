@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * Connection panel — the first tab the user sees.
    * Handles COM port selection (desktop) and Android USB/BT device picker.
@@ -92,7 +93,7 @@
       localStorage.setItem(LAST_PORT_KEY, selectedPort);
       // Status update comes via the "connection-status" event in +page.svelte
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : errorMessage(e);
       setError(msg);
     }
   }
@@ -134,7 +135,7 @@
         ? { success: true, message: `Pong! Device responded in ~${ms} ms 🐕` }
         : { success: false, message: `No response within 500 ms. Is the firmware running?` };
     } catch (e) {
-      pingResult = { success: false, message: String(e) };
+      pingResult = { success: false, message: errorMessage(e) };
     } finally {
       isPinging = false;
     }
@@ -210,7 +211,7 @@
       // setConnected() which drives the main UI — we mirror that into mobile state here.
       setMobileConnected();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : errorMessage(e);
       setMobileFailed(msg);
       setError(msg);
     }
@@ -247,7 +248,7 @@
         ? { success: true,  message: `Pong! Device responded in ~${ms} ms 🐕` }
         : { success: false, message: `No response within 2 s. Is the firmware running?` };
     } catch (e) {
-      pingResult = { success: false, message: String(e) };
+      pingResult = { success: false, message: errorMessage(e) };
     } finally {
       isPinging = false;
     }
@@ -270,7 +271,7 @@
       await bridge.mobileSendBytes(new Uint8Array(bytes));
       panelBleEnabled = nextState;
     } catch (e: unknown) {
-      panelBleError = e instanceof Error ? e.message : String(e);
+      panelBleError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isPanelTogglingBle = false;
     }

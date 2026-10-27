@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * Wallet tab — generate Dogecoin keypairs, display address, show QR code.
    *
@@ -73,7 +74,7 @@
       importWif = '';
       showImport = false;
     } catch (e: unknown) {
-      importError = e instanceof Error ? e.message : String(e);
+      importError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isImporting = false;
     }
@@ -97,7 +98,7 @@
       importMnemonicPhrase = '';
       showMnemonicImport = false;
     } catch (e: unknown) {
-      importMnemonicError = e instanceof Error ? e.message : String(e);
+      importMnemonicError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isImportingMnemonic = false;
     }
@@ -132,7 +133,7 @@
       generatedMnemonic = result.mnemonic;
       showMnemonicBackup = true;
     } catch (e: unknown) {
-      wallet.error = e instanceof Error ? e.message : String(e);
+      wallet.error = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isGenerating = false;
     }
@@ -162,7 +163,7 @@
       balance = await invoke<number>('get_balance', { address: wallet.address });
       balanceSource = 'blockbook';
     } catch (e: unknown) {
-      balanceError = e instanceof Error ? e.message : String(e);
+      balanceError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isFetchingBalance = false;
     }
@@ -228,13 +229,13 @@
       showSaveModal = false;
     } catch (e: unknown) {
       // The backend refuses to overwrite a different wallet unless told to.
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : errorMessage(e);
       if (msg.startsWith('different_wallet_saved:')) {
         replaceWarningAddress = msg.slice('different_wallet_saved:'.length);
         isSavingWallet = false;
         return;
       }
-      saveWalletError = e instanceof Error ? e.message : String(e);
+      saveWalletError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isSavingWallet = false;
     }
@@ -265,7 +266,7 @@
     } catch (e: unknown) {
       // Reporting success for a file that is still there is worse than the
       // failure itself: the user would believe the key was gone.
-      deleteError = e instanceof Error ? e.message : String(e);
+      deleteError = e instanceof Error ? e.message : errorMessage(e);
     }
   }
 
@@ -288,7 +289,7 @@
         unlockPassphrase = '';
       }
     } catch (e: unknown) {
-      unlockError = e instanceof Error ? e.message : String(e);
+      unlockError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isUnlocking = false;
     }
@@ -316,7 +317,7 @@
         }
       } catch (e: unknown) {
         if (!mounted) return;
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = e instanceof Error ? e.message : errorMessage(e);
         if (msg === 'passphrase_required') {
           showUnlockModal = true;
         }

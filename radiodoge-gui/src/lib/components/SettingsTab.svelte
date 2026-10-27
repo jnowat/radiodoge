@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * Settings tab — configure LoRa parameters and node address.
    *
@@ -117,7 +118,7 @@
         connection.wifiEnabled = confirmed; // use confirmed value directly — fixes board-sync race
       }
     } catch (e: unknown) {
-      wifiError = e instanceof Error ? e.message : String(e);
+      wifiError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isTogglingWifi = false;
     }
@@ -162,7 +163,7 @@
       }
       bleAdvertisingEnabled = nextState;
     } catch (e: unknown) {
-      bleError = e instanceof Error ? e.message : String(e);
+      bleError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isTogglingBle = false;
     }
@@ -186,7 +187,7 @@
         connection.gatewayMode = confirmed;
       }
     } catch (e: unknown) {
-      gatewayError = e instanceof Error ? e.message : String(e);
+      gatewayError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isSettingGateway = false;
     }
@@ -209,7 +210,7 @@
       await invoke('start_gateway', { port });
       daemonNote = `The daemon now owns ${port}, so the app has disconnected from the board. Stop the gateway to reconnect.`;
     } catch (e: unknown) {
-      daemonError = e instanceof Error ? e.message : String(e);
+      daemonError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isStartingDaemon = false;
     }
@@ -221,7 +222,7 @@
       await invoke('stop_gateway');
       daemonNote = 'Gateway stopped — the app is reclaiming the serial port.';
     } catch (e: unknown) {
-      daemonError = e instanceof Error ? e.message : String(e);
+      daemonError = e instanceof Error ? e.message : errorMessage(e);
     }
   }
 
@@ -240,7 +241,7 @@
         syncResult = '⚠️ No response from board — try again.';
       }
     } catch (e: unknown) {
-      syncResult = '❌ ' + (e instanceof Error ? e.message : String(e));
+      syncResult = '❌ ' + (e instanceof Error ? e.message : errorMessage(e));
     } finally {
       isSyncing = false;
       setTimeout(() => { syncResult = null; }, 5000);
@@ -292,7 +293,7 @@
       saveVerified = verified;
       setTimeout(() => { saveSuccess = false; saveVerified = null; }, 5000);
     } catch (e: unknown) {
-      saveError = e instanceof Error ? e.message : String(e);
+      saveError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isSaving = false;
     }

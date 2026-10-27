@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * Settings card: which services the app uses to read balances and broadcast
    * transactions. Order matters; the first backend that answers wins.
@@ -17,7 +18,7 @@
       spec = next.trim();
       message = { kind: 'ok', text: spec ? `Using: ${spec}` : 'Using the default order (Core, then BlockCypher).' };
     } catch (e) {
-      message = { kind: 'err', text: String(e) };
+      message = { kind: 'err', text: errorMessage(e) };
     } finally {
       busy = false;
     }

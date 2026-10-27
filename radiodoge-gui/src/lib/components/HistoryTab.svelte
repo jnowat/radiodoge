@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * History tab — show last 50 transaction history entries.
    * v0.3.6: Loaded from local JSON via Rust `get_history` command.
@@ -21,7 +22,7 @@
     try {
       history = await invoke<TxHistoryEntry[]>('get_history');
     } catch (e: unknown) {
-      loadError = e instanceof Error ? e.message : String(e);
+      loadError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isLoading = false;
     }
@@ -62,7 +63,7 @@
     try {
       verifyResult = await invoke<TxInclusion>('verify_tx_inclusion', { txid });
     } catch (e: unknown) {
-      verifyError = e instanceof Error ? e.message : String(e);
+      verifyError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       verifying = false;
     }

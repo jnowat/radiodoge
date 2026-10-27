@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * Send tab — craft and broadcast a Dogecoin transaction over LoRa.
    */
@@ -175,7 +176,7 @@
         const est = await invoke<FeeEstimate>('estimate_fee', { fromAddress: address, amountDoge: amount });
         if (!cancelled) feeEstimate = est;
       } catch (e) {
-        if (!cancelled) feeError = String(e);
+        if (!cancelled) feeError = errorMessage(e);
       } finally {
         if (!cancelled) feeEstimating = false;
       }
@@ -272,7 +273,7 @@
       }, 5000);
 
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : errorMessage(e);
       duplicateBlocked = msg.startsWith('DUPLICATE:');
       error = duplicateBlocked ? msg.slice('DUPLICATE:'.length).trim() : msg;
     } finally {
@@ -318,7 +319,7 @@
       if (parsed.label && !memo) memo = parsed.label;
       scanNote = `✅ Scanned ${parsed.address.slice(0, 8)}…${parsed.amount != null ? ` · ${parsed.amount} DOGE` : ''}`;
     } catch (e: unknown) {
-      scanNote = `❌ ${e instanceof Error ? e.message : String(e)}`;
+      scanNote = `❌ ${errorMessage(e)}`;
     } finally {
       scanning = false;
     }
