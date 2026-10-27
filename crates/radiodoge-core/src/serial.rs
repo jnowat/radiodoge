@@ -332,6 +332,8 @@ impl SerialManager {
             // Multipart sequences are stitched back together here, so everything
             // downstream sees one complete packet instead of fragments.
             let mut reassembler = radio::MultipartReassembler::new();
+            // FW14 RX_SIGNAL frames carry the RSSI/SNR of the frame behind them.
+            let mut signal_latch = radio::RxSignalLatch::new();
             // When the last byte arrived; variable-length frames are only framed
             // after the line has been quiet for UNBOUNDED_FRAME_QUIET.
             let mut last_rx = std::time::Instant::now();
@@ -412,13 +414,15 @@ impl SerialManager {
                         // This prevents stale firmware text output (e.g. Serial.println debug)
                         // from being misinterpreted as packet headers.
                         while let Some(frame) = take_frame(&mut accumulator, last_rx.elapsed()) {
-                            let now_secs = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs();
                             // A multipart fragment is absorbed by the reassembler
                             // even though it yields no packet yet.
-                            let ingested = radio::ingest_packet(&frame, 0, &mut reassembler, now_secs);
+                            let ingested = radio::ingest_with_signal(
+                                &frame,
+                                0,
+                                &mut signal_latch,
+                                &mut reassembler,
+                                now_millis(),
+                            );
                             if let Some(packet) = ingested {
                                 // Update stats
                                 {

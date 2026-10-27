@@ -59,6 +59,7 @@ pub const CMD_RAW_TX: u8 = 0x2B;              // v0.4.4 (FW12): transmit one raw
 pub const CMD_RAW_RX_MODE: u8 = 0x2C;         // v0.4.4 (FW12): enter/leave volatile raw receive mode
 pub const CMD_RAW_RX: u8 = 0x2D;              // v0.4.4 (FW12): board-initiated raw frame received in raw mode
 pub const CMD_RECEIVED_ACK_SIGNAL: u8 = 0x2F; // FW13: board-initiated ACK with signal: header + rssi i16 BE + snr i8. The host folds it into CMD_RECEIVED_ACK.
+pub const CMD_RX_SIGNAL: u8 = 0x30;            // FW14: board-initiated: signal of the LoRa frame forwarded next: header (src = sender) + rssi i16 BE + snr i8
 pub const CMD_DISCOVER: u8 = 0x2E;            // Node discovery: board transmits a broadcast PING; every node in range ACKs
 
 // ─── Firmware legacy serial enum ─────────────────────────────────────────────
@@ -295,6 +296,7 @@ pub fn exact_packet_len(cmd: u8) -> Option<usize> {
         CMD_GET_MAC         => Some(14), // header + 6 bytes (MAC address)
         CMD_BLE_TOGGLE      => Some(9),  // header + 1 byte (ble_enabled)
         CMD_RECEIVED_ACK_SIGNAL => Some(11), // header + rssi i16 BE + snr i8
+        CMD_RX_SIGNAL       => Some(11), // header + rssi i16 BE + snr i8
         CMD_RECEIVED_ACK    => Some(8),  // header only; src = remote node that sent the ACK
         CMD_RECEIVED_PING   => Some(8),  // header only; src = remote node that sent the Ping
         CMD_RAW_TX          => Some(9),  // header + 1 byte (status: 1 = sent)
@@ -527,6 +529,7 @@ pub fn is_known_command(byte: u8) -> bool {
             | CMD_BLE_TOGGLE
             | CMD_RECEIVED_ACK
             | CMD_RECEIVED_ACK_SIGNAL
+            | CMD_RX_SIGNAL
             | CMD_RECEIVED_PING
             | CMD_RAW_TX
             | CMD_RAW_RX_MODE
@@ -1112,6 +1115,7 @@ pub fn parse_incoming(buf: &[u8], rssi: i16) -> Option<IncomingPacket> {
     let mut command = buf[0];
     let hops = hops_from_flags(buf[1]);
     let mut rssi = rssi;
+    let mut snr = None;
     let mut buf = buf;
     // FW13 reports an over-the-air ACK with the signal it was heard at. Fold it
     // into a plain RECEIVED_ACK so every consumer keeps matching on 0x29.
@@ -1120,6 +1124,7 @@ pub fn parse_incoming(buf: &[u8], rssi: i16) -> Option<IncomingPacket> {
             return None;
         }
         rssi = i16::from_be_bytes([buf[SINGLE_HDR_LEN], buf[SINGLE_HDR_LEN + 1]]);
+        snr = Some(buf[SINGLE_HDR_LEN + 2] as i8);
         command = CMD_RECEIVED_ACK;
         buf = &buf[..SINGLE_HDR_LEN];
     }
@@ -1147,6 +1152,7 @@ pub fn parse_incoming(buf: &[u8], rssi: i16) -> Option<IncomingPacket> {
         decoded,
         rssi,
         hops,
+        snr,
     })
 }
 
@@ -1175,6 +1181,73 @@ pub fn ingest_packet(
     parse_incoming(buf, rssi)
 }
 
+/// FW14 — Remembers the most recent `CMD_RX_SIGNAL` so it can be attached to
+/// the forwarded frame that follows it.
+///
+/// The board writes `RX_SIGNAL` (src, RSSI, SNR) just before each LoRa frame it
+/// hands to the host. Both framing loops (desktop serial and the Android
+/// bridge) feed every frame through [`RxSignalLatch::observe`]; a signal frame
+/// is consumed there, and the next frame from the same source within
+/// [`RX_SIGNAL_MAX_AGE_MS`] picks its values up via [`RxSignalLatch::take_for`].
+#[derive(Debug, Default, Clone)]
+pub struct RxSignalLatch {
+    last: Option<(NodeAddress, i16, i8, u64)>,
+}
+
+/// A signal older than this no longer describes the frame behind it.
+pub const RX_SIGNAL_MAX_AGE_MS: u64 = 2_000;
+
+impl RxSignalLatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `true` if `frame` was an `RX_SIGNAL` frame (now stored, not a packet).
+    pub fn observe(&mut self, frame: &[u8], now_ms: u64) -> bool {
+        if frame.first() != Some(&CMD_RX_SIGNAL) {
+            return false;
+        }
+        if frame.len() >= SINGLE_HDR_LEN + 3 {
+            let src = NodeAddress::new(frame[2], frame[3], frame[4]);
+            let rssi = i16::from_be_bytes([frame[SINGLE_HDR_LEN], frame[SINGLE_HDR_LEN + 1]]);
+            self.last = Some((src, rssi, frame[SINGLE_HDR_LEN + 2] as i8, now_ms));
+        }
+        true
+    }
+
+    /// RSSI/SNR for the frame that follows a signal, if it came from the same
+    /// sender recently enough. The stored signal is used at most once.
+    pub fn take_for(&mut self, frame: &[u8], now_ms: u64) -> Option<(i16, i8)> {
+        if frame.len() < 5 {
+            return None;
+        }
+        let (src, rssi, snr, at) = self.last.take()?;
+        let fresh = now_ms.saturating_sub(at) <= RX_SIGNAL_MAX_AGE_MS;
+        (fresh && src == NodeAddress::new(frame[2], frame[3], frame[4])).then_some((rssi, snr))
+    }
+}
+
+/// Feed one framed buffer through the signal latch and the reassembler.
+/// Returns `None` for a signal frame, a multipart fragment, or a malformed
+/// frame; otherwise the packet, carrying the signal the board reported for it.
+pub fn ingest_with_signal(
+    buf: &[u8],
+    rssi: i16,
+    latch: &mut RxSignalLatch,
+    reassembler: &mut MultipartReassembler,
+    now_ms: u64,
+) -> Option<IncomingPacket> {
+    if latch.observe(buf, now_ms) {
+        return None;
+    }
+    let signal = latch.take_for(buf, now_ms);
+    let mut p = ingest_packet(buf, signal.map(|s| s.0).unwrap_or(rssi), reassembler, now_ms / 1000)?;
+    if let Some((_, snr)) = signal {
+        p.snr = Some(snr);
+    }
+    Some(p)
+}
+
 /// Build the `IncomingPacket` a completed multipart payload represents, as if it
 /// had arrived as one packet.
 fn assembled_to_packet(a: AssembledPayload, rssi: i16) -> IncomingPacket {
@@ -1191,6 +1264,7 @@ fn assembled_to_packet(a: AssembledPayload, rssi: i16) -> IncomingPacket {
         decoded: decode_payload(a.command, &a.payload),
         rssi,
         hops: a.hops,
+        snr: None,
     }
 }
 
@@ -1322,6 +1396,7 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
         CMD_RAW_RX_MODE => Some(format!("📡 Raw RX mode {}", if payload.first() == Some(&1) { "ON" } else { "OFF" })),
         CMD_RAW_RX => Some(match parse_raw_rx(payload) { Some(r) => format!("📡 Raw frame {} B, RSSI {} dBm", r.data.len(), r.rssi), None => "📡 Raw frame".to_string() }),
         CMD_DISCOVER      => Some("📡 Discovery ping sent".to_string()),
+        CMD_RX_SIGNAL     => Some("📶 Signal report".to_string()),
         _ => None,
     }
 }
@@ -1347,6 +1422,44 @@ fn build_header(
 
 #[cfg(test)]
 mod tests {
+
+    /// FW14: an RX_SIGNAL frame is consumed and its RSSI/SNR land on the next
+    /// frame from the same sender; a stale or mismatched signal is dropped.
+    #[test]
+    fn test_rx_signal_latch_attaches_to_next_frame() {
+        let gw = NodeAddress::new(10, 0, 1);
+        let me = NodeAddress::new(10, 0, 2);
+        let sig = [CMD_RX_SIGNAL, 0, 10, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 9];
+        assert_eq!(exact_packet_len(CMD_RX_SIGNAL), Some(11));
+        assert!(is_known_command(CMD_RX_SIGNAL));
+        let mut msg = vec![CMD_MESSAGE, 0, gw.region, gw.community, gw.node, me.region, me.community, me.node];
+        msg.extend_from_slice(b"TX_ACK:abc");
+        let mut latch = RxSignalLatch::new();
+        let mut rx = MultipartReassembler::new();
+        assert!(ingest_with_signal(&sig, 0, &mut latch, &mut rx, 1_000).is_none());
+        let p = ingest_with_signal(&msg, 0, &mut latch, &mut rx, 1_100).expect("message parses");
+        assert_eq!((p.rssi, p.snr), (-86, Some(9)));
+        // used once
+        let p = ingest_with_signal(&msg, 0, &mut latch, &mut rx, 1_200).unwrap();
+        assert_eq!((p.rssi, p.snr), (0, None));
+        // stale
+        ingest_with_signal(&sig, 0, &mut latch, &mut rx, 1_000);
+        let p = ingest_with_signal(&msg, 0, &mut latch, &mut rx, 1_000 + RX_SIGNAL_MAX_AGE_MS + 1).unwrap();
+        assert_eq!(p.snr, None);
+        // different sender
+        let mut other = sig;
+        other[4] = 7;
+        ingest_with_signal(&other, 0, &mut latch, &mut rx, 5_000);
+        assert_eq!(ingest_with_signal(&msg, 0, &mut latch, &mut rx, 5_010).unwrap().snr, None);
+    }
+
+    #[test]
+    fn test_received_ack_signal_carries_snr() {
+        let ack = [CMD_RECEIVED_ACK_SIGNAL, 0, 10, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 0xFB];
+        let p = parse_incoming(&ack, 0).unwrap();
+        assert_eq!((p.command, p.rssi, p.snr), (CMD_RECEIVED_ACK, -86, Some(-5)));
+    }
+
     use super::*;
 
     fn test_src() -> NodeAddress { NodeAddress::new(10, 0, 1) }

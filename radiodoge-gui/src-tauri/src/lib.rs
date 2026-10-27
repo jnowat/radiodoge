@@ -92,6 +92,8 @@ pub struct AppState {
     /// Reassembles multipart sequences arriving on the Android USB/BLE path,
     /// mirroring the one owned by the desktop serial read loop.
     pub mobile_reassembler: Arc<Mutex<radio::MultipartReassembler>>,
+    /// FW14 RX_SIGNAL frames: RSSI/SNR for the frame that follows.
+    pub mobile_signal_latch: Arc<Mutex<radio::RxSignalLatch>>,
     /// v0.3.10 — Firmware version string cached during the Android USB connect
     /// sequence. Stored when GET_FIRMWARE_VERSION (0x20) response is received,
     /// included in the "connection-status: connected" event emitted after GET_SETTINGS.
@@ -129,6 +131,7 @@ impl AppState {
             connection_type: Arc::new(Mutex::new("usb".to_string())),
             mobile_accumulator: Arc::new(Mutex::new(Vec::new())),
             mobile_reassembler: Arc::new(Mutex::new(radio::MultipartReassembler::new())),
+            mobile_signal_latch: Arc::new(Mutex::new(radio::RxSignalLatch::new())),
             mobile_fw_version: Arc::new(Mutex::new(None)),
             utxo_snapshot: Arc::new(Mutex::new(None)),
             ble_device_address: Arc::new(Mutex::new(None)),

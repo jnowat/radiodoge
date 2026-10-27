@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.42] - 2026-10-27
+
+### Added
+- **Signal strength on every gateway reply (firmware 14).** Before forwarding a LoRa frame to the host (TX_ACK, balance replies, multipart parts, raw 0x10/0x11), the board now emits an 11-byte `RX_SIGNAL` frame (`0x30`, source address, RSSI big-endian, SNR) followed by a 60 ms gap. The host latches it and attaches RSSI/SNR to the next frame from the same sender (within 2 s, used once). `IncomingPacket` gains an optional `snr`; the CLI prints signal for `send-tx-hex` TX_ACK, `lora-ping` and `lora-balance`, and the daemon logs it.
+- Hosts older than 0.3.42 skip the unknown `0x30` byte-by-byte; the 60 ms gap keeps the following frame intact. **Hardware testing pending** — firmware compiled but not flashed.
+
 ## [0.3.41] - 2026-10-27
 
 ### Added
