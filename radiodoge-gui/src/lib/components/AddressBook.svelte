@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EmptyState from './EmptyState.svelte';
   import { errorMessage } from '$lib/errors';
   /**
    * AddressBook tab — save and manage labelled Dogecoin addresses locally.
@@ -162,13 +163,9 @@
 
   <!-- ── Entries ────────────────────────────────────────────────────────── -->
   {#if isLoading}
-    <div class="card-doge" style="text-align: center; padding: 28px; color: var(--doge-muted);">⏳ Loading…</div>
+    <EmptyState loading title="Loading saved addresses…" />
   {:else if entries.length === 0}
-    <div class="card-doge" style="text-align: center; padding: 32px; color: var(--doge-muted);">
-      <p style="font-size: var(--fs-lg); margin: 0 0 8px 0;">📭</p>
-      <p style="margin: 0; font-size: var(--fs-base);">No saved addresses yet.</p>
-      <p style="margin: 6px 0 0 0; font-size: var(--fs-xs); opacity: 0.7;">Click "+ Add Address" to save a Dogecoin address with a label.</p>
-    </div>
+    <EmptyState icon="📭" title="No saved addresses yet" hint='Click &quot;+ Add Address&quot; to save a Dogecoin address with a label.' />
   {:else}
     <div class="card-doge" style="padding: 0; overflow: hidden;">
       <table style="width: 100%; border-collapse: collapse;">

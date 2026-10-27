@@ -1,6 +1,6 @@
 {
   "name": "radiodoge-gui",
-  "version": "0.3.46",
+  "version": "0.3.47",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -8,6 +8,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:unit": "node --test tests/*.test.mjs",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",

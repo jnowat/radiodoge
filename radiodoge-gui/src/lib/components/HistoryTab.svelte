@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EmptyState from './EmptyState.svelte';
   import { errorMessage } from '$lib/errors';
   /**
    * History tab — show last 50 transaction history entries.
@@ -158,22 +159,7 @@
 
   <!-- ── Empty state ───────────────────────────────────────────────────────── -->
   {#if !isLoading && history.length === 0}
-    <div style="
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 60px 20px;
-      text-align: center;
-      color: var(--doge-muted);
-    ">
-      <div style="font-size: 4rem; margin-bottom: 16px;" aria-hidden="true">📭</div>
-      <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">No transactions yet</h3>
-      <p style="margin: 0; font-size: var(--fs-base);">
-        Send your first Dogecoin over LoRa from the Send tab!<br/>
-        Much potential. Very future. Wow.
-      </p>
-    </div>
+    <EmptyState size="lg" icon="📭" title="No transactions yet" hint="Send your first Dogecoin over LoRa from the Send tab! Much potential. Very future. Wow." />
 
   {:else}
     <!-- ── Transaction list ──────────────────────────────────────────────── -->
