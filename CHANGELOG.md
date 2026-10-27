@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.46] - 2026-10-27
+
+### Changed
+- Desktop/GUI: new shared `EmptyState` component (icon, title, hint, loading spinner; `role=status`, respects reduced motion) replaces the hand-styled empty/loading cards in Address Book, Mesh and History, so spacing and typography match across tabs.
+
+### Added
+- `npm run test:unit`: Node built-in test runner; first tests cover `errorMessage()` (6 cases).
+
 ## [0.3.45] - 2026-10-27
 
 ### Changed

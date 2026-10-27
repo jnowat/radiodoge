@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EmptyState from './EmptyState.svelte';
   import { errorMessage } from '$lib/errors';
   import ChannelScan from './ChannelScan.svelte';
   import { bridge as scanBridge } from '$lib/device/connection-bridge';
@@ -240,13 +241,7 @@
       🔌 Connect to a board to see mesh neighbors.
     </div>
   {:else if connection.neighbors.length === 0}
-    <div class="card-doge" style="text-align: center; padding: 32px; color: var(--doge-muted);">
-      <p style="font-size: var(--fs-xl); margin: 0 0 8px 0;">🦴</p>
-      <p style="margin: 0; font-size: var(--fs-base);">No neighbors heard yet.</p>
-      <p style="margin: 6px 0 0 0; font-size: var(--fs-xs); opacity: 0.7;">
-        Waiting for other RadioDoge nodes to transmit on the mesh…
-      </p>
-    </div>
+    <EmptyState icon="🦴" title="No neighbors heard yet" hint="Waiting for other RadioDoge nodes to transmit on the mesh…" />
   {:else}
     <div class="card-doge" style="padding: 0; overflow: hidden;">
       <table style="width: 100%; border-collapse: collapse;">
