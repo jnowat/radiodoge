@@ -326,7 +326,7 @@
   }
 </script>
 
-<div style="padding: 24px; max-width: 600px; margin: 0 auto;">
+<div class="tab-page narrow">
   <div style="margin-bottom: 24px;">
     <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">📤 Send Dogecoin</h2>
     <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">

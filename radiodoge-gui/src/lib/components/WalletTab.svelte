@@ -327,7 +327,7 @@
   });
 </script>
 
-<div style="padding: 24px; max-width: 800px; margin: 0 auto;">
+<div class="tab-page">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">

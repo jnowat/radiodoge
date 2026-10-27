@@ -9,6 +9,7 @@
   import { errorMessage } from '$lib/errors';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import EmptyState from './EmptyState.svelte';
 
   interface GatewayRow {
     label: string; path: string; local: boolean; ok: boolean; error?: string;
@@ -85,7 +86,7 @@
   {#if error}<div class="err" role="alert">❌ {error}</div>{/if}
 
   {#if rows.length === 0}
-    <p class="empty">No gateways yet. Start the gateway on this PC or add another gateway's stats file.</p>
+    <EmptyState icon="🛰️" title="No gateways in the fleet yet" hint="Start the gateway on this PC, or paste another gateway's gateway-stats.json path above and press Add." />
   {:else}
     <table>
       <thead><tr><th>Gateway</th><th>Status</th><th>Pkts</th><th>TX ok/fail</th><th>Outbox</th><th></th></tr></thead>

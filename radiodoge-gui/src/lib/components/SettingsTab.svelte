@@ -18,8 +18,6 @@
   import { bridge } from '$lib/device/connection-bridge';
   import DogeSpinner from './DogeSpinner.svelte';
   import ChainBackendsCard from './ChainBackendsCard.svelte';
-  import GatewayDashboard from './GatewayDashboard.svelte';
-  import FleetDashboard from './FleetDashboard.svelte';
 
   // ── Platform detection ────────────────────────────────────────────────────
   // Use null as "not yet resolved" to prevent fetchMac() from taking the wrong
@@ -320,7 +318,7 @@
   }
 </script>
 
-<div style="padding: 24px; max-width: 700px; margin: 0 auto;">
+<div class="tab-page narrow">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
@@ -821,15 +819,7 @@
       {/if}
     </div>
 
-    {#if connection.gatewayOnline}
-      <GatewayDashboard />
-    {/if}
-
-    {#if !isAndroidPlatform}
-      <FleetDashboard />
-    {/if}
-
-    <!-- ── v0.3.16 — BLE Advertising toggle ──────────────────────────────── -->
+<!-- ── v0.3.16 — BLE Advertising toggle ──────────────────────────────── -->
     <div class="card-doge" aria-label="BLE advertising toggle">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
         <div>

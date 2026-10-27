@@ -27,6 +27,7 @@
         { id: 'dashboard', icon: '📡', label: 'Dashboard', tooltip: 'Live radio stats: RSSI, SNR, packet counts', needsBoard: true },
         { id: 'mesh', icon: '🕸️', label: 'Mesh', tooltip: 'Nodes heard on the LoRa network', needsBoard: false },
         { id: 'receive', icon: '📥', label: 'Radio log', tooltip: 'Live TX/RX packet log', needsBoard: true },
+        { id: 'gateways', icon: '🛰️', label: 'Gateways', tooltip: 'Gateway relay stats and the multi-gateway fleet', needsBoard: false },
       ],
     },
     {

@@ -402,3 +402,9 @@ button:disabled { cursor: not-allowed; }
 button[title] {
   cursor: pointer;
 }
+
+/* Shared tab page container: one padding + width scale for every tab. */
+.tab-page { padding: var(--sp-6); margin: 0 auto; max-width: 880px; }
+.tab-page.narrow { max-width: 640px; }
+.tab-page.wide { max-width: 1040px; }
+@media (max-width: 640px) { .tab-page { padding: var(--sp-4) var(--sp-3); } }
