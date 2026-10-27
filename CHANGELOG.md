@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.44] - 2026-10-27
+
+### Fixed
+- **Windows: no console window for the gateway.** Starting the gateway from the app no longer pops up a black console window (closing it killed the gateway). The daemon now runs windowless, its output goes to `gateway-daemon.log` next to `gateway-stats.json` (overwritten each start), and if it exits right away the error message includes its last log lines.
+
 ## [0.3.43] - 2026-10-27
 
 ### Fixed
