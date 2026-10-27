@@ -126,10 +126,12 @@ mod tests {
         let wif = test_wif();
         let addr = wallet::import_wif(&wif).unwrap().address;
         let m = Mutex::new(Some(snap_for(&addr)));
-        let err = sign_payload(&m, &wif, &addr, 1.0, None).await.unwrap_err();
+        let to = wallet::import_wif(&test_wif()).unwrap().address;
+        let err = sign_payload(&m, &wif, &to, 1.0, None).await.unwrap_err();
         assert!(err.contains("enter a network fee"));
-        let raw = sign_payload(&m, &wif, &addr, 1.0, Some(0.01)).await.unwrap();
-        let (_, outs) = wallet::verify_signed_tx(&raw).unwrap();
-        assert_eq!(outs[0].0, 100_000_000);
+        let raw = sign_payload(&m, &wif, &to, 1.0, Some(0.01)).await.unwrap();
+        let (from, outs) = wallet::verify_signed_tx(&raw).unwrap();
+        assert_eq!(from, addr);
+        assert!(outs.contains(&(100_000_000, to)));
     }
 }
