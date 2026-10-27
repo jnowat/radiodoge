@@ -74,6 +74,7 @@ async fn main() -> Result<()> {
         Commands::SignTx { to_address, amount, out, fee } => cmd_sign_tx(&to_address, amount, &out, fee).await,
         Commands::Connect { port } => cmd_connect(&port).await,
         Commands::Daemon { port, stats_file, outbox_file } => cmd_daemon(&port, stats_file, outbox_file).await,
+        Commands::UtxoSnapshot { address, out } => cmd_utxo_snapshot(&address, &out).await,
         Commands::Balance { address } => cmd_balance(&address).await,
         Commands::VerifyTx { txid } => cmd_verify_tx(&txid).await,
         Commands::Broadcast { wif, to_address, amount, fee } => cmd_broadcast(&wif, &to_address, amount, fee).await,
@@ -414,7 +415,7 @@ async fn cmd_lora_ping(port: &str, to: &str, timeout: u64) -> Result<()> {
     }).await.ok().flatten();
     manager.disconnect().await.ok();
     match got {
-        Some(p) => { println!("✅ ACK after {} ms (rssi {} dBm)", t0.elapsed().as_millis(), p.rssi); Ok(()) }
+        Some(p) => { println!("✅ ACK after {} ms{}", t0.elapsed().as_millis(), signal_text(p.rssi, p.snr)); Ok(()) }
         None => anyhow::bail!("No LoRa ACK from {} within {} s", dst.to_display_string(), timeout),
     }
 }
@@ -435,22 +436,39 @@ async fn cmd_lora_balance(port: &str, address: &str, gateway: Option<&str>, time
             let text = pkt.decoded.clone().unwrap_or_default();
             log::debug!("pkt cmd=0x{:02X} from {}: {}", pkt.command, pkt.source.to_display_string(), text);
             let raw = String::from_utf8_lossy(&hex::decode(&pkt.payload_hex).unwrap_or_default()).to_string();
-            if let Some(i) = raw.find("BAL:") { return Some((pkt.source.clone(), raw[i..].trim_end_matches('\0').to_string())); }
+            if let Some(i) = raw.find("BAL:") { return Some((pkt.source.clone(), raw[i..].trim_end_matches('\0').to_string(), signal_text(pkt.rssi, pkt.snr))); }
         }
         None
     }).await.ok().flatten();
     manager.disconnect().await.ok();
     match reply {
-        Some((gw, t)) => {
+        Some((gw, t, sig)) => {
             let koinus: Option<u64> = t[4..].trim().split(|c: char| !c.is_ascii_digit()).next().and_then(|n| n.parse().ok());
             match koinus {
-                Some(k) => println!("💰 Gateway {} reports {:.8} DOGE ({} koinus)", gw.to_display_string(), k as f64 / 1e8, k),
+                Some(k) => println!("💰 Gateway {} reports {:.8} DOGE ({} koinus){}", gw.to_display_string(), k as f64 / 1e8, k, sig),
                 None => println!("💬 Gateway {} replied: {}", gw.to_display_string(), t),
             }
             Ok(())
         }
         None => anyhow::bail!("No balance reply within {} s", timeout),
     }
+}
+
+/// Save an address's UTXOs for offline signing (RADIODOGE_UTXO_FILE).
+async fn cmd_utxo_snapshot(address: &str, out: &str) -> Result<()> {
+    if !wallet::is_valid_address(address) {
+        anyhow::bail!("'{}' is not a valid Dogecoin address", address);
+    }
+    let utxos = radiodoge_core::backend::fetch_utxos(address).await?;
+    let total: u64 = utxos.iter().map(|u| u.value).sum();
+    let fetched_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let snap = radiodoge_core::backend::UtxoSnapshot { address: address.to_string(), fetched_at, utxos };
+    std::fs::write(out, serde_json::to_string_pretty(&snap)?).with_context(|| format!("writing {}", out))?;
+    for u in &snap.utxos {
+        println!("   {}:{}  {:.8} DOGE  {} conf", u.txid, u.vout, u.value as f64 / 1e8, u.confirmations);
+    }
+    println!("✅ {} UTXO(s), {:.8} DOGE, saved to {}", snap.utxos.len(), total as f64 / 1e8, out);
+    Ok(())
 }
 
 /// Sign without broadcasting.
@@ -560,7 +578,7 @@ async fn radio_signed_tx(port: &str, raw: &[u8], gateway: Option<&str>, timeout:
                 Some(TxReply::Queued { .. }) => {
                     println!("      ⏳ {} queued it (no internet yet); it will retry", pkt.source.to_display_string());
                 }
-                Some(r) => return Some((pkt.source.clone(), r)),
+                Some(r) => return Some((pkt.source.clone(), r, signal_text(pkt.rssi, pkt.snr))),
                 None => {}
             }
         }
@@ -569,20 +587,30 @@ async fn radio_signed_tx(port: &str, raw: &[u8], gateway: Option<&str>, timeout:
     manager.disconnect().await.ok();
     let link = tx_reply::explorer_url(&txid);
     match reply {
-        Some((gw, TxReply::Ack { txid: id })) => {
-            println!("[4/4] ✅ TX_ACK from {} after {} ms", gw.to_display_string(), t0.elapsed().as_millis());
+        Some((gw, TxReply::Ack { txid: id }, sig)) => {
+            println!("[4/4] ✅ TX_ACK from {} after {} ms{}", gw.to_display_string(), t0.elapsed().as_millis(), sig);
             println!("      txid {}", id);
             println!("      {}", tx_reply::explorer_url(&id));
             if id != txid { println!("⚠️  ACK txid differs from the local txid {}", txid); }
             Ok(())
         }
-        Some((gw, TxReply::Nack { txid: id, reason })) => {
+        Some((gw, TxReply::Nack { txid: id, reason }, _)) => {
             anyhow::bail!("TX_NACK from {} for {}: {} — the network rejected it; do not resend the same transaction", gw.to_display_string(), id, reason)
         }
-        Some((_, TxReply::Queued { .. })) | None => anyhow::bail!(
+        Some((_, TxReply::Queued { .. }, _)) | None => anyhow::bail!(
             "No TX_ACK within {} s. The transaction may still be queued or broadcast — check {} before any retry",
             timeout, link
         ),
+    }
+}
+
+/// " (rssi -86 dBm, snr 9 dB)" when the board reported a signal, else "".
+/// FW13 reports it for ACKs, FW14 for every forwarded frame (TX_ACK, BAL).
+fn signal_text(rssi: i16, snr: Option<i8>) -> String {
+    match (rssi, snr) {
+        (0, None) => String::new(),
+        (r, None) => format!(" (rssi {} dBm)", r),
+        (r, Some(s)) => format!(" (rssi {} dBm, snr {} dB)", r, s),
     }
 }
 
