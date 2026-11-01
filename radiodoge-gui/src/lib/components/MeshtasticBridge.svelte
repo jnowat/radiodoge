@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   // v0.3.25 — Meshtastic bridge mode (firmware FW12 raw LoRa). Opt-in and volatile:
   // the board's saved RadioDoge settings never change, raw receive times out on its
   // own, and the board leaves it automatically before any RadioDoge transmission.
@@ -39,7 +40,7 @@
       if (active) offTimer = setTimeout(() => (active = false), timeoutS * 1000);
       status = { ok: true, text: active ? `Listening on LongFast for ${minutes} min.` : 'Back to normal RadioDoge receive.' };
     } catch (e) {
-      status = { ok: false, text: String(e) };
+      status = { ok: false, text: errorMessage(e) };
     } finally {
       busy = false;
     }
@@ -53,7 +54,7 @@
       status = ok ? { ok: true, text: 'Sent to LongFast.' } : { ok: false, text: 'The board reported the transmit failed.' };
       if (ok) message = '';
     } catch (e) {
-      status = { ok: false, text: String(e) };
+      status = { ok: false, text: errorMessage(e) };
     } finally {
       busy = false;
     }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * Receive tab — live packet monitor for ALL LoRa traffic (TX + RX).
    *
@@ -33,7 +34,7 @@
         ? { busy: false, ok: true, text: `✅ In block ${r.blockHeight ?? '?'} · ${r.confirmations} conf` }
         : { busy: false, ok: false, text: '⏳ Not in a block yet (mempool or unknown) — not proof of payment' };
     } catch (e) {
-      chainChecks[txid] = { busy: false, ok: false, text: `❌ ${e instanceof Error ? e.message : String(e)}` };
+      chainChecks[txid] = { busy: false, ok: false, text: `❌ ${errorMessage(e)}` };
     }
   }
 
@@ -121,7 +122,7 @@
   }
 </script>
 
-<div style="padding: 24px; max-width: 960px; margin: 0 auto;">
+<div class="tab-page wide">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   /**
    * Settings tab — configure LoRa parameters and node address.
    *
@@ -17,8 +18,6 @@
   import { bridge } from '$lib/device/connection-bridge';
   import DogeSpinner from './DogeSpinner.svelte';
   import ChainBackendsCard from './ChainBackendsCard.svelte';
-  import GatewayDashboard from './GatewayDashboard.svelte';
-  import FleetDashboard from './FleetDashboard.svelte';
 
   // ── Platform detection ────────────────────────────────────────────────────
   // Use null as "not yet resolved" to prevent fetchMac() from taking the wrong
@@ -117,7 +116,7 @@
         connection.wifiEnabled = confirmed; // use confirmed value directly — fixes board-sync race
       }
     } catch (e: unknown) {
-      wifiError = e instanceof Error ? e.message : String(e);
+      wifiError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isTogglingWifi = false;
     }
@@ -162,7 +161,7 @@
       }
       bleAdvertisingEnabled = nextState;
     } catch (e: unknown) {
-      bleError = e instanceof Error ? e.message : String(e);
+      bleError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isTogglingBle = false;
     }
@@ -186,7 +185,7 @@
         connection.gatewayMode = confirmed;
       }
     } catch (e: unknown) {
-      gatewayError = e instanceof Error ? e.message : String(e);
+      gatewayError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isSettingGateway = false;
     }
@@ -209,7 +208,7 @@
       await invoke('start_gateway', { port });
       daemonNote = `The daemon now owns ${port}, so the app has disconnected from the board. Stop the gateway to reconnect.`;
     } catch (e: unknown) {
-      daemonError = e instanceof Error ? e.message : String(e);
+      daemonError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isStartingDaemon = false;
     }
@@ -221,7 +220,7 @@
       await invoke('stop_gateway');
       daemonNote = 'Gateway stopped — the app is reclaiming the serial port.';
     } catch (e: unknown) {
-      daemonError = e instanceof Error ? e.message : String(e);
+      daemonError = e instanceof Error ? e.message : errorMessage(e);
     }
   }
 
@@ -240,7 +239,7 @@
         syncResult = '⚠️ No response from board — try again.';
       }
     } catch (e: unknown) {
-      syncResult = '❌ ' + (e instanceof Error ? e.message : String(e));
+      syncResult = '❌ ' + (e instanceof Error ? e.message : errorMessage(e));
     } finally {
       isSyncing = false;
       setTimeout(() => { syncResult = null; }, 5000);
@@ -292,7 +291,7 @@
       saveVerified = verified;
       setTimeout(() => { saveSuccess = false; saveVerified = null; }, 5000);
     } catch (e: unknown) {
-      saveError = e instanceof Error ? e.message : String(e);
+      saveError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isSaving = false;
     }
@@ -319,7 +318,7 @@
   }
 </script>
 
-<div style="padding: 24px; max-width: 700px; margin: 0 auto;">
+<div class="tab-page narrow">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
@@ -820,15 +819,7 @@
       {/if}
     </div>
 
-    {#if connection.gatewayOnline}
-      <GatewayDashboard />
-    {/if}
-
-    {#if !isAndroidPlatform}
-      <FleetDashboard />
-    {/if}
-
-    <!-- ── v0.3.16 — BLE Advertising toggle ──────────────────────────────── -->
+<!-- ── v0.3.16 — BLE Advertising toggle ──────────────────────────────── -->
     <div class="card-doge" aria-label="BLE advertising toggle">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
         <div>

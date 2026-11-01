@@ -1,3 +1,4 @@
+import { errorMessage } from '../errors';
 /**
  * RadioDoge connection bridge — v0.3.16
  *
@@ -713,7 +714,7 @@ async function _registerSessionListeners(): Promise<void> {
     try {
       await _writeTxFrames(ev.payload);
     } catch (e: unknown) {
-      const detail = e instanceof Error ? e.message : String(e);
+      const detail = errorMessage(e);
       console.error('[bridge] transaction write failed:', detail);
       window.dispatchEvent(new CustomEvent('radiodoge:tx-send-failed', { detail }));
     }

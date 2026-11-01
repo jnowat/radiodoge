@@ -30,7 +30,6 @@
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 
-
 /// Length of a serialized block header in bytes.
 pub const BLOCK_HEADER_LEN: usize = 80;
 
@@ -303,7 +302,10 @@ fn reverse32(mut h: [u8; 32]) -> [u8; 32] {
 fn display_hex_to_internal(hash_hex: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(hash_hex.trim()).context("hash hex decode failed")?;
     if bytes.len() != 32 {
-        bail!("expected a 32-byte (64 hex char) hash, got {} bytes", bytes.len());
+        bail!(
+            "expected a 32-byte (64 hex char) hash, got {} bytes",
+            bytes.len()
+        );
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
@@ -397,9 +399,10 @@ mod tests {
     /// exercises header parsing, serialization, and SHA256d hashing end-to-end.
     fn dogecoin_genesis() -> BlockHeader {
         // Field values from the Dogecoin genesis block.
-        let merkle_root =
-            display_hex_to_internal("5b2a3f53f605d62c53e62932dac6925e3d74afa5a4b459745c36d42d0ed26a69")
-                .unwrap();
+        let merkle_root = display_hex_to_internal(
+            "5b2a3f53f605d62c53e62932dac6925e3d74afa5a4b459745c36d42d0ed26a69",
+        )
+        .unwrap();
         BlockHeader {
             version: 1,
             prev_block: [0u8; 32],
@@ -460,9 +463,10 @@ mod tests {
         // Bitcoin's PoW *is* SHA256d, so its genesis header hash must meet the
         // target encoded in nBits — a direct test of hash_meets_target against a
         // real chain. (Bitcoin genesis field values.)
-        let merkle_root =
-            display_hex_to_internal("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
-                .unwrap();
+        let merkle_root = display_hex_to_internal(
+            "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        )
+        .unwrap();
         let btc_genesis = BlockHeader {
             version: 1,
             prev_block: [0u8; 32],
@@ -569,7 +573,10 @@ mod tests {
         // same root. It is never needed by a legitimate proof.
         assert_eq!(merkle_root_from_branch(&leaves[0], &[leaves[0]], 0), None);
         // Also at a higher level: n23 paired with itself.
-        assert_eq!(merkle_root_from_branch(&leaves[2], &[leaves[3], n23], 2), None);
+        assert_eq!(
+            merkle_root_from_branch(&leaves[2], &[leaves[3], n23], 2),
+            None
+        );
     }
 
     /// Compact difficulty values Bitcoin Core rejects must never expand into a
@@ -581,9 +588,20 @@ mod tests {
     /// which nearly every hash is below.
     #[test]
     fn test_invalid_compact_bits_are_rejected() {
-        for bad in [0x0080_0000u32, 0x2080_0000, 0x1d80_ffff, 0xff00_0001, 0xff7f_ffff] {
+        for bad in [
+            0x0080_0000u32,
+            0x2080_0000,
+            0x1d80_ffff,
+            0xff00_0001,
+            0xff7f_ffff,
+        ] {
             assert!(!compact_is_valid(bad), "0x{:08x} should be rejected", bad);
-            assert_eq!(bits_to_target(bad), [0u8; 32], "0x{:08x} must expand to zero", bad);
+            assert_eq!(
+                bits_to_target(bad),
+                [0u8; 32],
+                "0x{:08x} must expand to zero",
+                bad
+            );
             assert!(
                 !hash_meets_target(&[0u8; 32], bad),
                 "0x{:08x} must not let even a zero hash pass",

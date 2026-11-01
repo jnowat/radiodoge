@@ -6,6 +6,7 @@
   board or the network.
 -->
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
 
@@ -39,7 +40,7 @@
       stats = r.stats;
       error = null;
     } catch (e: unknown) {
-      error = e instanceof Error ? e.message : String(e);
+      error = e instanceof Error ? e.message : errorMessage(e);
     }
     now = Math.floor(Date.now() / 1000);
   }

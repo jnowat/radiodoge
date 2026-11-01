@@ -20,6 +20,7 @@
 
 #[cfg(feature = "native")]
 pub mod backend;
+pub mod errors;
 #[cfg(feature = "native")]
 pub mod fleet;
 #[cfg(feature = "native")]
@@ -27,19 +28,18 @@ pub mod gateway_stats;
 #[cfg(feature = "native")]
 pub mod geo;
 #[cfg(feature = "native")]
-pub mod store_forward;
+pub mod meshtastic;
 #[cfg(feature = "native")]
 pub mod qr;
-pub mod errors;
 pub mod radio;
 #[cfg(feature = "native")]
 pub mod scan;
 #[cfg(feature = "native")]
-pub mod meshtastic;
-#[cfg(feature = "native")]
 pub mod serial;
 #[cfg(feature = "native")]
 pub mod spv;
+#[cfg(feature = "native")]
+pub mod store_forward;
 pub mod tx_reply;
 pub mod types;
 #[cfg(feature = "native")]

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import EmptyState from './EmptyState.svelte';
+  import { errorMessage } from '$lib/errors';
   /**
    * History tab — show last 50 transaction history entries.
    * v0.3.6: Loaded from local JSON via Rust `get_history` command.
@@ -21,7 +23,7 @@
     try {
       history = await invoke<TxHistoryEntry[]>('get_history');
     } catch (e: unknown) {
-      loadError = e instanceof Error ? e.message : String(e);
+      loadError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       isLoading = false;
     }
@@ -62,7 +64,7 @@
     try {
       verifyResult = await invoke<TxInclusion>('verify_tx_inclusion', { txid });
     } catch (e: unknown) {
-      verifyError = e instanceof Error ? e.message : String(e);
+      verifyError = e instanceof Error ? e.message : errorMessage(e);
     } finally {
       verifying = false;
     }
@@ -78,7 +80,7 @@
   }
 </script>
 
-<div style="padding: 24px; max-width: 860px; margin: 0 auto;">
+<div class="tab-page">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
@@ -157,22 +159,7 @@
 
   <!-- ── Empty state ───────────────────────────────────────────────────────── -->
   {#if !isLoading && history.length === 0}
-    <div style="
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 60px 20px;
-      text-align: center;
-      color: var(--doge-muted);
-    ">
-      <div style="font-size: 4rem; margin-bottom: 16px;" aria-hidden="true">📭</div>
-      <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">No transactions yet</h3>
-      <p style="margin: 0; font-size: var(--fs-base);">
-        Send your first Dogecoin over LoRa from the Send tab!<br/>
-        Much potential. Very future. Wow.
-      </p>
-    </div>
+    <EmptyState size="lg" icon="📭" title="No transactions yet" hint="Send your first Dogecoin over LoRa from the Send tab! Much potential. Very future. Wow." />
 
   {:else}
     <!-- ── Transaction list ──────────────────────────────────────────────── -->

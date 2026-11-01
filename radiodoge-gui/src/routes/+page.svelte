@@ -24,6 +24,7 @@
   import MeshTab from '$lib/components/MeshTab.svelte';
   import AddressBook from '$lib/components/AddressBook.svelte';
   import SettingsTab from '$lib/components/SettingsTab.svelte';
+  import GatewaysTab from '$lib/components/GatewaysTab.svelte';
   import DebugConsole from '$lib/components/DebugConsole.svelte';
   import Confetti from '$lib/components/Confetti.svelte';
 
@@ -252,9 +253,11 @@
     {:else if activeTab === 'mesh'}
       <MeshTab />
     {:else if activeTab === 'addrbook'}
-      <div style="padding: 24px; max-width: 900px; margin: 0 auto;">
+      <div class="tab-page">
         <AddressBook />
       </div>
+    {:else if activeTab === 'gateways'}
+      <GatewaysTab />
     {:else if activeTab === 'settings'}
       <SettingsTab />
     {/if}

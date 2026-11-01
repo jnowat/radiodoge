@@ -78,7 +78,10 @@ pub fn is_online(stats: &GatewayStats, now: u64) -> bool {
 /// Merge members into one summary. Counters add up; a node heard by several
 /// gateways is listed once with every gateway that heard it.
 pub fn aggregate(members: &[FleetMember], now: u64) -> FleetSummary {
-    let mut out = FleetSummary { gateways: members.len(), ..Default::default() };
+    let mut out = FleetSummary {
+        gateways: members.len(),
+        ..Default::default()
+    };
     for m in members {
         let s = &m.stats;
         if is_online(s, now) {
@@ -109,9 +112,10 @@ pub fn aggregate(members: &[FleetMember], now: u64) -> FleetSummary {
                 n.best_rssi = t.last_rssi;
             }
         }
-        out.events.extend(
-            s.events.iter().map(|e| FleetEvent { gateway: m.label.clone(), event: e.clone() }),
-        );
+        out.events.extend(s.events.iter().map(|e| FleetEvent {
+            gateway: m.label.clone(),
+            event: e.clone(),
+        }));
     }
     out.events.sort_by_key(|e| std::cmp::Reverse(e.event.at));
     out.events.truncate(MAX_FLEET_EVENTS);
@@ -126,7 +130,10 @@ mod tests {
     fn gw(label: &str, updated: u64) -> FleetMember {
         let mut s = GatewayStats::new("COM3", 0);
         s.updated_at = updated;
-        FleetMember { label: label.into(), stats: s }
+        FleetMember {
+            label: label.into(),
+            stats: s,
+        }
     }
 
     #[test]

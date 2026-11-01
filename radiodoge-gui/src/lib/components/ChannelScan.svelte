@@ -4,6 +4,7 @@
   heard. The board always returns to the saved LoRa settings afterwards.
 -->
 <script lang="ts">
+  import { errorMessage } from '$lib/errors';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
@@ -29,7 +30,7 @@
     picked = Object.fromEntries(plan.map((c) => [c.label, true]));
   }
   onMount(() => {
-    loadPlan().catch((e) => (error = String(e)));
+    loadPlan().catch((e) => (error = errorMessage(e)));
     const un = listen<{ index: number; total: number; label?: string }>('scan-progress', (e) => (progress = e.payload));
     return () => { un.then((f) => f()); };
   });
@@ -41,7 +42,7 @@
     running = true; error = null; outcome = null; progress = null;
     try {
       outcome = await invoke<ScanOutcome>('scan_channels', { channels: chosen, dwellSecs: dwell });
-    } catch (e) { error = String(e); }
+    } catch (e) { error = errorMessage(e); }
     finally { running = false; progress = null; }
   }
   function cancel() { invoke('cancel_scan').catch(() => {}); }

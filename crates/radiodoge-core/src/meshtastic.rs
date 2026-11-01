@@ -36,8 +36,7 @@ pub const PORT_PRIVATE_APP: u32 = 256;
 
 /// Expanded default channel key (PSK index 1, "AQ==" in the Meshtastic apps).
 pub const DEFAULT_KEY: [u8; 16] = [
-    0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
-    0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01,
+    0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59, 0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +51,10 @@ impl std::fmt::Display for MeshError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TooShort => write!(f, "frame shorter than the 16-byte Meshtastic header"),
-            Self::TooLong(n) => write!(f, "encrypted payload is {n} bytes; max is {MAX_ENCRYPTED_LEN}"),
+            Self::TooLong(n) => write!(
+                f,
+                "encrypted payload is {n} bytes; max is {MAX_ENCRYPTED_LEN}"
+            ),
             Self::BadKey(n) => write!(f, "channel key must be 0, 1, 16 or 32 bytes (got {n})"),
             Self::BadProtobuf(w) => write!(f, "bad Data protobuf: {w}"),
         }
@@ -72,7 +74,10 @@ pub struct Channel {
 impl Channel {
     /// The stock public channel ("LongFast", default key).
     pub fn default_longfast() -> Self {
-        Self { name: "LongFast".into(), key: vec![1] }
+        Self {
+            name: "LongFast".into(),
+            key: vec![1],
+        }
     }
 
     pub fn expanded_key(&self) -> Result<Vec<u8>, MeshError> {
@@ -80,7 +85,9 @@ impl Channel {
             0 => Ok(vec![]),
             1 => {
                 let n = self.key[0];
-                if n == 0 { return Ok(vec![]); }
+                if n == 0 {
+                    return Ok(vec![]);
+                }
                 let mut k = DEFAULT_KEY.to_vec();
                 k[15] = k[15].wrapping_add(n - 1);
                 Ok(k)
@@ -128,15 +135,21 @@ impl Header {
     }
 
     pub fn parse(b: &[u8]) -> Result<Self, MeshError> {
-        if b.len() < HEADER_LEN { return Err(MeshError::TooShort); }
+        if b.len() < HEADER_LEN {
+            return Err(MeshError::TooShort);
+        }
         let u = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         Ok(Self {
-            to: u(0), from: u(4), id: u(8),
+            to: u(0),
+            from: u(4),
+            id: u(8),
             hop_limit: b[12] & 7,
             want_ack: b[12] & 0x08 != 0,
             via_mqtt: b[12] & 0x10 != 0,
             hop_start: b[12] >> 5,
-            channel_hash: b[13], next_hop: b[14], relay_node: b[15],
+            channel_hash: b[13],
+            next_hop: b[14],
+            relay_node: b[15],
         })
     }
 }
@@ -152,7 +165,10 @@ fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     loop {
         let byte = (v & 0x7f) as u8;
         v >>= 7;
-        if v == 0 { out.push(byte); return; }
+        if v == 0 {
+            out.push(byte);
+            return;
+        }
         out.push(byte | 0x80);
     }
 }
@@ -160,10 +176,14 @@ fn put_varint(out: &mut Vec<u8>, mut v: u64) {
 fn get_varint(b: &[u8], i: &mut usize) -> Result<u64, MeshError> {
     let mut v = 0u64;
     for shift in (0..64).step_by(7) {
-        let byte = *b.get(*i).ok_or(MeshError::BadProtobuf("truncated varint"))?;
+        let byte = *b
+            .get(*i)
+            .ok_or(MeshError::BadProtobuf("truncated varint"))?;
         *i += 1;
         v |= u64::from(byte & 0x7f) << shift;
-        if byte & 0x80 == 0 { return Ok(v); }
+        if byte & 0x80 == 0 {
+            return Ok(v);
+        }
     }
     Err(MeshError::BadProtobuf("varint too long"))
 }
@@ -187,20 +207,34 @@ impl Data {
             match wire {
                 0 => {
                     let v = get_varint(b, &mut i)?;
-                    if field == 1 { portnum = u32::try_from(v).map_err(|_| MeshError::BadProtobuf("portnum"))?; }
+                    if field == 1 {
+                        portnum =
+                            u32::try_from(v).map_err(|_| MeshError::BadProtobuf("portnum"))?;
+                    }
                 }
                 2 => {
-                    let len = usize::try_from(get_varint(b, &mut i)?).map_err(|_| MeshError::BadProtobuf("length"))?;
-                    let end = i.checked_add(len).filter(|&e| e <= b.len())
+                    let len = usize::try_from(get_varint(b, &mut i)?)
+                        .map_err(|_| MeshError::BadProtobuf("length"))?;
+                    let end = i
+                        .checked_add(len)
+                        .filter(|&e| e <= b.len())
                         .ok_or(MeshError::BadProtobuf("length past end"))?;
-                    if field == 2 { payload = b[i..end].to_vec(); }
+                    if field == 2 {
+                        payload = b[i..end].to_vec();
+                    }
                     i = end;
                 }
-                1 => { i += 8; }
-                5 => { i += 4; }
+                1 => {
+                    i += 8;
+                }
+                5 => {
+                    i += 4;
+                }
                 _ => return Err(MeshError::BadProtobuf("unsupported wire type")),
             }
-            if i > b.len() { return Err(MeshError::BadProtobuf("field past end")); }
+            if i > b.len() {
+                return Err(MeshError::BadProtobuf("field past end"));
+            }
         }
         Ok(Self { portnum, payload })
     }
@@ -218,11 +252,17 @@ fn crypt(key: &[u8], id: u32, from: u32, buf: &mut [u8]) {
 }
 
 /// Build a complete on-air frame. `header.channel_hash` is overwritten from `channel`.
-pub fn encode_frame(mut header: Header, data: &Data, channel: &Channel) -> Result<Vec<u8>, MeshError> {
+pub fn encode_frame(
+    mut header: Header,
+    data: &Data,
+    channel: &Channel,
+) -> Result<Vec<u8>, MeshError> {
     let key = channel.expanded_key()?;
     header.channel_hash = channel.hash()?;
     let mut body = data.encode();
-    if body.len() > MAX_ENCRYPTED_LEN { return Err(MeshError::TooLong(body.len())); }
+    if body.len() > MAX_ENCRYPTED_LEN {
+        return Err(MeshError::TooLong(body.len()));
+    }
     crypt(&key, header.id, header.from, &mut body);
     let mut out = header.to_bytes().to_vec();
     out.extend_from_slice(&body);
@@ -233,19 +273,41 @@ pub fn encode_frame(mut header: Header, data: &Data, channel: &Channel) -> Resul
 /// doesn't match (i.e. the packet belongs to a different channel).
 pub fn decode_frame(frame: &[u8], channel: &Channel) -> Result<Option<(Header, Data)>, MeshError> {
     let header = Header::parse(frame)?;
-    if header.channel_hash != channel.hash()? { return Ok(None); }
+    if header.channel_hash != channel.hash()? {
+        return Ok(None);
+    }
     let mut body = frame[HEADER_LEN..].to_vec();
     crypt(&channel.expanded_key()?, header.id, header.from, &mut body);
     Ok(Some((header, Data::decode(&body)?)))
 }
 
 /// Wrap a raw RadioDoge packet for relay across a Meshtastic mesh.
-pub fn wrap_radiodoge(from: u32, id: u32, radiodoge_packet: &[u8], channel: &Channel) -> Result<Vec<u8>, MeshError> {
+pub fn wrap_radiodoge(
+    from: u32,
+    id: u32,
+    radiodoge_packet: &[u8],
+    channel: &Channel,
+) -> Result<Vec<u8>, MeshError> {
     let header = Header {
-        to: BROADCAST, from, id, hop_limit: 3, hop_start: 3,
-        want_ack: false, via_mqtt: false, channel_hash: 0, next_hop: 0, relay_node: 0,
+        to: BROADCAST,
+        from,
+        id,
+        hop_limit: 3,
+        hop_start: 3,
+        want_ack: false,
+        via_mqtt: false,
+        channel_hash: 0,
+        next_hop: 0,
+        relay_node: 0,
     };
-    encode_frame(header, &Data { portnum: PORT_PRIVATE_APP, payload: radiodoge_packet.to_vec() }, channel)
+    encode_frame(
+        header,
+        &Data {
+            portnum: PORT_PRIVATE_APP,
+            payload: radiodoge_packet.to_vec(),
+        },
+        channel,
+    )
 }
 
 /// Inverse of [`wrap_radiodoge`]: `Some(packet)` only for PRIVATE_APP frames on `channel`.
@@ -293,11 +355,26 @@ pub fn bridge_text_command(
     profile: &crate::radio::RawProfile,
 ) -> Result<Vec<u8>, String> {
     let header = Header {
-        to: BROADCAST, from, id, hop_limit: 3, hop_start: 3,
-        want_ack: false, via_mqtt: false, channel_hash: 0, next_hop: 0, relay_node: 0,
+        to: BROADCAST,
+        from,
+        id,
+        hop_limit: 3,
+        hop_start: 3,
+        want_ack: false,
+        via_mqtt: false,
+        channel_hash: 0,
+        next_hop: 0,
+        relay_node: 0,
     };
-    let frame = encode_frame(header, &Data { portnum: PORT_TEXT_MESSAGE, payload: text.as_bytes().to_vec() }, channel)
-        .map_err(|e| e.to_string())?;
+    let frame = encode_frame(
+        header,
+        &Data {
+            portnum: PORT_TEXT_MESSAGE,
+            payload: text.as_bytes().to_vec(),
+        },
+        channel,
+    )
+    .map_err(|e| e.to_string())?;
     crate::radio::build_raw_tx(host, profile, &frame)
 }
 
@@ -305,9 +382,18 @@ pub fn bridge_text_command(
 pub fn bridge_decode(frame: &[u8], channel: &Channel) -> BridgeEvent {
     match decode_frame(frame, channel) {
         Ok(Some((h, d))) => match d.portnum {
-            PORT_PRIVATE_APP => BridgeEvent::RadioDoge { from: h.from, packet: d.payload },
-            PORT_TEXT_MESSAGE => BridgeEvent::Text { from: h.from, text: String::from_utf8_lossy(&d.payload).into_owned() },
-            p => BridgeEvent::Other { from: h.from, portnum: p },
+            PORT_PRIVATE_APP => BridgeEvent::RadioDoge {
+                from: h.from,
+                packet: d.payload,
+            },
+            PORT_TEXT_MESSAGE => BridgeEvent::Text {
+                from: h.from,
+                text: String::from_utf8_lossy(&d.payload).into_owned(),
+            },
+            p => BridgeEvent::Other {
+                from: h.from,
+                portnum: p,
+            },
         },
         _ => BridgeEvent::Undecodable,
     }
@@ -329,15 +415,28 @@ mod tests {
 
     #[test]
     fn bridge_round_trip_through_raw_tx() {
-        use crate::radio::{RawProfile, RAW_PROFILE_LEN}; use crate::types::NodeAddress;
+        use crate::radio::{RawProfile, RAW_PROFILE_LEN};
+        use crate::types::NodeAddress;
         let ch = Channel::default_longfast();
         let host = NodeAddress::new(1, 1, 1);
         let p = RawProfile::meshtastic_longfast_us();
         let cmd = bridge_tx_command(&host, 0x1234, 7, b"doge", &ch, &p).unwrap();
         let frame = &cmd[8 + RAW_PROFILE_LEN..];
-        assert_eq!(bridge_decode(frame, &ch), BridgeEvent::RadioDoge { from: 0x1234, packet: b"doge".to_vec() });
+        assert_eq!(
+            bridge_decode(frame, &ch),
+            BridgeEvent::RadioDoge {
+                from: 0x1234,
+                packet: b"doge".to_vec()
+            }
+        );
         let t = bridge_text_command(&host, 9, 8, "hi", &ch, &p).unwrap();
-        assert_eq!(bridge_decode(&t[8 + RAW_PROFILE_LEN..], &ch), BridgeEvent::Text { from: 9, text: "hi".into() });
+        assert_eq!(
+            bridge_decode(&t[8 + RAW_PROFILE_LEN..], &ch),
+            BridgeEvent::Text {
+                from: 9,
+                text: "hi".into()
+            }
+        );
         assert_eq!(bridge_decode(&[1, 2, 3], &ch), BridgeEvent::Undecodable);
         assert_ne!(new_packet_id(), 0);
     }
@@ -350,16 +449,32 @@ mod tests {
 
     #[test]
     fn header_roundtrip() {
-        let h = Header { to: BROADCAST, from: 0x1234_5678, id: 42, hop_limit: 3, hop_start: 7,
-            want_ack: true, via_mqtt: false, channel_hash: 8, next_hop: 1, relay_node: 2 };
+        let h = Header {
+            to: BROADCAST,
+            from: 0x1234_5678,
+            id: 42,
+            hop_limit: 3,
+            hop_start: 7,
+            want_ack: true,
+            via_mqtt: false,
+            channel_hash: 8,
+            next_hop: 1,
+            relay_node: 2,
+        };
         assert_eq!(Header::parse(&h.to_bytes()).unwrap(), h);
     }
 
     #[test]
     fn data_protobuf_known_bytes() {
-        let d = Data { portnum: PORT_TEXT_MESSAGE, payload: b"hi".to_vec() };
+        let d = Data {
+            portnum: PORT_TEXT_MESSAGE,
+            payload: b"hi".to_vec(),
+        };
         assert_eq!(d.encode(), vec![0x08, 0x01, 0x12, 0x02, b'h', b'i']);
-        let p = Data { portnum: PORT_PRIVATE_APP, payload: vec![] };
+        let p = Data {
+            portnum: PORT_PRIVATE_APP,
+            payload: vec![],
+        };
         assert_eq!(p.encode(), vec![0x08, 0x80, 0x02, 0x12, 0x00]);
         // Unknown fields (e.g. 9: emoji fixed32, 4: dest varint) are skipped.
         let mut withx = d.encode();
@@ -376,19 +491,52 @@ mod tests {
         assert_eq!(f[13], 8);
         assert!(!f[HEADER_LEN..].windows(3).any(|w| w == b"wow"));
         assert_eq!(unwrap_radiodoge(&f, &ch).unwrap(), Some(pkt.to_vec()));
-        let other = Channel { name: "Other".into(), key: vec![1] };
+        let other = Channel {
+            name: "Other".into(),
+            key: vec![1],
+        };
         assert_eq!(unwrap_radiodoge(&f, &other).unwrap(), None);
     }
 
     #[test]
     fn key_rules_and_limits() {
-        assert_eq!(Channel { name: "x".into(), key: vec![] }.expanded_key().unwrap(), Vec::<u8>::new());
-        assert_eq!(Channel { name: "x".into(), key: vec![2] }.expanded_key().unwrap()[15], 0x02);
-        assert!(Channel { name: "x".into(), key: vec![0; 5] }.expanded_key().is_err());
-        let aes256 = Channel { name: "Doge".into(), key: vec![7; 32] };
+        assert_eq!(
+            Channel {
+                name: "x".into(),
+                key: vec![]
+            }
+            .expanded_key()
+            .unwrap(),
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            Channel {
+                name: "x".into(),
+                key: vec![2]
+            }
+            .expanded_key()
+            .unwrap()[15],
+            0x02
+        );
+        assert!(Channel {
+            name: "x".into(),
+            key: vec![0; 5]
+        }
+        .expanded_key()
+        .is_err());
+        let aes256 = Channel {
+            name: "Doge".into(),
+            key: vec![7; 32],
+        };
         let f = wrap_radiodoge(1, 2, b"much", &aes256).unwrap();
-        assert_eq!(unwrap_radiodoge(&f, &aes256).unwrap(), Some(b"much".to_vec()));
-        assert!(matches!(wrap_radiodoge(1, 2, &[0; 240], &aes256), Err(MeshError::TooLong(_))));
+        assert_eq!(
+            unwrap_radiodoge(&f, &aes256).unwrap(),
+            Some(b"much".to_vec())
+        );
+        assert!(matches!(
+            wrap_radiodoge(1, 2, &[0; 240], &aes256),
+            Err(MeshError::TooLong(_))
+        ));
         assert_eq!(Header::parse(&[0; 4]), Err(MeshError::TooShort));
     }
 }

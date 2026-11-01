@@ -43,7 +43,11 @@ pub fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         .menu(&menu)
         .tooltip("RadioDoge — Wireless Dogecoin")
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                ..
+            } = event
+            {
                 // Left-click: show/focus main window
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
@@ -75,7 +79,11 @@ pub fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
 
 /// Update the tray status menu item text.
 /// Call this whenever the connection state changes.
-pub fn update_tray_status<R: Runtime>(app: &tauri::AppHandle<R>, connected: bool, port: Option<&str>) {
+pub fn update_tray_status<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    connected: bool,
+    port: Option<&str>,
+) {
     // In Tauri 2, updating menu items requires re-building the menu or
     // using a stored handle. For MVP, we use the tooltip to show status.
     let tooltip = if connected {
