@@ -15,9 +15,9 @@
 </script>
 
 <div class="tab-page wide gateways">
-  <header class="tab-head">
-    <h2>Gateways</h2>
-    <p>Live stats for the gateway on this PC and any other gateways you track. Start or stop the gateway in Settings.</p>
+  <header class="tab-header"><div>
+    <h2 class="tab-title">🛰️ Gateways</h2>
+    <p class="tab-sub">Live stats for the gateway on this PC and any other gateways you track. Start or stop the gateway in Settings.</p></div>
   </header>
   {#if connection.gatewayOnline}
     <GatewayDashboard />
@@ -31,6 +31,7 @@
 
 <style>
   .gateways { display: flex; flex-direction: column; gap: var(--sp-4); }
+  .gateways .tab-header { margin-bottom: 0; }
   .tab-head h2 { margin: 0 0 4px; font-size: var(--fs-xl); color: var(--doge-yellow); }
   .tab-head p { margin: 0; font-size: var(--fs-sm); color: var(--doge-muted); }
 </style>

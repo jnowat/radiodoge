@@ -408,3 +408,7 @@ button[title] {
 .tab-page.narrow { max-width: 640px; }
 .tab-page.wide { max-width: 1040px; }
 @media (max-width: 640px) { .tab-page { padding: var(--sp-4) var(--sp-3); } }
+/* Shared tab header: title + one-line description, optional actions on the right. */
+.tab-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-6); }
+.tab-title { margin: 0 0 var(--sp-1); font-size: var(--fs-xl); font-weight: 700; color: var(--doge-text); }
+.tab-sub { margin: 0; font-size: var(--fs-base); color: var(--doge-muted); }

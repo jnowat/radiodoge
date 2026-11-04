@@ -161,10 +161,10 @@
   {/if}
 
   <!-- ── Header ───────────────────────────────────────────────────────────── -->
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 10px;">
+  <div class="tab-header">
     <div>
-      <h2 style="margin: 0; font-size: var(--fs-lg); font-weight: 700;">🕸️ Mesh Neighbors</h2>
-      <p style="margin: 4px 0 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
+      <h2 class="tab-title">🕸️ Mesh Neighbors</h2>
+      <p class="tab-sub">
         Nodes recently heard on the LoRa mesh · auto-refreshes every 5 s
         {#if lastRefreshed}
           · last updated {relativeTime(lastRefreshed / 1000)}

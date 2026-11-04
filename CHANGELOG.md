@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.51] - 2026-11-03
+
+### Changed
+- Visual polish: every tab header (Send, Wallet, Radio log, History, Mesh, Addresses, Settings, Gateways) now uses shared `.tab-header` / `.tab-title` / `.tab-sub` styles, so titles, descriptions and spacing match across tabs instead of three slightly different inline variants.
+- The footer debug-console toggle moved from a long inline style to a scoped class, gaining a hover state and a visible keyboard focus ring.
+
 ## [0.3.50] - 2026-11-03
 
 ### Added

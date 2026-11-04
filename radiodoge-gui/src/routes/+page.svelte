@@ -287,18 +287,8 @@
         onclick={toggleDebugConsole}
         aria-label="Toggle debug console"
         title="Toggle Debug Console (Ctrl+Shift+D)"
-        style="
-          background: {debugVisible ? 'rgba(245, 197, 24, 0.15)' : 'transparent'};
-          border: 1px solid {debugVisible ? 'var(--doge-yellow)' : 'transparent'};
-          border-radius: 4px;
-          color: {debugVisible ? 'var(--doge-yellow)' : 'var(--doge-subtle)'};
-          cursor: pointer;
-          font-size: var(--fs-2xs);
-          padding: 2px 7px;
-          font-family: var(--font-mono);
-          transition: all 0.15s;
-          flex-shrink: 0;
-        "
+        class="debug-toggle"
+        class:on={debugVisible}
       >
         🐛
       </button>
@@ -419,4 +409,12 @@
   @media (max-width: 520px) {
     .footer-slogan { display: none; }
   }
+  .debug-toggle {
+    background: transparent; border: 1px solid transparent; border-radius: 4px;
+    color: var(--doge-subtle); cursor: pointer; font-size: var(--fs-2xs);
+    padding: 2px 7px; font-family: var(--font-mono); transition: all 0.15s; flex-shrink: 0;
+  }
+  .debug-toggle:hover { color: var(--doge-text); }
+  .debug-toggle.on { background: rgba(245, 197, 24, 0.15); border-color: var(--doge-yellow); color: var(--doge-yellow); }
+  .debug-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 </style>

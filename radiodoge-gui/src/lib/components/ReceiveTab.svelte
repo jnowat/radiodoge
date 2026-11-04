@@ -125,10 +125,10 @@
 <div class="tab-page wide">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+  <div class="tab-header">
     <div>
-      <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">📡 Live Packet Log</h2>
-      <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
+      <h2 class="tab-title">📡 Live Packet Log</h2>
+      <p class="tab-sub">
         All LoRa traffic — TX (↑ sent) and RX (↓ received)
       </p>
     </div>
