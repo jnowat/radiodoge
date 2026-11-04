@@ -1700,7 +1700,22 @@ async fn query_mac(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
 pub fn run() {
     env_logger::init();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Desktop (Windows) only: a second launch focuses the running window instead of
+    // opening another copy that would fight over the serial port, and the window
+    // reopens at the size and position it was closed at.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_window_state::Builder::default().build());
+    builder
         // Core plugins
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -1799,7 +1814,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             tray::setup_tray(app)?;
-            log::info!("RadioDoge GUI v0.3.16 started — much mesh, very wow 🐕");
+            log::info!("RadioDoge GUI v{} started", env!("CARGO_PKG_VERSION"));
             Ok(())
         })
         .build(tauri::generate_context!())

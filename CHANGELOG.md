@@ -11,10 +11,28 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
-## [0.3.49] - 2026-10-26
+## [0.3.52] - 2026-11-03
 
-### Security
-- Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+### Docs
+- User manual: the navigation table now lists all ten tabs in their Device / Wallet / App groups, including the new **Gateways** tab and the **Radio log** label (formerly Receive), and a new Gateways section explains the live stats and Gateway Fleet views that moved out of Settings.
+- User manual: notes that the Windows app runs as a single instance and remembers its window size and position.
+- README and CONTRIBUTING now point to `scripts/check.ps1` as the pre-push gate, and the README test count is current (161).
+- The [Unreleased] note now names #71 (which replaces #40) as the firmware REST auth change awaiting hardware validation.
+
+## [0.3.51] - 2026-11-03
+
+### Changed
+- Visual polish: every tab header (Send, Wallet, Radio log, History, Mesh, Addresses, Settings, Gateways) now uses shared `.tab-header` / `.tab-title` / `.tab-sub` styles, so titles, descriptions and spacing match across tabs instead of three slightly different inline variants.
+- The footer debug-console toggle moved from a long inline style to a scoped class, gaining a hover state and a visible keyboard focus ring.
+
+## [0.3.50] - 2026-11-03
+
+### Added
+- Windows/desktop: only one copy of RadioDoge runs at a time. Launching it again (Start menu, shortcut, tray) brings the existing window to the front instead of opening a second copy that would fight over the serial port.
+- Windows/desktop: the window reopens at the size, position and maximized state it was closed at.
+
+### Fixed
+- The startup log line printed a stale hard-coded version (v0.3.16); it now prints the real app version.
 
 ## [0.3.48] - 2026-10-27
 

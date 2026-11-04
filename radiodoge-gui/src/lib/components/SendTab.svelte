@@ -327,11 +327,11 @@
 </script>
 
 <div class="tab-page narrow">
-  <div style="margin-bottom: 24px;">
-    <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">📤 Send Dogecoin</h2>
-    <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
+  <div class="tab-header"><div>
+    <h2 class="tab-title">📤 Send Dogecoin</h2>
+    <p class="tab-sub">
       Broadcast via LoRa radio — no internet required 🚀
-    </p>
+    </p></div>
   </div>
 
   <!-- Not connected warning -->
