@@ -330,10 +330,10 @@
 <div class="tab-page">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
+  <div class="tab-header">
     <div>
-      <h2 style="margin: 0 0 4px 0; font-size: var(--fs-xl); font-weight: 700;">👛 Dogecoin Wallet</h2>
-      <p style="margin: 0; color: var(--doge-muted); font-size: var(--fs-base);">
+      <h2 class="tab-title">👛 Dogecoin Wallet</h2>
+      <p class="tab-sub">
         Generate keys, share your address, receive DOGE
       </p>
     </div>

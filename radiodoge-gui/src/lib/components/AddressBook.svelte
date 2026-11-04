@@ -101,10 +101,10 @@
 
 <div style="padding: 0 0 24px 0;">
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 10px;">
+  <div class="tab-header">
     <div>
-      <h2 style="margin: 0; font-size: var(--fs-lg); font-weight: 700;">📒 Address Book</h2>
-      <p style="margin: 4px 0 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
+      <h2 class="tab-title">📒 Address Book</h2>
+      <p class="tab-sub">
         Save labelled Dogecoin addresses · stored locally
       </p>
     </div>
