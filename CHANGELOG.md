@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.52] - 2026-11-03
+
+### Docs
+- User manual: the navigation table now lists all ten tabs in their Device / Wallet / App groups, including the new **Gateways** tab and the **Radio log** label (formerly Receive), and a new Gateways section explains the live stats and Gateway Fleet views that moved out of Settings.
+- User manual: notes that the Windows app runs as a single instance and remembers its window size and position.
+- README and CONTRIBUTING now point to `scripts/check.ps1` as the pre-push gate, and the README test count is current (161).
+- The [Unreleased] note now names #71 (which replaces #40) as the firmware REST auth change awaiting hardware validation.
+
 ## [0.3.51] - 2026-11-03
 
 ### Changed

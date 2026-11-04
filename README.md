@@ -35,7 +35,7 @@ internet on your device required. It pairs a friendly desktop/mobile app with lo
 phone or PC builds and signs a transaction locally, beams the raw bytes to a nearby Heltec node, and the mesh
 relays it — hop by hop — until it reaches a gateway node that pushes it to the Dogecoin network.
 
-> **What's real today (v0.3.51):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
+> **What's real today (v0.3.52):** the wallet generates 12-word BIP39 recovery phrases and derives keys at
 > `m/44'/3'/0'/0/0`. It builds, signs (secp256k1, `SIGHASH_ALL`), and broadcasts genuine P2PKH transactions.
 > Private keys are encrypted at rest with ChaCha20-Poly1305 + argon2id. Incoming signed transactions are
 > verified in-process. Balances, UTXOs and broadcasts go through your own Dogecoin Core node (JSON-RPC) with a public-API fallback ([chain backends](docs/BACKENDS.md)), or are relayed over LoRa by a gateway.
@@ -215,7 +215,7 @@ git clone https://github.com/jnowat/RadioDoge.git
 cd RadioDoge
 
 cargo build --workspace     # all three Rust crates
-cargo test  --workspace     # 47 unit tests, no hardware needed
+cargo test  --workspace     # 161 tests, no hardware needed
 ```
 
 ### Option C — Run the GUI with hot-reloading
@@ -484,7 +484,7 @@ estimation · Meshtastic bridging.
 
 Contributions are welcome! See [**CONTRIBUTING.md**](CONTRIBUTING.md) for the workflow, build commands, and
 coding conventions. In short: fork → branch → commit with clear messages → open a PR. Run
-`cargo test --workspace` before pushing.
+`powershell -File scripts/check.ps1` (fmt, tests, clippy, svelte-check, unit tests, privacy scan) before pushing.
 
 ---
 
