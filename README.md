@@ -215,7 +215,7 @@ git clone https://github.com/jnowat/RadioDoge.git
 cd RadioDoge
 
 cargo build --workspace     # all three Rust crates
-cargo test  --workspace     # 47 unit tests, no hardware needed
+cargo test  --workspace     # 161 tests, no hardware needed
 ```
 
 ### Option C — Run the GUI with hot-reloading
@@ -484,7 +484,7 @@ estimation · Meshtastic bridging.
 
 Contributions are welcome! See [**CONTRIBUTING.md**](CONTRIBUTING.md) for the workflow, build commands, and
 coding conventions. In short: fork → branch → commit with clear messages → open a PR. Run
-`cargo test --workspace` before pushing.
+`powershell -File scripts/check.ps1` (fmt, tests, clippy, svelte-check, unit tests, privacy scan) before pushing.
 
 ---
 

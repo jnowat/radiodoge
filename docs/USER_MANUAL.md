@@ -20,7 +20,7 @@
 4. [Connecting a board](#4-connecting-a-board)
 5. [Wallet](#5-wallet)
 6. [Sending Dogecoin](#6-sending-dogecoin)
-7. [Monitoring: Dashboard, Receive & Mesh](#7-monitoring-dashboard-receive--mesh)
+7. [Monitoring: Dashboard, Radio log, Mesh & Gateways](#7-monitoring-dashboard-radio-log-mesh--gateways)
 8. [History & Address Book](#8-history--address-book)
 9. [Settings](#9-settings)
 10. [Power-user features](#10-power-user-features)
@@ -55,7 +55,8 @@ For a real on-chain send you'll also need a **gateway** in radio range — eithe
 1. Open [Windows CI](https://github.com/jnowat/RadioDoge/actions/workflows/build-windows.yml), pick the latest
    **🪟 Windows x64 MSI** run, download the artifact zip, unzip, and run the `.msi`.
 2. If SmartScreen appears, click **More info → Run anyway** (dev builds are unsigned).
-3. Launch **RadioDoge** — the window opens on the **Connect** tab.
+3. Launch **RadioDoge** — the window opens on the **Connect** tab. Only one copy runs at a time (launching it
+   again brings the open window to the front), and the window remembers its size and position.
 
 ### Android
 
@@ -70,21 +71,22 @@ For a real on-chain send you'll also need a **gateway** in radio range — eithe
 
 ### The navigation bar
 
-Nine tabs run across the top, each with an icon:
+Ten tabs run across the top in three groups, each with an icon:
 
-| Tab | Icon | Unlocked when |
-|-----|------|---------------|
-| **Connect** | 🔌 | Always |
-| **Dashboard** | 📡 | Connected |
-| **Wallet** | 👛 | Connected |
-| **Send** | 📤 | Connected |
-| **Receive** | 📥 | Connected |
-| **History** | 📜 | Always |
-| **Mesh** | 🕸️ | Always |
-| **Addresses** | 📒 | Always |
-| **Settings** | ⚙️ | Always |
+| Group | Tab | Icon | Unlocked when |
+|-------|-----|------|---------------|
+| Device | **Connect** | 🔌 | Always |
+| Device | **Dashboard** | 📡 | Connected |
+| Device | **Mesh** | 🕸️ | Always |
+| Device | **Radio log** | 📥 | Connected |
+| Device | **Gateways** | 🛰️ | Always |
+| Wallet | **Wallet** | 👛 | Connected |
+| Wallet | **Send** | 📤 | Connected |
+| Wallet | **History** | 📜 | Always |
+| Wallet | **Addresses** | 📒 | Always |
+| App | **Settings** | ⚙️ | Always |
 
-Tabs that need a board (Dashboard, Wallet, Send, Receive) are greyed out until you connect — hovering shows
+Tabs that need a board (Dashboard, Radio log, Wallet, Send) are greyed out until you connect — hovering shows
 *"Connect to Heltec first to unlock this tab."* On connect, the app jumps to **Dashboard** automatically; on
 disconnect it returns to **Connect**; on an address conflict it jumps to **Mesh**.
 
@@ -232,7 +234,7 @@ shows *"😢 Sad! Send failed."* with the error.
 
 ---
 
-## 7. Monitoring: Dashboard, Receive & Mesh
+## 7. Monitoring: Dashboard, Radio log, Mesh & Gateways
 
 ### Dashboard 📡
 
@@ -248,7 +250,7 @@ The command center while connected:
 - **Live packet log** — a scrolling feed of TX (↑ green) and RX (↓ blue) packets with timestamp, command badge,
   source address, RSSI, decoded text or hex, and a per-row 📋 copy button.
 
-### Receive 📥
+### Radio log 📥
 
 A focused packet inspector:
 
@@ -269,6 +271,14 @@ A live map of nearby nodes:
 - A **This node** card shows your own address and neighbor count.
 - If the board detects another node using **your** address, a **Duplicate Node Address Detected!** banner
   appears (and the app auto-switches to this tab) — change your address in **Settings** to resolve it.
+
+### Gateways 🛰️
+
+The **Gateways** tab is read-only and works without a board. When gateway mode is running on this PC it shows
+the live relay stats (packets heard, transactions relayed, errors); otherwise it shows a short note pointing you to
+**Settings**, where the gateway is started and stopped. On desktop it also holds the **Gateway Fleet** view: add
+the path of another gateway's `--stats-file` to see every gateway you run side by side. (Both views used to live in
+Settings; they moved here in v0.3.48.)
 
 ---
 
@@ -314,7 +324,8 @@ not connected.
 - **Theme** — toggle **🌙 Dark** / **☀️ Light**; your choice persists across launches (dark is default).
 - **Gateway Mode** — **🌐 Start Gateway** / **🟢 Stop Gateway** toggles the board's gateway flag (persisted in
   NVS). Separately, **▶ Spawn Daemon** launches a `radiodoge-cli daemon` child process on your host and drives
-  the navbar **▶ Daemon** pill. *(These are two independent things — see the [glossary](#14-glossary).)*
+  the navbar **▶ Daemon** pill. *(These are two independent things — see the [glossary](#14-glossary).)* Live
+  gateway stats and the fleet view are on the [Gateways tab](#7-monitoring-dashboard-radio-log-mesh--gateways).
 - **BLE Advertising** — enable/disable the board's BLE advertising (firmware v0.3.16+).
 - **Board State Sync** — **🔄 Sync from Board** re-reads the board's live address, gateway, and WiFi state.
 
