@@ -9,7 +9,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.49] - 2026-10-26
+## [0.3.53] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
