@@ -11,6 +11,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.50] - 2026-11-03
+
+### Added
+- Windows/desktop: only one copy of RadioDoge runs at a time. Launching it again (Start menu, shortcut, tray) brings the existing window to the front instead of opening a second copy that would fight over the serial port.
+- Windows/desktop: the window reopens at the size, position and maximized state it was closed at.
+
+### Fixed
+- The startup log line printed a stale hard-coded version (v0.3.16); it now prints the real app version.
+
 ## [0.3.48] - 2026-10-27
 
 ### Changed
