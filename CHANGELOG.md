@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.61] - 2026-11-03
+
+### Changed
+- Shared `.field-control` form control styles in `app.css` (focus ring + mono variant). The Connect tab serial-port select and Address Book inputs now use it instead of long inline styles, matching the look of existing `.input-doge` fields.
+
 ## [0.3.60] - 2026-11-03
 
 ### Fixed

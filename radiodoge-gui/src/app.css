@@ -422,3 +422,24 @@ button[title] {
   margin-bottom: var(--sp-2);
 }
 .field-label.tight { margin-bottom: 0; }
+/* Shared text inputs / selects used on Connect, Send, Settings forms. */
+.field-control {
+  width: 100%;
+  min-width: 0;
+  background: var(--doge-dark);
+  border: 1px solid var(--doge-border);
+  border-radius: 8px;
+  color: var(--doge-text);
+  padding: 10px 12px;
+  font-size: var(--fs-base);
+  font-family: var(--font-sans);
+}
+.field-control.mono { font-family: var(--font-mono); }
+.field-control:disabled { opacity: 0.55; cursor: not-allowed; }
+.field-control:focus {
+  border-color: var(--doge-yellow);
+  box-shadow: 0 0 0 2px rgba(245, 197, 24, 0.15);
+}
+.field-control:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.field-control.placeholder { color: var(--doge-subtle); }
+.field-control::placeholder { color: var(--doge-subtle); }
