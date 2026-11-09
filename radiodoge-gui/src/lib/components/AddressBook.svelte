@@ -126,21 +126,21 @@
           aria-label="Contact label"
           placeholder="Label (e.g. 'My main wallet')"
           bind:value={newLabel}
-          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base);"
+          class="field-control"
         />
         <input
           type="text"
           aria-label="Dogecoin address"
           placeholder="Dogecoin address (starts with D)"
           bind:value={newAddress}
-          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base); font-family: var(--font-mono);"
+          class="field-control mono"
         />
         <input
           type="text"
           aria-label="Notes"
           placeholder="Notes (optional)"
           bind:value={newNotes}
-          style="padding: 9px 12px; background: var(--doge-dark); border: 1px solid var(--doge-border); border-radius: 8px; color: var(--doge-text); font-size: var(--fs-base);"
+          class="field-control"
         />
         {#if persistError && !formError}
           <p style="margin: 0; font-size: var(--fs-sm); color: #ff6060;" role="alert">

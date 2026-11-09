@@ -722,22 +722,9 @@
           bind:value={selectedPort}
           disabled={connection.isConnected || connection.isConnecting}
           title={selectedPortInfo ? `${selectedPortInfo.description} (${selectedPortInfo.name})` : 'Select a serial port'}
-          style="
-            flex: 1;
-            min-width: 0;
-            background: var(--doge-dark);
-            border: 1px solid var(--doge-border);
-            border-radius: 8px;
-            color: {selectedPort ? 'var(--doge-text)' : 'var(--doge-subtle)'};
-            padding: 10px 12px;
-            font-size: var(--fs-base);
-            font-family: var(--font-mono);
-            cursor: pointer;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            max-width: 100%;
-          "
+          class="field-control mono"
+          class:placeholder={!selectedPort}
+          style="flex: 1; cursor: pointer;"
         >
           {#if ports.length === 0}
             <option value="">No ports found — plug in Heltec!</option>
