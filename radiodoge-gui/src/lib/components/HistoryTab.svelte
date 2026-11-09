@@ -10,7 +10,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, onDestroy } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import type { TxHistoryEntry, TxInclusion } from '$lib/types';
+  import type { AddressBookEntry, TxHistoryEntry, TxInclusion } from '$lib/types';
   import { formatTimestamp } from '$lib/types';
 
   let history = $state<TxHistoryEntry[]>([]);
@@ -77,6 +77,36 @@
       copiedTx[idx] = true;
       setTimeout(() => { copiedTx[idx] = false; }, 1500);
     } catch { /* sandboxed / permission denied — fail silently */ }
+  }
+
+  let bookNotes = $state<Record<number, string>>({});
+  let bookBusy = $state<Record<number, boolean>>({});
+
+  async function saveHistoryAddr(addr: string, memo: string | undefined, idx: number) {
+    bookNotes[idx] = '';
+    bookBusy[idx] = true;
+    try {
+      const raw = await invoke<AddressBookEntry[]>('load_address_book');
+      const entries = raw ?? [];
+      if (entries.some((e) => e.address === addr)) {
+        bookNotes[idx] = 'Already in Address Book';
+        return;
+      }
+      const label = (memo?.trim() || `History ${addr.slice(0, 6)}…${addr.slice(-4)}`).slice(0, 64);
+      const entry: AddressBookEntry = {
+        id: String(Date.now()),
+        label,
+        address: addr,
+        createdAt: Math.floor(Date.now() / 1000),
+        notes: memo?.trim() || undefined,
+      };
+      await invoke('save_address_book', { entries: [entry, ...entries] });
+      bookNotes[idx] = `Saved as "${label}"`;
+    } catch (e: unknown) {
+      bookNotes[idx] = errorMessage(e);
+    } finally {
+      bookBusy[idx] = false;
+    }
   }
 </script>
 
@@ -218,7 +248,20 @@
             >
               {copiedTx[i] ? '✅' : '📋'}
             </button>
+            <button
+              type="button"
+              onclick={() => void saveHistoryAddr(entry.toAddress, entry.memo, i)}
+              disabled={!!bookBusy[i]}
+              class="btn-ghost"
+              title="Save recipient to the Address Book"
+              style="padding: 2px 8px; font-size: var(--fs-2xs); flex-shrink: 0;"
+            >
+              {bookBusy[i] ? '…' : 'Save'}
+            </button>
           </div>
+          {#if bookNotes[i]}
+            <p style="margin: 4px 0 0 0; font-size: var(--fs-2xs); color: var(--doge-muted);">{bookNotes[i]}</p>
+          {/if}
 
           <!-- Memo (if any) -->
           {#if entry.memo}
