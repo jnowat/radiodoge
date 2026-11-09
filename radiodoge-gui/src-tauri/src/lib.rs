@@ -441,7 +441,8 @@ async fn connect_port(
     let port_wr = port.clone();
     let gen_wr = Arc::clone(&state.connection_generation);
     tokio::spawn(async move {
-        let mut backoff = Duration::from_secs(5);
+        let mut backoff =
+            Duration::from_secs(radiodoge_core::reconnect::RECONNECT_BACKOFF_INITIAL_SECS);
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
             // This watchdog belongs to one connection. If the user has since
@@ -454,7 +455,8 @@ async fn connect_port(
                 break;
             }
             if serial_wr.is_connected() {
-                backoff = Duration::from_secs(5);
+                backoff =
+                    Duration::from_secs(radiodoge_core::reconnect::RECONNECT_BACKOFF_INITIAL_SECS);
                 continue;
             }
 
@@ -511,13 +513,17 @@ async fn connect_port(
                     );
                     #[cfg(desktop)]
                     tray::update_tray_status(&app_wr, true, Some(&port_wr));
-                    backoff = Duration::from_secs(5);
+                    backoff = Duration::from_secs(
+                        radiodoge_core::reconnect::RECONNECT_BACKOFF_INITIAL_SECS,
+                    );
                     log::info!("Auto-reconnect: reconnected to {}", port_wr);
                 }
                 Err(e) => {
                     log::warn!("Auto-reconnect failed: {} — retrying in {:?}", e, backoff);
                     tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(Duration::from_secs(60));
+                    backoff = Duration::from_secs(
+                        radiodoge_core::reconnect::next_reconnect_backoff_secs(backoff.as_secs()),
+                    );
                 }
             }
         }

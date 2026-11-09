@@ -11,10 +11,32 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.77] - 2026-11-03
+## [0.3.80] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.79] - 2026-11-03
+
+### Added
+- `scripts/build-android.ps1`: local Bohr/dev Android APK build that mirrors CI (`tauri icon` → `android init --ci` → JitPack + BLE manifest patches → `tauri android build --apk --debug`). Optional `-OutDir` copies the APK(s); does not commit `gen/android`.
+### Docs
+- CONTRIBUTING mentions the Android build script.
+
+## [0.3.78] - 2026-11-03
+
+### Changed
+- Desktop auto-reconnect backoff (5→10→20→40→60 s) lives in `radiodoge-core::reconnect` and the GUI watchdog uses those helpers, so the schedule cannot drift from the docs.
+### Added
+- Unit tests for `next_reconnect_backoff_secs` (165 workspace tests).
+
+## [0.3.77] - 2026-11-03
+
+### Fixed
+- Error hint for invalid addresses now says RadioDoge expects mainnet P2PKH `D…` addresses (not "D, A or 9").
+### Added
+- Actionable hints for common Windows USB/serial failures (semaphore timeout / os error 121, device not functioning / os error 31, vanished COM port) and gateway-daemon exit, matched *before* the generic "timeout" hint so they are not swallowed.
+- Unit tests covering the new hints.
 
 ## [0.3.76] - 2026-11-03
 
