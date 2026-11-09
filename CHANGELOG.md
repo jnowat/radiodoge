@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.75] - 2026-11-03
+
+### Changed
+- Radio log / Dashboard `commandName()` (and Receive-tab tooltips) now label FW12–FW14 opcodes (`0x29`–`0x30`: RX ACK/PING, raw LoRa, discover, signal frames) instead of falling through to `CMD(0x…)`.
+### Added
+- Frontend unit tests for `nodeAddressToString`, `mapUrl`, `rssiToBars`, and `commandName` (22 unit tests total).
+
 ## [0.3.74] - 2026-11-03
 
 ### Changed
