@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.67] - 2026-11-03
+
+### Fixed
+- Removed invalid `build.windows` from `tauri.conf.json` (Tauri 2 schema rejects it and `tauri build` failed with "Additional properties are not allowed"). Static VC runtime remains configured via `tauri_build::WindowsAttributes::static_vc_runtime` in `build.rs`.
+
 ## [0.3.65] - 2026-11-03
 
 ### Changed
