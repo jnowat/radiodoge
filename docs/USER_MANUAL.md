@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.84 · Heltec V3 firmware v0.3.8*
+*App v0.3.85 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.84`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.85`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
@@ -205,7 +205,7 @@ app nudges you: *"Your saved wallet uses an old unencrypted format — click Sav
 
 Open the **Send** tab (needs a connection *and* a loaded wallet).
 
-1. **Recipient Address** - paste a Dogecoin address or a BIP21 `dogecoin:` payment URI (Paste button or Ctrl+V). A URI fills address, amount, and memo when those query params are present. Live validation still requires a 34-character `D…` address.
+1. **Recipient Address** - paste a Dogecoin address or a BIP21 dogecoin: payment URI (Paste button or Ctrl+V), or pick a saved contact with **Book**. A URI fills address, amount, and memo when those query params are present. Live validation still requires a 34-character D… address.
 2. **Amount (DOGE)** — any amount > 0 (step `0.00000001`).
 3. **Memo** *(optional)* — up to 100 characters. *(The memo rides in the LoRa packet; it is ignored when the CLI
    signs a real transaction with `--wif`.)*

@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.85] - 2026-11-03
+
+### Added
+- Send tab **Book** button: pick a saved Address Book contact into the recipient (and memo from the label when empty).
+### Docs
+- USER_MANUAL Sending notes the Book picker.
+- CONTRIBUTING documents Android `-Release` / arm64 / versioned OutDir (missed in #110).
+
 ## [0.3.84] - 2026-11-03
 
 ### Added
