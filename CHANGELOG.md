@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.96] - 2026-11-09
+
+### Fixed
+- `patch_manifest.py` no longer writes a non-UTF-8 em dash into `AndroidManifest.xml`, which broke Android release builds (`tauri-plugin-serialplugin` requires UTF-8).
+
 ## [0.3.95] - 2026-11-09
 
 ### Tests

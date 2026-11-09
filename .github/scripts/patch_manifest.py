@@ -16,24 +16,24 @@ path = Path(
 )
 
 if not path.exists():
-    print(f"WARNING: {path} not found — skipping BT permission patch",
+    print(f"WARNING: {path} not found - skipping BT permission patch",
           file=sys.stderr)
     sys.exit(0)
 
 content = path.read_text()
 
 if "BLUETOOTH_CONNECT" in content:
-    print("Bluetooth permissions already present — no patch needed")
+    print("Bluetooth permissions already present - no patch needed")
     sys.exit(0)
 
 bt_perms = (
-    "    <!-- Bluetooth BLE permissions (v0.3.11 — tauri-plugin-blec) -->\n"
+    "    <!-- Bluetooth BLE permissions (v0.3.11 - tauri-plugin-blec) -->\n"
     '    <uses-permission android:name="android.permission.BLUETOOTH"'
     ' android:maxSdkVersion="30" />\n'
     '    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n'
     '    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\n'
     '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n'
-    # v0.3.20 — Share my location (navigator.geolocation). Android 12+ requires
+    # v0.3.20 - Share my location (navigator.geolocation). Android 12+ requires
     # COARSE alongside FINE so the user can choose approximate location.
     '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n'
 )
