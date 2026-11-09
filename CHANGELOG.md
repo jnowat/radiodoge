@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.88] - 2026-11-03
+
+### Added
+- Send tab **Save** button: add the current recipient to the Address Book (Memo used as the label when set; skips duplicates).
+### Docs
+- USER_MANUAL Sending notes Save-to-Book.
+
 ## [0.3.87] - 2026-11-03
 
 ### Fixed
