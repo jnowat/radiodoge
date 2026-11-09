@@ -11,14 +11,30 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.104] - unreleased (draft #71)
+## [0.3.108] - 2026-11-09
 
-### Security
-- Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user 
-adiodoge, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+### Added
+- Unit tests for daemon `write_atomic` / `write_stats_file` (temp→rename JSON snapshots, no leftover `.tmp`).
 
-### Changed
-- Renumbered above default after v0.3.103 batch; firmware HTTP Basic auth still awaiting hardware validation.
+## [0.3.107] - 2026-11-09
+
+### Added
+- Address Book **Export JSON** / **Import JSON** for backup and moving labelled addresses between machines.
+
+## [0.3.106] - 2026-11-09
+
+### Added
+- `radiodoge-cli fee --json`: machine-readable fee rate (and full estimate when `--from`/`--amount` are set).
+
+## [0.3.105] - 2026-11-09
+
+### Added
+- `radiodoge-cli discover` prints an **SNR** column when the board reported it, and accepts `--json` for machine-readable neighbor rows (`address`, `rssi`, `snr`, `lastSeen`).
+
+## [0.3.104] - 2026-11-09
+
+### Added
+- Mesh tab neighbor table and map tooltips show **SNR** (dB) when the board reported it (FW13+ ACK_SIGNAL / FW14+ RX_SIGNAL), alongside RSSI.
 
 ## [0.3.103] - 2026-11-09
 

@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
         }
         Commands::Receive { port, timeout } => cmd_receive(&port, timeout).await,
         Commands::Ping { port } => cmd_ping(&port).await,
-        Commands::Discover { port, listen } => cmd_discover(&port, listen).await,
+        Commands::Discover { port, listen, json } => cmd_discover(&port, listen, json).await,
         Commands::Info { port, expect } => cmd_info(&port, expect.as_deref()).await,
         Commands::SetAddress { port, address } => cmd_set_address(&port, &address).await,
         Commands::Message {
@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
             amount,
             fee,
         } => cmd_broadcast(&wif, &to_address, amount, fee).await,
-        Commands::Fee { from, amount } => cmd_fee(from.as_deref(), amount).await,
+        Commands::Fee { from, amount, json } => cmd_fee(from.as_deref(), amount, json).await,
     };
     if let Err(e) = &result {
         // `{:#}` keeps the whole context chain on one line.
@@ -176,20 +176,47 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_fee(from: Option<&str>, amount: Option<f64>) -> Result<()> {
+async fn cmd_fee(from: Option<&str>, amount: Option<f64>, json: bool) -> Result<()> {
     let rate = wallet::network_fee_rate().await;
-    println!(
-        "Network fee rate: {:.8} DOGE per started kB",
-        rate as f64 / 1e8
-    );
     if let (Some(addr), Some(amt)) = (from, amount) {
         if !wallet::is_valid_address(addr) {
             anyhow::bail!("Invalid Dogecoin address: {}", addr);
         }
         let est = wallet::estimate_fee(addr, amt).await?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "from": addr,
+                    "amountDoge": amt,
+                    "rateKoinusPerKb": rate,
+                    "feeDoge": est.fee_doge,
+                    "inputs": est.inputs,
+                    "sizeBytes": est.size_bytes,
+                }))?
+            );
+        } else {
+            println!(
+                "Network fee rate: {:.8} DOGE per started kB",
+                rate as f64 / 1e8
+            );
+            println!(
+                "Sending {:.8} DOGE from {}: ~{} B, {} input(s), fee {:.8} DOGE",
+                amt, addr, est.size_bytes, est.inputs, est.fee_doge
+            );
+        }
+    } else if json {
         println!(
-            "Sending {:.8} DOGE from {}: ~{} B, {} input(s), fee {:.8} DOGE",
-            amt, addr, est.size_bytes, est.inputs, est.fee_doge
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "rateKoinusPerKb": rate,
+                "rateDogePerKb": rate as f64 / 1e8,
+            }))?
+        );
+    } else {
+        println!(
+            "Network fee rate: {:.8} DOGE per started kB",
+            rate as f64 / 1e8
         );
     }
     Ok(())
@@ -964,29 +991,53 @@ async fn cmd_info(port: &str, expect: Option<&str>) -> Result<()> {
 }
 
 /// Broadcast a discovery PING and list the nodes that answer.
-async fn cmd_discover(port: &str, listen: u64) -> Result<()> {
+async fn cmd_discover(port: &str, listen: u64, json: bool) -> Result<()> {
     let listen = listen.clamp(1, 30);
     let manager = open_board(port).await?;
     let me = manager.get_node_address().await;
-    println!(
-        "📡 Discovering from {} (listening {} s)...",
-        me.to_display_string(),
-        listen
-    );
+    if !json {
+        println!(
+            "📡 Discovering from {} (listening {} s)...",
+            me.to_display_string(),
+            listen
+        );
+    }
     let found = manager
         .discover_nodes(std::time::Duration::from_secs(listen))
         .await?;
-    if found.is_empty() {
+    if json {
+        let rows: Vec<serde_json::Value> = found
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "address": n.address.to_display_string(),
+                    "rssi": n.rssi,
+                    "snr": n.snr,
+                    "lastSeen": n.last_seen,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else if found.is_empty() {
         println!("No nodes answered. Nodes need firmware with discovery support and the same LoRa settings.");
     } else {
-        println!("{:<14} {:>9}", "NODE", "RSSI");
+        println!("{:<14} {:>9} {:>8}", "NODE", "RSSI", "SNR");
         for n in &found {
             let rssi = if n.rssi == 0 {
                 "n/a".to_string()
             } else {
                 format!("{} dBm", n.rssi)
             };
-            println!("{:<14} {:>9}", n.address.to_display_string(), rssi);
+            let snr = match n.snr {
+                Some(v) => format!("{v} dB"),
+                None => "—".to_string(),
+            };
+            println!(
+                "{:<14} {:>9} {:>8}",
+                n.address.to_display_string(),
+                rssi,
+                snr
+            );
         }
         println!("{} node(s) found", found.len());
     }
