@@ -9,10 +9,29 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.58] - 2026-11-03
+## [0.3.62] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.61] - 2026-11-03
+
+### Changed
+- Shared `.field-control` form control styles in `app.css` (focus ring + mono variant). The Connect tab serial-port select and Address Book inputs now use it instead of long inline styles, matching the look of existing `.input-doge` fields.
+
+## [0.3.60] - 2026-11-03
+
+### Fixed
+- Windows build: declare `build.windows.staticVCRuntime` in `tauri.conf.json` and set it through `tauri_build::WindowsAttributes::static_vc_runtime` in `build.rs`, the supported replacements for the deprecated `STATIC_VCRUNTIME` env var (tauri-cli may still set that env; the config/API path is now explicit).
+### Docs
+- ROADMAP's open firmware-auth item now points at draft #71 as **v0.3.58** (was a stale v0.3.53 label).
+
+## [0.3.59] - 2026-11-03
+
+### Added
+- Frontend unit tests for chain-backend spec parsing (`normalizeBackendSpec` / `validateBackendSpec`), covering aliases (`core`/`rpc`/`dogecoind`), unknown names, and `blockbook=` URL requirements — 7 new cases (13 unit tests total).
+### Changed
+- Settings: applying a chain-backend spec now normalizes and validates locally (same rules as Rust `parse_backends`) before calling the backend, so typos surface immediately instead of as a vague invoke error.
 
 ## [0.3.57] - 2026-11-03
 

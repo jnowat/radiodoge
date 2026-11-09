@@ -1,13 +1,16 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RadioDoge",
-  "version": "0.3.58",
+  "version": "0.3.62",
   "identifier": "com.jnowat.radiodoge",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build",
+    "windows": {
+      "staticVCRuntime": true
+    }
   },
   "app": {
     "windows": [
@@ -38,7 +41,7 @@
       "icons/icon.ico"
     ],
     "resources": [],
-    "copyright": "© 2026 RadioDoge Contributors",
+    "copyright": "\u00a9 2026 RadioDoge Contributors",
     "category": "Finance",
     "shortDescription": "Wireless P2P Dogecoin transactions over LoRa radio",
     "longDescription": "RadioDoge lets you send and receive Dogecoin over LoRa radio waves with no internet required. Uses Heltec ESP32 boards and the official Dogecoin network.",
