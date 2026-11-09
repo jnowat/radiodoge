@@ -18,6 +18,7 @@
   import { wallet, loadWallet, togglePrivateKeyVisibility } from '$lib/stores/wallet.svelte';
   import QRCode from './QRCode.svelte';
   import DogeSpinner from './DogeSpinner.svelte';
+  import EmptyState from './EmptyState.svelte';
 
   // Register the gateway-balance listener unconditionally so any wallet (saved or freshly
   // generated) receives BAL responses from the LoRa gateway.  Uses the Promise-capture
@@ -534,21 +535,12 @@
 
   <!-- ── Empty state ──────────────────────────────────────────────────────── -->
   {#if !wallet.isGenerated}
-    <div style="
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 60px 20px;
-      text-align: center;
-      color: var(--doge-muted);
-    ">
-      <div style="font-size: 4rem; margin-bottom: 16px;" aria-hidden="true">👛</div>
-      <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">No wallet yet</h3>
-      <p style="margin: 0 0 24px 0; font-size: var(--fs-base);">
-        Click "Generate Wallet" to create a fresh Dogecoin address.<br/>
-        Much security. Very cryptography. Wow.
-      </p>
+    <EmptyState
+      size="lg"
+      icon="👛"
+      title="No wallet yet"
+      hint="Click Generate Wallet to create a fresh Dogecoin address. Much security. Very cryptography. Wow."
+    >
       <button
         onclick={generateWallet}
         class="btn-doge"
@@ -557,7 +549,7 @@
       >
         🎲 Generate Wallet
       </button>
-    </div>
+    </EmptyState>
 
   {:else}
     <!-- ── Wallet content ────────────────────────────────────────────────── -->

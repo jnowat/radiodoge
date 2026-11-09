@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.68] - 2026-11-03
+
+### Changed
+- Shared `EmptyState` now accepts an optional children snippet (action row under the hint).
+- Radio log (Receive) disconnected / listening empties and Wallet "No wallet yet" use `EmptyState` (with Generate Wallet as the action), matching Dashboard / History / Mesh / Gateways.
+
 ## [0.3.67] - 2026-11-03
 
 ### Fixed
