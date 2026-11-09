@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.55] - 2026-11-03
+
+### Changed
+- Connect tab: the hero (logo, title, tagline) moved from a long stack of inline styles to scoped `.connect-hero*` classes, and both the Android and desktop "Connect to Heltec Device" headings use the shared `.tab-title` class so they match every other tab.
+
 ## [0.3.54] - 2026-11-03
 
 ### Added
