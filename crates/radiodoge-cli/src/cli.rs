@@ -485,4 +485,13 @@ pub(crate) enum FleetCommands {
         #[arg(long, default_value = "127.0.0.1:8787")]
         bind: String,
     },
+
+    /// Print one aggregated fleet summary JSON to stdout (no HTTP server)
+    ///
+    /// Same `{ now, gateways, summary }` shape as `fleet serve` / the GUI.
+    Summary {
+        /// Directory of gateway `--stats-file` JSON snapshots
+        #[arg(long)]
+        dir: std::path::PathBuf,
+    },
 }
