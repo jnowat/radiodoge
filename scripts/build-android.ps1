@@ -48,7 +48,38 @@ Write-Host "== patch JitPack + BLE permissions =="
 python .github/scripts/patch_jitpack.py
 python .github/scripts/patch_manifest.py
 
+# Cargo android target dir (shared Bohr cache or default).
+$cargoTarget = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo "target" }
+
+function Install-JniLibsFromCargo {
+    # Tauri tries to symlink libradiodoge_gui_lib.so into jniLibs; Windows without
+    # Developer Mode rejects that. Copy instead so Gradle can package the APK.
+    $map = @{
+        "aarch64-linux-android"   = "arm64-v8a"
+        "armv7-linux-androideabi" = "armeabi-v7a"
+        "i686-linux-android"      = "x86"
+        "x86_64-linux-android"    = "x86_64"
+    }
+    $profile = if ($Release) { "release" } else { "debug" }
+    $jniRoot = Join-Path $repo "radiodoge-gui/src-tauri/gen/android/app/src/main/jniLibs"
+    $copied = 0
+    foreach ($triple in $map.Keys) {
+        $src = Join-Path $cargoTarget "$triple\$profile\libradiodoge_gui_lib.so"
+        if (-not (Test-Path $src)) { continue }
+        $destDir = Join-Path $jniRoot $map[$triple]
+        New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+        $dest = Join-Path $destDir "libradiodoge_gui_lib.so"
+        # Remove a broken symlink left by tauri, then copy.
+        if (Test-Path $dest) { Remove-Item -Force $dest }
+        Copy-Item -Force $src $dest
+        Write-Host "Copied JNI lib $($map[$triple]) from $src"
+        $copied++
+    }
+    if ($copied -eq 0) { throw "No libradiodoge_gui_lib.so found under $cargoTarget for android triples." }
+}
+
 Push-Location radiodoge-gui
+$tauriExit = 0
 try {
     $env:CARGO_INCREMENTAL = "0"
     if ($Release) {
@@ -58,11 +89,25 @@ try {
         Write-Host "== tauri android build --apk --debug =="
         npm run tauri -- android build --apk --debug --verbose
     }
-    if ($LASTEXITCODE -ne 0) { throw "tauri android build failed with exit $LASTEXITCODE" }
+    $tauriExit = $LASTEXITCODE
 } finally { Pop-Location }
 
-$apks = Get-ChildItem "radiodoge-gui/src-tauri/gen/android" -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue
-if (-not $apks) { throw "Build finished but no APK was found under gen/android." }
+$apks = @(Get-ChildItem "radiodoge-gui/src-tauri/gen/android" -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue)
+if ($tauriExit -ne 0 -or $apks.Count -eq 0) {
+    Write-Host "== symlink fallback: copy .so into jniLibs + gradle assemble =="
+    Install-JniLibsFromCargo
+    $gradlew = Join-Path $repo "radiodoge-gui/src-tauri/gen/android/gradlew.bat"
+    if (-not (Test-Path $gradlew)) { throw "gradlew.bat missing; tauri android init may have failed." }
+    Push-Location (Join-Path $repo "radiodoge-gui/src-tauri/gen/android")
+    try {
+        $task = if ($Release) { ":app:assembleRelease" } else { ":app:assembleDebug" }
+        & .\gradlew.bat $task --no-daemon
+        if ($LASTEXITCODE -ne 0) { throw "gradle $task failed with exit $LASTEXITCODE" }
+    } finally { Pop-Location }
+    $apks = @(Get-ChildItem "radiodoge-gui/src-tauri/gen/android" -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue)
+}
+
+if ($apks.Count -eq 0) { throw "Build finished but no APK was found under gen/android." }
 $apks | ForEach-Object { Write-Host "APK: $($_.FullName) ($([math]::Round($_.Length/1MB, 2)) MiB)" }
 
 if ($OutDir) {
