@@ -30,8 +30,9 @@ mod tray;
 
 use radiodoge_core::serial::SerialManager;
 use radiodoge_core::types::{
-    BoardSettings, ConnectionStatusEvent, IncomingPacket, LoraSettings, NeighborEntry, NodeAddress,
-    PortInfo, RadioStats, SendOutcome, TransactionRequest, TxHistoryEntry, WalletInfo,
+    is_incoming_doge_tx, BoardSettings, ConnectionStatusEvent, IncomingPacket, LoraSettings,
+    NeighborEntry, NodeAddress, PortInfo, RadioStats, SendOutcome, TransactionRequest,
+    TxHistoryEntry, WalletInfo,
 };
 use radiodoge_core::{radio, tx_reply, wallet};
 
@@ -253,21 +254,6 @@ async fn list_ports() -> Result<Vec<String>, String> {
 #[tauri::command]
 async fn list_ports_detailed() -> Result<Vec<PortInfo>, String> {
     Ok(SerialManager::list_ports_with_info())
-}
-
-/// `true` when a `CMD_DOGE_TX` packet is an actual incoming transaction rather
-/// than the board's own acknowledgement of one we just sent.
-///
-/// The board answers every `0x10` the host writes with an 8-byte reply carrying
-/// the same command byte and no payload. Treating that as an arrival popped a
-/// "DOGE Transaction Received!" notification on the *sender* after every send —
-/// and once per frame, so a multipart transaction produced a burst of them.
-/// A real transaction always decodes to something; the bare acknowledgement
-/// cannot.
-fn is_incoming_doge_tx(packet: &IncomingPacket) -> bool {
-    packet.command == radio::CMD_DOGE_TX
-        && !packet.payload_hex.is_empty()
-        && packet.decoded.is_some()
 }
 
 /// Open a serial connection to the Heltec device.

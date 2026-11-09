@@ -11,10 +11,31 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.74] - 2026-11-03
+## [0.3.77] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.76] - 2026-11-03
+
+### Changed
+- Windows/desktop tray: the Status menu row now updates live on connect/disconnect (`Connected (COMx)` / `Disconnected`), matching the tooltip. Previously only the tooltip changed and the menu stayed stuck on Disconnected.
+### Docs
+- User manual notes the live tray Status line.
+
+## [0.3.75] - 2026-11-03
+
+### Changed
+- Radio log / Dashboard `commandName()` (and Receive-tab tooltips) now label FW12–FW14 opcodes (`0x29`–`0x30`: RX ACK/PING, raw LoRa, discover, signal frames) instead of falling through to `CMD(0x…)`.
+### Added
+- Frontend unit tests for `nodeAddressToString`, `mapUrl`, `rssiToBars`, and `commandName` (22 unit tests total).
+
+## [0.3.74] - 2026-11-03
+
+### Changed
+- Moved `is_incoming_doge_tx` into `radiodoge-core` (next to `IncomingPacket`) so the desktop notification guard is shared and unit-tested. Bare board ACKs (empty payload / no decode) still do not count as arrivals.
+### Added
+- 2 unit tests covering the ACK false-positive and the payload+decode requirement (163 workspace tests).
 
 ## [0.3.73] - 2026-11-03
 

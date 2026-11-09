@@ -234,6 +234,14 @@ export function commandName(cmd: number): string {
     0x26: 'GET BATTERY',
     0x27: 'GET MAC',
     0x28: 'BLE TOGGLE',
+    0x29: 'RX ACK',
+    0x2A: 'RX PING',
+    0x2B: 'RAW TX',
+    0x2C: 'RAW RX MODE',
+    0x2D: 'RAW RX',
+    0x2E: 'DISCOVER',
+    0x2F: 'RX ACK SIGNAL',
+    0x30: 'RX SIGNAL',
   };
   return map[cmd] ?? `CMD(0x${cmd.toString(16).toUpperCase()})`;
 }
