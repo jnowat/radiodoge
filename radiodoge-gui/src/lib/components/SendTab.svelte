@@ -1,5 +1,6 @@
 <script lang="ts">
   import { errorMessage } from '$lib/errors';
+  import { looksLikeDogeAddress, parsePositiveDoge, isValidOptionalFee } from '$lib/dogeForm';
   /**
    * Send tab — craft and broadcast a Dogecoin transaction over LoRa.
    */
@@ -138,22 +139,11 @@
     };
   });
 
-  // Validation
-  const isValidAddress = $derived(() => {
-    return toAddress.length === 34 && toAddress.startsWith('D');
-  });
-
-  const isValidAmount = $derived(() => {
-    const n = parseFloat(amountDoge);
-    return !isNaN(n) && n > 0;
-  });
-
+  // Validation (shared helpers — Rust still re-checks on send)
+  const isValidAddress = $derived(() => looksLikeDogeAddress(toAddress));
+  const isValidAmount = $derived(() => parsePositiveDoge(amountDoge) != null);
   /** Empty fee means "recommended"; otherwise a non-negative number. */
-  const isValidFee = $derived(() => {
-    if (!feeDoge.trim()) return true;
-    const n = parseFloat(feeDoge);
-    return !isNaN(n) && n >= 0;
-  });
+  const isValidFee = $derived(() => isValidOptionalFee(feeDoge));
 
   /** True only when ALL conditions are met — including a loaded wallet. */
   // ── Fee estimation ──────────────────────────────────────────────────────

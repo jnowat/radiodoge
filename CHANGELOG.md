@@ -9,10 +9,30 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.62] - 2026-11-03
+## [0.3.66] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.65] - 2026-11-03
+
+### Changed
+- Dashboard disconnected view now uses the shared `EmptyState` card (clear next steps) instead of a one-off centered image block, matching History / Mesh / Gateways empty states.
+
+## [0.3.64] - 2026-11-03
+
+### Added
+- Shared Send-form helpers (`looksLikeDogeAddress`, `parsePositiveDoge`, `parseOptionalFeeDoge`) with 5 unit tests (18 frontend unit tests total). Address check now also rejects non-Base58 characters; amount/fee parsing is centralized.
+### Changed
+- Send tab uses the shared helpers for enable/disable and inline validation (Rust still re-validates on send).
+
+## [0.3.63] - 2026-11-03
+
+### Fixed
+- `scripts/resolve-version.py` (and Bohr `gwt/resolve.py` / `finish.ps1`) now **preserves intentional `[Unreleased]` edits** from the branch HEAD when versioning. Previously `finish.ps1` checked out the base CHANGELOG and wiped Unreleased, which is why #82/#85's "#71 not #40" note kept reverting.
+### Docs
+- CHANGELOG [Unreleased] again names draft **#71** (replacing #40) as the firmware REST auth change awaiting hardware validation.
+- CONTRIBUTING mentions `scripts/resolve-version.py`.
 
 ## [0.3.61] - 2026-11-03
 
