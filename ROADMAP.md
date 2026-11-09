@@ -229,7 +229,7 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   enables the mode, so a board configured entirely through the web interface keeps forwarding as before. The
   web UI's *own* "send transaction" endpoint is deliberately not gated — that is the operator acting directly,
   not the board relaying someone else's traffic.
-- **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP. *Fix is in draft PR #71 (v0.3.58); waiting on hardware validation.*
+- **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP. *Fix is in draft PR #71; waiting on hardware validation.*
   Treat a firmware gateway as trusted-network only until authentication lands.
   - ✅ *The credential disclosure is fixed (v0.4.1, needs hardware validation).* `GET /api/password/status`
     returned the AP password and `GET /api/gateway/load` returned the stored gateway RPC password, both in
@@ -237,7 +237,7 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
     `is_default` and `length`, and the gateway endpoint reports `has_password`. The RPC password is write-only —
     the web UI leaves the field blank with a placeholder showing whether one is saved, and submitting it blank
     keeps the stored value rather than erasing it.
-  - 🔨 *Route authentication is in PR #40, awaiting hardware validation.* It adds a guard on all 40 handlers and stays unmerged until it is tested on a board, because a mistake locks
+  - 🔨 *Route authentication is in draft PR #71 (replaces #40), awaiting hardware validation.* It adds a guard on all 40 handlers and stays unmerged until it is tested on a board, because a mistake locks
     the operator out of their own board.
 - ~~**`radiodoge-cli --version` reports a stale `0.2.4`.**~~ *Fixed:* the CLI now derives its version from the
   crate version via clap's `version` attribute, so it always matches the package.
