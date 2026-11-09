@@ -467,7 +467,7 @@
         <!-- ── Device list ─────────────────────────────────────────────── -->
         <div style="margin-bottom: 14px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <div style="font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em;">
+            <div class="field-label tight">
               {mobileConnectTab === 'bluetooth' ? 'Bluetooth Devices' : 'USB Serial Devices'}
             </div>
             <button
@@ -713,7 +713,7 @@
 
     <!-- Port selection -->
     <div style="margin-bottom: 16px;">
-      <label for="serial-port-select" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">
+      <label for="serial-port-select" class="field-label">
         Serial Port
       </label>
       <div style="display: flex; gap: 8px; min-width: 0;">
