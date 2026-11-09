@@ -225,3 +225,37 @@ fn interleaved_ping_and_balance_request_stay_separate() {
         doge
     );
 }
+
+/// FW13+ board-initiated ACK_SIGNAL (discover reply path) reaches the host
+/// with RSSI + SNR intact — same serial ingest as live boards, no hardware.
+#[test]
+fn discover_ack_signal_snr_survives_host_ingest() {
+    use radiodoge_core::radio::{CMD_RECEIVED_ACK, CMD_RECEIVED_ACK_SIGNAL};
+
+    // cmd + flags + region/community/node + dest(4) + rssi i16 BE + snr i8 = 11
+    let pkt = [
+        CMD_RECEIVED_ACK_SIGNAL,
+        0,
+        10,
+        0,
+        2,
+        0xFF,
+        0xFF,
+        0xFF,
+        0xFF,
+        0xB5,
+        0x07,
+    ];
+    assert_eq!(pkt.len(), 11);
+
+    let packets = host_read_stream(&pkt);
+    assert_eq!(packets.len(), 1, "ACK_SIGNAL should ingest as one packet");
+    let p = &packets[0];
+    assert_eq!(
+        p.command, CMD_RECEIVED_ACK,
+        "ACK_SIGNAL folds into RECEIVED_ACK"
+    );
+    assert_eq!(p.rssi, -75);
+    assert_eq!(p.snr, Some(7));
+    assert_eq!(p.source.node, 2);
+}
