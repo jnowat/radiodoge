@@ -42,6 +42,30 @@ const HINTS: &[(&[&str], &str)] = &[
         "Couldn't reach the network. Check your internet connection and try again.",
     ),
     (
+        &[
+            "semaphore timeout",
+            "the semaphore timeout period has expired",
+            "os error 121",
+        ],
+        "The USB serial link stalled. Unplug the board, wait a second, plug it back in, and reconnect.",
+    ),
+    (
+        &[
+            "device is not functioning",
+            "the device does not recognize the command",
+            "os error 31",
+        ],
+        "Windows lost the USB device. Try a different cable or USB port, then reconnect.",
+    ),
+    (
+        &["element not found", "os error 433"],
+        "That COM port is gone. Refresh the port list and pick the Heltec again.",
+    ),
+    (
+        &["gateway daemon exited", "daemon exited", "gateway failed to start"],
+        "The gateway process stopped. Check gateway-daemon.log next to gateway-stats.json, then toggle gateway mode again.",
+    ),
+    (
         &["timed out", "timeout"],
         "No answer in time. Check the board is powered and running RadioDoge firmware (or that you're online), then retry.",
     ),
@@ -59,7 +83,7 @@ const HINTS: &[(&[&str], &str)] = &[
     ),
     (
         &["invalid wif", "invalid checksum", "invalid address", "base58"],
-        "Check the key or address for typos. Dogecoin addresses start with D, A or 9.",
+        "Check the key or address for typos. RadioDoge uses mainnet P2PKH addresses that start with D.",
     ),
 ];
 
@@ -105,6 +129,22 @@ mod tests {
             .unwrap()
             .contains("rate-limiting"));
         assert!(hint_for("The system cannot find the file specified. (os error 2)").is_some());
+        assert!(
+            hint_for("The semaphore timeout period has expired. (os error 121)")
+                .unwrap()
+                .contains("Unplug")
+        );
+        assert!(
+            hint_for("A device attached to the system is not functioning. (os error 31)")
+                .unwrap()
+                .contains("USB")
+        );
+        assert!(hint_for("gateway daemon exited with code 1")
+            .unwrap()
+            .contains("gateway-daemon.log"));
+        let addr_hint = hint_for("invalid address").unwrap();
+        assert!(addr_hint.contains("start with D"));
+        assert!(!addr_hint.contains("A or 9"));
     }
 
     #[test]
