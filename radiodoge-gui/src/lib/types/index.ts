@@ -145,6 +145,7 @@ export interface BoardSettings {
 export interface NeighborEntry {
   address: NodeAddress;
   rssi: number;
+  snr?: number | null;
   lastSeen: number; // Unix seconds
   /** v0.3.19 — Last position the node shared over the mesh. */
   position?: GeoPosition;

@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.98] - 2026-11-09
+
+### Added
+- Mesh neighbors retain LoRa **SNR** when the board reports it (FW13 `ACK_SIGNAL` / FW14 `RX_SIGNAL`). Discovery and the Mesh tab show SNR alongside RSSI; `NeighborEntry.snr` is optional for older firmware.
+
 ## [0.3.97] - 2026-11-09
 
 ### Added

@@ -232,6 +232,9 @@ pub struct NeighborEntry {
     pub address: NodeAddress,
     /// Last heard RSSI in dBm
     pub rssi: i16,
+    /// Last heard SNR in dB when the board reported it (FW13 ACK_SIGNAL / FW14 RX_SIGNAL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snr: Option<i8>,
     /// Unix timestamp (seconds) of last heard packet
     pub last_seen: u64,
     /// Last position this node shared (`POS:` message), if any.
