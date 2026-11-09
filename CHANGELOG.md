@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.104] - 2026-11-09
+
+### Added
+- Mesh tab neighbor table and map tooltips show **SNR** (dB) when the board reported it (FW13+ ACK_SIGNAL / FW14+ RX_SIGNAL), alongside RSSI.
+
 ## [0.3.103] - 2026-11-09
 
 ### Fixed
