@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.82 · Heltec V3 firmware v0.3.8*
+*App v0.3.83 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.82`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.83`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
@@ -191,7 +191,7 @@ app nudges you: *"Your saved wallet uses an old unencrypted format — click Sav
 ### The wallet cards
 
 - **Address** — monospace, with **📋 Copy** and a **📷 Show Address QR** toggle (independent of the private-key
-  reveal). The QR is a scannable PNG for sharing your receive address.
+  reveal). The QR is a scannable PNG for sharing your receive address. Optional **request amount** encodes a BIP21 `dogecoin:` URI in the QR; **Copy Payment URI** puts that URI on the clipboard for pasting into Send.
 - **Balance** — click **🔄 Check Balance** to fetch your confirmed balance from your Dogecoin node or the public fallback (shown to 8
   decimals, labelled *"🌐 Confirmed balance from your Dogecoin node (or public fallback)"*). If a gateway relays a balance to you over
   LoRa, the card updates and re-labels the source *"📡 Relayed by gateway over LoRa."*
@@ -295,8 +295,7 @@ to 8 decimals, timestamp, recipient (with copy), and any memo. It reloads automa
 
 ### Address Book 📒
 
-Save and label the addresses you send to. Click **+ Add Address**, fill in a **Label** (required), a Dogecoin
-**address** (starts with `D`), and optional **Notes**, then **💾 Save**. Entries appear in a table with copy and
+Save and label the addresses you send to. Click **+ Add Address**, fill in a **Label** (required), a Dogecoin **address** or BIP21 `dogecoin:` URI (paste extracts the address and can fill label/notes), and optional **Notes**, then **Save**. Entries appear in a table with copy and
 🗑️ remove buttons and persist immediately to `address_book.json`.
 
 ---
