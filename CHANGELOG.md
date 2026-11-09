@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.83] - 2026-11-03
+
+### Added
+- Wallet Address QR panel: optional request amount builds a BIP21 `dogecoin:` URI in the QR, plus **Copy Payment URI**.
+- Address Book accepts BIP21 URIs on paste/save (extracts address; fills label/notes from `label` when empty).
+### Docs
+- USER_MANUAL notes Wallet request-amount / payment URI copy.
+
 ## [0.3.82] - 2026-11-03
 
 ### Added

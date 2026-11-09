@@ -191,7 +191,7 @@ app nudges you: *"Your saved wallet uses an old unencrypted format — click Sav
 ### The wallet cards
 
 - **Address** — monospace, with **📋 Copy** and a **📷 Show Address QR** toggle (independent of the private-key
-  reveal). The QR is a scannable PNG for sharing your receive address.
+  reveal). The QR is a scannable PNG for sharing your receive address. Optional **request amount** encodes a BIP21 `dogecoin:` URI in the QR; **Copy Payment URI** puts that URI on the clipboard for pasting into Send.
 - **Balance** — click **🔄 Check Balance** to fetch your confirmed balance from your Dogecoin node or the public fallback (shown to 8
   decimals, labelled *"🌐 Confirmed balance from your Dogecoin node (or public fallback)"*). If a gateway relays a balance to you over
   LoRa, the card updates and re-labels the source *"📡 Relayed by gateway over LoRa."*
@@ -295,8 +295,7 @@ to 8 decimals, timestamp, recipient (with copy), and any memo. It reloads automa
 
 ### Address Book 📒
 
-Save and label the addresses you send to. Click **+ Add Address**, fill in a **Label** (required), a Dogecoin
-**address** (starts with `D`), and optional **Notes**, then **💾 Save**. Entries appear in a table with copy and
+Save and label the addresses you send to. Click **+ Add Address**, fill in a **Label** (required), a Dogecoin **address** or BIP21 `dogecoin:` URI (paste extracts the address and can fill label/notes), and optional **Notes**, then **Save**. Entries appear in a table with copy and
 🗑️ remove buttons and persist immediately to `address_book.json`.
 
 ---

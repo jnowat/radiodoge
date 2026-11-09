@@ -7,6 +7,7 @@
    */
   import { invoke } from '@tauri-apps/api/core';
   import type { AddressBookEntry } from '$lib/types';
+  import { parsePayment, looksLikeDogeAddress } from '$lib/dogeForm';
 
   let entries = $state<AddressBookEntry[]>([]);
   let isLoading = $state(true);
@@ -50,10 +51,15 @@
   }
 
   async function addEntry() {
-    const addr = newAddress.trim();
     const label = newLabel.trim();
     if (!label) { formError = 'Label is required.'; return; }
-    if (!addr.startsWith('D') || addr.length < 25 || addr.length > 35) {
+    const pasted = newAddress.trim();
+    const parsed = parsePayment(pasted);
+    const addr = parsed ? parsed.address : pasted;
+    if (parsed?.label && !newNotes.trim()) {
+      newNotes = parsed.label;
+    }
+    if (!looksLikeDogeAddress(addr) && !(addr.startsWith('D') && addr.length >= 25 && addr.length <= 35)) {
       formError = 'Invalid Dogecoin address (must start with "D").';
       return;
     }
@@ -131,8 +137,18 @@
         <input
           type="text"
           aria-label="Dogecoin address"
-          placeholder="Dogecoin address (starts with D)"
+          placeholder="Dogecoin address or dogecoin: URI"
           bind:value={newAddress}
+          onpaste={(e) => {
+            const text = e.clipboardData?.getData('text');
+            if (!text) return;
+            const p = parsePayment(text);
+            if (!p) return;
+            e.preventDefault();
+            newAddress = p.address;
+            if (p.label && !newNotes.trim()) newNotes = p.label;
+            if (p.label && !newLabel.trim()) newLabel = p.label;
+          }}
           class="field-control mono"
         />
         <input

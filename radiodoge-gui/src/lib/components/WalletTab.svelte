@@ -19,6 +19,7 @@
   import QRCode from './QRCode.svelte';
   import DogeSpinner from './DogeSpinner.svelte';
   import EmptyState from './EmptyState.svelte';
+  import { formatPaymentUri, parsePositiveDoge } from '$lib/dogeForm';
 
   // Register the gateway-balance listener unconditionally so any wallet (saved or freshly
   // generated) receives BAL responses from the LoRa gateway.  Uses the Promise-capture
@@ -42,6 +43,15 @@
 
   /** Whether the Address QR modal/panel is visible. */
   let showQR = $state(false);
+
+  /** Optional DOGE amount encoded into the receive QR / payment URI. */
+  let requestAmount = $state('');
+  const paymentUri = $derived(() => {
+    const addr = wallet.address;
+    if (!addr) return '';
+    const amt = parsePositiveDoge(requestAmount);
+    return formatPaymentUri(addr, { amount: amt }) ?? addr;
+  });
 
   // ── v0.3.6 — WIF Import ────────────────────────────────────────────────
   let showImport = $state(false);
@@ -617,20 +627,47 @@
               border-radius: 12px;
             "
           >
-            <QRCode value={wallet.address} size={200} />
-            <p style="color: var(--doge-muted); font-size: var(--fs-sm); text-align: center; margin: 0; max-width: 240px;">
-              📷 Share this QR code to receive DOGE — it is your <strong style="color: var(--doge-yellow);">public address</strong> only.<br/>
-              <span style="font-style: italic;">Much scannable. Very safe. Wow.</span>
+            <QRCode value={paymentUri()} size={200} />
+            <label for="wallet-request-amount" class="field-label" style="align-self: stretch; margin: 0;">
+              Request amount (optional)
+            </label>
+            <input
+              id="wallet-request-amount"
+              type="text"
+              inputmode="decimal"
+              placeholder="e.g. 10"
+              bind:value={requestAmount}
+              class="input-doge"
+              style="width: 100%; max-width: 240px; text-align: center;"
+              aria-label="Optional DOGE amount for payment URI"
+            />
+            <p style="color: var(--doge-muted); font-size: var(--fs-sm); text-align: center; margin: 0; max-width: 280px;">
+              Share this QR to receive DOGE — your <strong style="color: var(--doge-yellow);">public address</strong>
+              {#if parsePositiveDoge(requestAmount) != null}
+                requesting <strong style="color: var(--doge-yellow);">{parsePositiveDoge(requestAmount)} DOGE</strong>
+              {/if}.
+              <br/><span style="font-style: italic;">Much scannable. Very safe. Wow.</span>
             </p>
-            <button
-              onclick={() => copyToClipboard(wallet.address, 'addrQR')}
-              class="btn-ghost"
-              title="Copy address to clipboard"
-              aria-label="Copy address from QR panel"
-              style="font-size: var(--fs-sm); padding: 5px 16px;"
-            >
-              {copyFeedback.addrQR ? '✅ Copied!' : '📋 Copy Address'}
-            </button>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;">
+              <button
+                onclick={() => copyToClipboard(wallet.address, 'addrQR')}
+                class="btn-ghost"
+                title="Copy bare address to clipboard"
+                aria-label="Copy address from QR panel"
+                style="font-size: var(--fs-sm); padding: 5px 16px;"
+              >
+                {copyFeedback.addrQR ? 'Copied!' : 'Copy Address'}
+              </button>
+              <button
+                onclick={() => copyToClipboard(paymentUri(), 'payURI')}
+                class="btn-ghost"
+                title="Copy BIP21 dogecoin: payment URI (includes amount when set)"
+                aria-label="Copy payment URI"
+                style="font-size: var(--fs-sm); padding: 5px 16px;"
+              >
+                {copyFeedback.payURI ? 'Copied!' : 'Copy Payment URI'}
+              </button>
+            </div>
           </div>
         {/if}
       </div>
