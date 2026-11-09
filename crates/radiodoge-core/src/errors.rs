@@ -43,6 +43,29 @@ const HINTS: &[(&[&str], &str)] = &[
     ),
     (
         &[
+            "certificate",
+            "ssl",
+            "tls",
+            "native cert",
+            "certificate verify",
+            "invalid peer certificate",
+        ],
+        "TLS/SSL to the chain backend failed. Check the clock, proxy/antivirus HTTPS inspection, or try another backend in Settings.",
+    ),
+    (
+        &["usb permission", "permission has not been granted", "user denied permission"],
+        "Android needs USB permission for the board. Unplug/replug and tap Allow on the permission prompt.",
+    ),
+    (
+        &["multipart requires", "firmware too old", "requires fw", "fw11 or newer"],
+        "This send needs newer Heltec firmware (FW11+ for multipart). Flash the latest RadioDoge firmware and reconnect.",
+    ),
+    (
+        &["error decoding response", "expected value", "invalid json", "eof while parsing"],
+        "The chain backend returned something that was not valid JSON. Try again, or switch backends in Settings.",
+    ),
+    (
+        &[
             "semaphore timeout",
             "the semaphore timeout period has expired",
             "os error 121",
@@ -162,5 +185,23 @@ mod tests {
     #[test]
     fn matching_is_case_insensitive() {
         assert!(hint_for("CONNECTION REFUSED").is_some());
+    }
+
+    #[test]
+    fn tls_android_usb_and_firmware_hints() {
+        assert!(hint_for("invalid peer certificate: UnknownIssuer")
+            .unwrap()
+            .contains("TLS/SSL"));
+        assert!(hint_for("USB permission has not been granted for device")
+            .unwrap()
+            .contains("Allow"));
+        assert!(hint_for("multipart requires FW11 or newer")
+            .unwrap()
+            .contains("FW11"));
+        assert!(
+            hint_for("error decoding response body: expected value at line 1")
+                .unwrap()
+                .contains("JSON")
+        );
     }
 }

@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.86] - 2026-11-03
+
+### Added
+- Error hints for TLS/SSL certificate failures, Android USB permission denials, multipart/FW11 firmware gates, and invalid JSON from chain backends (with unit tests).
+
 ## [0.3.85] - 2026-11-03
 
 ### Added
