@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.95] - 2026-11-09
+
+### Tests
+- Mocked serial/LoRa end-to-end coverage for `CMD_PING` and `CMD_REQUEST_BALANCE` (host→board→air→gateway, BAL reply framing, interleaved streams).
+
 ## [0.3.94] - 2026-11-09
 
 ### Added
