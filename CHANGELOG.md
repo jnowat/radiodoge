@@ -11,10 +11,31 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.84] - 2026-11-03
+## [0.3.87] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.86] - 2026-11-03
+
+### Added
+- Error hints for TLS/SSL certificate failures, Android USB permission denials, multipart/FW11 firmware gates, and invalid JSON from chain backends (with unit tests).
+
+## [0.3.85] - 2026-11-03
+
+### Added
+- Send tab **Book** button: pick a saved Address Book contact into the recipient (and memo from the label when empty).
+### Docs
+- USER_MANUAL Sending notes the Book picker.
+- CONTRIBUTING documents Android `-Release` / arm64 / versioned OutDir (missed in #110).
+
+## [0.3.84] - 2026-11-03
+
+### Added
+- `scripts/build-android.ps1 -Release`: builds a minified release APK; without `ANDROID_KEY_STORE_*` env vars, `.github/scripts/patch_android_release_signing.py` points the release buildType at the debug keystore so local/sideload release APKs need no secrets in the repo.
+- Default arm64-only (`-t aarch64 --split-per-abi`); pass `-AllAbis` for every ABI. `-OutDir` copies versioned `RadioDoge_<ver>_arm64-{debug|release}.apk` names.
+### Docs
+- CONTRIBUTING documents `-Release` / `-AllAbis` / versioned OutDir names.
 
 ## [0.3.83] - 2026-11-03
 
