@@ -64,7 +64,7 @@ For firmware, open `heltec-firmware-v3/heltec-firmware-v3.ino` in Arduino IDE 2.
 2. **Make your change.** Match the surrounding style — the frontend follows the existing Svelte/TypeScript
    conventions, and Rust should be `cargo fmt`-clean.
 3. **Test it.** Run the pre-push gate, `powershell -File scripts/check.ps1` (cargo fmt check, tests, clippy `-D warnings`, svelte-check, frontend unit tests, `tauri.conf.json` schema via `tauri inspect`, and a privacy scan). On other platforms run those steps by hand;
-   at minimum `cargo test --workspace`. If you changed runtime behavior, exercise it in the app or CLI, not just
+   at minimum `cargo test --workspace`. On Windows with an Android SDK/NDK 27.x installed you can also build a debug APK locally with `powershell -File scripts/build-android.ps1` (mirrors the CI Android job; does not commit `gen/android`). If you changed runtime behavior, exercise it in the app or CLI, not just
    the tests.
 4. **Commit** with a clear, descriptive message (Conventional-Commits style is appreciated — `fix:`, `feat:`,
    `docs:`, `ci:`).
