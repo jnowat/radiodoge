@@ -1,5 +1,5 @@
 param([string]$Base = 'origin/0.0.1-Beta-1')
-# Pre-push gate: rustfmt, tests, clippy, svelte-check, JS unit tests, privacy scan.
+# Pre-push gate: rustfmt, tests, clippy, svelte-check, JS unit tests, tauri.conf schema, privacy scan.
 # Run from the repo root. Exit 0 only if every step passes.
 $ErrorActionPreference = 'Continue'
 $fail = @()
@@ -20,6 +20,13 @@ if ($LASTEXITCODE -ne 0) { $fail += 'svelte-check' }
 $u = npm run --silent test:unit 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { $fail += 'test:unit'; $u | Select-String 'not ok|Error' | select -First 10 | Out-Host }
 (($u -split "`n" | Select-String '^. (pass|fail) ') -join ' ').Trim()
+Pop-Location
+# Tauri config schema: load conf the same way `tauri build` does (~2-3s). Catches
+# invalid keys like build.windows (which broke installers after #88) without a full build.
+Push-Location radiodoge-gui
+$tc = npx tauri inspect wix-upgrade-code 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { $fail += 'tauri-conf'; $tc | Select-String 'Error|error' | select -First 8 | Out-Host }
+else { 'tauri.conf OK' }
 Pop-Location
 # Privacy scan: block WIF-shaped private keys added in this branch.
 $d = git diff "$Base...HEAD" | Select-String -Pattern '^\+.*\b[5KLQ][1-9A-HJ-NP-Za-km-z]{50,51}\b'

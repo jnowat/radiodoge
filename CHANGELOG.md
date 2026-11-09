@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.71] - 2026-11-03
+
+### Added
+- Pre-push gate (`scripts/check.ps1`) now validates `tauri.conf.json` via `npx tauri inspect wix-upgrade-code` (~2–3s). Same schema load path as `tauri build`, so invalid keys like `build.windows` (which broke installers after #88) fail the gate without a full release build.
+### Docs
+- CONTRIBUTING lists the tauri.conf schema step in the gate description.
+
 ## [0.3.70] - 2026-11-03
 
 ### Docs
