@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.81 · Heltec V3 firmware v0.3.8*
+*App v0.3.84 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.81`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.84`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
@@ -191,7 +191,7 @@ app nudges you: *"Your saved wallet uses an old unencrypted format — click Sav
 ### The wallet cards
 
 - **Address** — monospace, with **📋 Copy** and a **📷 Show Address QR** toggle (independent of the private-key
-  reveal). The QR is a scannable PNG for sharing your receive address.
+  reveal). The QR is a scannable PNG for sharing your receive address. Optional **request amount** encodes a BIP21 `dogecoin:` URI in the QR; **Copy Payment URI** puts that URI on the clipboard for pasting into Send.
 - **Balance** — click **🔄 Check Balance** to fetch your confirmed balance from your Dogecoin node or the public fallback (shown to 8
   decimals, labelled *"🌐 Confirmed balance from your Dogecoin node (or public fallback)"*). If a gateway relays a balance to you over
   LoRa, the card updates and re-labels the source *"📡 Relayed by gateway over LoRa."*
@@ -205,8 +205,7 @@ app nudges you: *"Your saved wallet uses an old unencrypted format — click Sav
 
 Open the **Send** tab (needs a connection *and* a loaded wallet).
 
-1. **Recipient Address** — paste a Dogecoin address (or use **📋 Paste**). Live validation requires exactly
-   34 characters starting with `D`; you'll see ✅ or a hint.
+1. **Recipient Address** - paste a Dogecoin address or a BIP21 `dogecoin:` payment URI (Paste button or Ctrl+V). A URI fills address, amount, and memo when those query params are present. Live validation still requires a 34-character `D…` address.
 2. **Amount (DOGE)** — any amount > 0 (step `0.00000001`).
 3. **Memo** *(optional)* — up to 100 characters. *(The memo rides in the LoRa packet; it is ignored when the CLI
    signs a real transaction with `--wif`.)*
@@ -296,8 +295,7 @@ to 8 decimals, timestamp, recipient (with copy), and any memo. It reloads automa
 
 ### Address Book 📒
 
-Save and label the addresses you send to. Click **+ Add Address**, fill in a **Label** (required), a Dogecoin
-**address** (starts with `D`), and optional **Notes**, then **💾 Save**. Entries appear in a table with copy and
+Save and label the addresses you send to. Click **+ Add Address**, fill in a **Label** (required), a Dogecoin **address** or BIP21 `dogecoin:` URI (paste extracts the address and can fill label/notes), and optional **Notes**, then **Save**. Entries appear in a table with copy and
 🗑️ remove buttons and persist immediately to `address_book.json`.
 
 ---

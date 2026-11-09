@@ -5,10 +5,14 @@ import {
   parsePositiveDoge,
   parseOptionalFeeDoge,
   isValidOptionalFee,
+  parsePayment,
+  formatPaymentUri,
 } from '../src/lib/dogeForm.ts';
 
+const ADDR = 'DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L';
+
 test('accepts a well-shaped mainnet address', () => {
-  assert.equal(looksLikeDogeAddress('DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L'), true);
+  assert.equal(looksLikeDogeAddress(ADDR), true);
 });
 
 test('rejects wrong length, prefix, alphabet, and whitespace-only', () => {
@@ -19,7 +23,7 @@ test('rejects wrong length, prefix, alphabet, and whitespace-only', () => {
 });
 
 test('trims before checking address', () => {
-  assert.equal(looksLikeDogeAddress('  DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L  '), true);
+  assert.equal(looksLikeDogeAddress(`  ${ADDR}  `), true);
 });
 
 test('parsePositiveDoge requires a finite amount > 0', () => {
@@ -39,4 +43,62 @@ test('parseOptionalFeeDoge: empty means recommended', () => {
   assert.equal(parseOptionalFeeDoge('x').ok, false);
   assert.equal(isValidOptionalFee(''), true);
   assert.equal(isValidOptionalFee('nope'), false);
+});
+
+test('parsePayment: bare address', () => {
+  const p = parsePayment(ADDR);
+  assert.deepEqual(p, { address: ADDR, amount: null, label: null });
+  assert.deepEqual(parsePayment(`  ${ADDR}\n`), { address: ADDR, amount: null, label: null });
+});
+
+test('parsePayment: BIP21 amount + label/message', () => {
+  assert.deepEqual(parsePayment(`dogecoin:${ADDR}?amount=4.2`), {
+    address: ADDR,
+    amount: 4.2,
+    label: null,
+  });
+  assert.deepEqual(parsePayment(`DOGECOIN:${ADDR}`), {
+    address: ADDR,
+    amount: null,
+    label: null,
+  });
+  assert.deepEqual(parsePayment(`dogecoin:${ADDR}?amount=10&label=Coffee%20Fund`), {
+    address: ADDR,
+    amount: 10,
+    label: 'Coffee Fund',
+  });
+  assert.deepEqual(parsePayment(`dogecoin:${ADDR}?message=much+wow`), {
+    address: ADDR,
+    amount: null,
+    label: 'much wow',
+  });
+});
+
+test('parsePayment: rejects bad scheme / amount / address', () => {
+  assert.equal(parsePayment(`bitcoin:${ADDR}`), null);
+  assert.equal(parsePayment('https://example.com'), null);
+  assert.equal(parsePayment(''), null);
+  assert.equal(parsePayment('dogecoin:not-an-address'), null);
+  // invalid amount is ignored; address still returns
+  assert.deepEqual(parsePayment(`dogecoin:${ADDR}?amount=notanumber`), {
+    address: ADDR,
+    amount: null,
+    label: null,
+  });
+  assert.deepEqual(parsePayment(`dogecoin:${ADDR}?amount=-5`), {
+    address: ADDR,
+    amount: null,
+    label: null,
+  });
+});
+
+test('formatPaymentUri builds bare and query forms', () => {
+  assert.equal(formatPaymentUri(ADDR), `dogecoin:${ADDR}`);
+  assert.equal(formatPaymentUri(ADDR, { amount: 1.5 }), `dogecoin:${ADDR}?amount=1.5`);
+  assert.equal(
+    formatPaymentUri(ADDR, { amount: 2, label: 'Coffee Fund' }),
+    `dogecoin:${ADDR}?amount=2&label=Coffee%20Fund`,
+  );
+  assert.equal(formatPaymentUri('not-an-address'), null);
+  assert.equal(formatPaymentUri(ADDR, { amount: 0 }), `dogecoin:${ADDR}`);
 });

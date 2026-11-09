@@ -1,10 +1,10 @@
 {
   "name": "radiodoge-gui",
-  "version": "0.3.81",
+  "version": "0.3.84",
   "engines": {
     "node": ">=20.0.0"
   },
-  "description": "RadioDoge \u2014 Wireless P2P Dogecoin Over LoRa (Tauri 2 GUI)",
+  "description": "RadioDoge — Wireless P2P Dogecoin Over LoRa (Tauri 2 GUI)",
   "private": true,
   "type": "module",
   "scripts": {

@@ -11,10 +11,31 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.81] - 2026-11-03
+## [0.3.84] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.83] - 2026-11-03
+
+### Added
+- Wallet Address QR panel: optional request amount builds a BIP21 `dogecoin:` URI in the QR, plus **Copy Payment URI**.
+- Address Book accepts BIP21 URIs on paste/save (extracts address; fills label/notes from `label` when empty).
+### Docs
+- USER_MANUAL notes Wallet request-amount / payment URI copy.
+
+## [0.3.82] - 2026-11-03
+
+### Added
+- Send tab Paste / Ctrl+V accepts BIP21 `dogecoin:` payment URIs (address, amount, label/message) via a pure frontend `parsePayment` helper mirroring `radiodoge_core::qr::parse_payment`.
+- `formatPaymentUri` helper for building shareable BIP21 URIs.
+### Docs
+- USER_MANUAL Sending section notes BIP21 paste.
+
+## [0.3.81] - 2026-11-03
+
+### Fixed
+- `scripts/build-android.ps1`: after copying JNI `.so` files, Gradle runs `:app:assembleArm64Debug` (or release) with every `rustBuild*` task excluded (`-x`), so packaging no longer re-invokes Tauri's symlink step. Works on Windows without Developer Mode.
 
 ## [0.3.80] - 2026-11-03
 
