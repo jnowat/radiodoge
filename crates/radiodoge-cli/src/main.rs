@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
             amount,
             fee,
         } => cmd_broadcast(&wif, &to_address, amount, fee).await,
-        Commands::Fee { from, amount } => cmd_fee(from.as_deref(), amount).await,
+        Commands::Fee { from, amount, json } => cmd_fee(from.as_deref(), amount, json).await,
     };
     if let Err(e) = &result {
         // `{:#}` keeps the whole context chain on one line.
@@ -176,20 +176,47 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_fee(from: Option<&str>, amount: Option<f64>) -> Result<()> {
+async fn cmd_fee(from: Option<&str>, amount: Option<f64>, json: bool) -> Result<()> {
     let rate = wallet::network_fee_rate().await;
-    println!(
-        "Network fee rate: {:.8} DOGE per started kB",
-        rate as f64 / 1e8
-    );
     if let (Some(addr), Some(amt)) = (from, amount) {
         if !wallet::is_valid_address(addr) {
             anyhow::bail!("Invalid Dogecoin address: {}", addr);
         }
         let est = wallet::estimate_fee(addr, amt).await?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "from": addr,
+                    "amountDoge": amt,
+                    "rateKoinusPerKb": rate,
+                    "feeDoge": est.fee_doge,
+                    "inputs": est.inputs,
+                    "sizeBytes": est.size_bytes,
+                }))?
+            );
+        } else {
+            println!(
+                "Network fee rate: {:.8} DOGE per started kB",
+                rate as f64 / 1e8
+            );
+            println!(
+                "Sending {:.8} DOGE from {}: ~{} B, {} input(s), fee {:.8} DOGE",
+                amt, addr, est.size_bytes, est.inputs, est.fee_doge
+            );
+        }
+    } else if json {
         println!(
-            "Sending {:.8} DOGE from {}: ~{} B, {} input(s), fee {:.8} DOGE",
-            amt, addr, est.size_bytes, est.inputs, est.fee_doge
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "rateKoinusPerKb": rate,
+                "rateDogePerKb": rate as f64 / 1e8,
+            }))?
+        );
+    } else {
+        println!(
+            "Network fee rate: {:.8} DOGE per started kB",
+            rate as f64 / 1e8
         );
     }
     Ok(())

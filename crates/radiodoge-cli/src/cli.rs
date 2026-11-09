@@ -349,6 +349,9 @@ pub(crate) enum Commands {
         /// Amount in DOGE (requires --from)
         #[arg(short, long, requires = "from")]
         amount: Option<f64>,
+        /// Print JSON (`rateKoinusPerKb`, and estimate fields when --from/--amount set)
+        #[arg(long)]
+        json: bool,
     },
 }
 

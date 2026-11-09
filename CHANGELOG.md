@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.106] - 2026-11-09
+
+### Added
+- `radiodoge-cli fee --json`: machine-readable fee rate (and full estimate when `--from`/`--amount` are set).
+
 ## [0.3.105] - 2026-11-09
 
 ### Added
