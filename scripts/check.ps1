@@ -29,6 +29,8 @@ if ($LASTEXITCODE -ne 0) { $fail += 'tauri-conf'; $tc | Select-String 'Error|err
 else { 'tauri.conf OK' }
 Pop-Location
 # Privacy scan: block WIF-shaped private keys added in this branch.
+$pt = Join-Path $PSScriptRoot '..\.github\scripts\test_patch_android_release_signing.py'
+if (Test-Path $pt) { python $pt 2>&1 | Out-Host; if ($LASTEXITCODE -ne 0) { $fail += 'android-signing-patch' } }
 $d = git diff "$Base...HEAD" | Select-String -Pattern '^\+.*\b[5KLQ][1-9A-HJ-NP-Za-km-z]{50,51}\b'
 if ($d) { $fail += 'PRIVACY'; $d | Out-Host }
 if ($fail) { "GATE FAILED: $($fail -join ', ')"; exit 1 } else { 'GATE OK'; exit 0 }

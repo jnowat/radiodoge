@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.87] - 2026-11-03
+
+### Fixed
+- `patch_android_release_signing.py` handles current Tauri templates that omit `signingConfig` entirely (inserts debug signing) as well as legacy templates that pointed release at an env-backed keystore; still honors `ANDROID_KEY_STORE_*` when set.
+### Added
+- Fixture self-test `.github/scripts/test_patch_android_release_signing.py` + `scripts/fixtures/android-gradle/*`; Bohr gate runs it.
+- `build-android.ps1 -Release` refuses unsigned APKs and runs `apksigner verify` when build-tools are present.
+
 ## [0.3.86] - 2026-11-03
 
 ### Added
