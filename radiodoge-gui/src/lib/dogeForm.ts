@@ -46,6 +46,47 @@ export function isValidOptionalFee(raw: string): boolean {
   return parseOptionalFeeDoge(raw).ok;
 }
 
+/** Default network fee suggested when signing from a UTXO snapshot (no rate fetch). */
+export const DEFAULT_OFFLINE_FEE_DOGE = 0.01;
+
+/**
+ * Offline signing requires an explicit fee (empty = recommended only works online).
+ * Accepts a finite number > 0.
+ */
+export function parseRequiredFeeDoge(raw: string): { ok: true; fee: number } | { ok: false } {
+  const parsed = parseOptionalFeeDoge(raw);
+  if (!parsed.ok || parsed.fee == null || parsed.fee <= 0) return { ok: false };
+  return { ok: true, fee: parsed.fee };
+}
+
+export function isValidRequiredFee(raw: string): boolean {
+  return parseRequiredFeeDoge(raw).ok;
+}
+
+/** Preview amount + fee against snapshot DOGE available. */
+export function offlineSpendPreview(
+  amountDoge: number | null,
+  feeRaw: string,
+  availableDoge: number,
+): {
+  amount: number | null;
+  fee: number | null;
+  total: number | null;
+  available: number;
+  ok: boolean;
+  shortfall: number | null;
+} {
+  const feeParsed = parseRequiredFeeDoge(feeRaw);
+  const fee = feeParsed.ok ? feeParsed.fee : null;
+  const amount = amountDoge != null && Number.isFinite(amountDoge) && amountDoge > 0 ? amountDoge : null;
+  if (amount == null || fee == null) {
+    return { amount, fee, total: null, available: availableDoge, ok: false, shortfall: null };
+  }
+  const total = amount + fee;
+  const shortfall = total > availableDoge ? total - availableDoge : null;
+  return { amount, fee, total, available: availableDoge, ok: shortfall == null, shortfall };
+}
+
 /** Result of interpreting pasted/scanned payment text (mirrors Rust `ParsedPayment`). */
 export interface ParsedPaymentText {
   address: string;
