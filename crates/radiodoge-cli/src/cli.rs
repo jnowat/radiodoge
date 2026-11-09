@@ -248,6 +248,9 @@ pub(crate) enum Commands {
         /// Seconds to listen for answers (1-30)
         #[arg(long, default_value_t = 6)]
         listen: u64,
+        /// Print neighbors as JSON (includes optional SNR)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Interactive REPL — replaces RadioDogeSharp's menu-driven interface
