@@ -14,6 +14,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
 
+## [0.3.67] - 2026-11-03
+
+### Fixed
+- Removed invalid `build.windows` from `tauri.conf.json` (Tauri 2 schema rejects it and `tauri build` failed with "Additional properties are not allowed"). Static VC runtime remains configured via `tauri_build::WindowsAttributes::static_vc_runtime` in `build.rs`.
+
 ## [0.3.65] - 2026-11-03
 
 ### Changed
