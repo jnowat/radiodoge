@@ -95,6 +95,10 @@ pills for **🌐 GATEWAY** (board gateway mode on) and **▶ Daemon** (the `radi
 
 On phone-width screens (≤640 px) the tab labels and logo text collapse to **icons only**, with 48 px touch targets.
 
+### Closing the window (desktop)
+
+On Windows and other desktop builds, clicking the window **X** hides RadioDoge to the system tray instead of quitting — so a connected board and the gateway daemon keep running. Left-click the tray icon (or choose **Open RadioDoge**) to bring the window back. Choose **Quit** from the tray menu when you want a full exit.
+
 ### The footer
 
 The bottom status bar always shows the app version (`RadioDoge v0.3.52`), your connection state (🟢 with port,
