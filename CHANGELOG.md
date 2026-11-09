@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.69] - 2026-11-03
+
+### Changed
+- Shared `.card-heading` / `.card-heading-row` / `.card-heading-value` classes in `app.css`. Settings tab LoRa cards use them instead of repeating the same bold title + mono value inline styles.
+
 ## [0.3.68] - 2026-11-03
 
 ### Changed
