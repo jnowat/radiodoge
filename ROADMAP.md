@@ -229,7 +229,7 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   enables the mode, so a board configured entirely through the web interface keeps forwarding as before. The
   web UI's *own* "send transaction" endpoint is deliberately not gated — that is the operator acting directly,
   not the board relaying someone else's traffic.
-- **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP. *Fix is in draft PR #71 (v0.3.53); waiting on hardware validation.*
+- **The firmware web UI is unauthenticated.** All 40 `/api/*` routes are open to anyone on the board's WiFi AP. *Fix is in draft PR #71 (v0.3.58); waiting on hardware validation.*
   Treat a firmware gateway as trusted-network only until authentication lands.
   - ✅ *The credential disclosure is fixed (v0.4.1, needs hardware validation).* `GET /api/password/status`
     returned the AP password and `GET /api/gateway/load` returned the stored gateway RPC password, both in
