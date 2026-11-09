@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.64] - 2026-11-03
+
+### Added
+- Shared Send-form helpers (`looksLikeDogeAddress`, `parsePositiveDoge`, `parseOptionalFeeDoge`) with 5 unit tests (18 frontend unit tests total). Address check now also rejects non-Base58 characters; amount/fee parsing is centralized.
+### Changed
+- Send tab uses the shared helpers for enable/disable and inline validation (Rust still re-validates on send).
+
 ## [0.3.63] - 2026-11-03
 
 ### Fixed
