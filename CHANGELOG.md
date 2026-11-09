@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.82] - 2026-11-03
+
+### Added
+- Send tab Paste / Ctrl+V accepts BIP21 `dogecoin:` payment URIs (address, amount, label/message) via a pure frontend `parsePayment` helper mirroring `radiodoge_core::qr::parse_payment`.
+- `formatPaymentUri` helper for building shareable BIP21 URIs.
+### Docs
+- USER_MANUAL Sending section notes BIP21 paste.
+
 ## [0.3.81] - 2026-11-03
 
 ### Fixed
