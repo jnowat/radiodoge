@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.93] - 2026-11-03
+
+### Gateway
+- Outbox retries now classify broadcast failures the same way as the live path: duplicates ACK as success, permanent rejections drop with TX_NACK (no more burning the 48h TTL on doomed txs), and only transient errors keep backoff.
+- Shared `classify_broadcast_error` / `BroadcastErrorKind` live in `radiodoge-core::tx_reply` with unit coverage.
+
 ## [0.3.92] - 2026-11-03
 
 ### Docs
