@@ -9,7 +9,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Waiting on hardware validation before merge: firmware REST route authentication (#40)._
+_Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
+
+## [0.3.63] - 2026-11-03
+
+### Fixed
+- `scripts/resolve-version.py` (and Bohr `gwt/resolve.py` / `finish.ps1`) now **preserves intentional `[Unreleased]` edits** from the branch HEAD when versioning. Previously `finish.ps1` checked out the base CHANGELOG and wiped Unreleased, which is why #82/#85's "#71 not #40" note kept reverting.
+### Docs
+- CHANGELOG [Unreleased] again names draft **#71** (replacing #40) as the firmware REST auth change awaiting hardware validation.
+- CONTRIBUTING mentions `scripts/resolve-version.py`.
 
 ## [0.3.61] - 2026-11-03
 
