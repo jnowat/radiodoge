@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.76] - 2026-11-03
+
+### Changed
+- Windows/desktop tray: the Status menu row now updates live on connect/disconnect (`Connected (COMx)` / `Disconnected`), matching the tooltip. Previously only the tooltip changed and the menu stayed stuck on Disconnected.
+### Docs
+- User manual notes the live tray Status line.
+
 ## [0.3.75] - 2026-11-03
 
 ### Changed
