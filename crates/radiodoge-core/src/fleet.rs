@@ -162,6 +162,59 @@ pub struct FleetResponse {
     pub summary: FleetSummary,
 }
 
+/// Bytes from a remote collector: one gateway snapshot, or a fleet `/summary`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteStats {
+    Single(GatewayStats),
+    Fleet(FleetResponse),
+}
+
+/// Parse a GatewayStats file or a fleet `{ now, gateways, summary }` body.
+pub fn parse_remote_stats(bytes: &[u8]) -> Result<RemoteStats, String> {
+    if bytes.len() as u64 > MAX_STATS_FILE_BYTES {
+        return Err("response larger than 4 MB".into());
+    }
+    if let Ok(s) = serde_json::from_slice::<GatewayStats>(bytes) {
+        return Ok(RemoteStats::Single(s));
+    }
+    if let Ok(r) = serde_json::from_slice::<FleetResponse>(bytes) {
+        return Ok(RemoteStats::Fleet(r));
+    }
+    Err("not a stats file or fleet summary".into())
+}
+
+/// Rebuild a GatewayStats shell from a fleet row (HTTP `/summary` collectors).
+pub fn stats_from_gateway_row(row: &FleetGatewayRow, now: u64) -> GatewayStats {
+    let mut s = GatewayStats::new(
+        row.port.as_deref().unwrap_or(""),
+        row.updated_at.unwrap_or(now),
+    );
+    s.gateway_address = row.address.clone();
+    s.packets_heard = row.packets_heard.unwrap_or(0);
+    s.tx_broadcast = row.tx_broadcast.unwrap_or(0);
+    s.tx_failed = row.tx_failed.unwrap_or(0);
+    s.outbox_broadcasts = row.outbox.unwrap_or(0);
+    s
+}
+
+/// GET `url` and parse as [`RemoteStats`]. 10s timeout; body capped at 4 MB.
+pub async fn fetch_stats_url(url: &str) -> Result<RemoteStats, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("fetch failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+    parse_remote_stats(&bytes)
+}
+
 /// Read one stats file; errors if missing, too large, or not JSON GatewayStats.
 pub fn read_stats_file(path: &std::path::Path) -> Result<GatewayStats, String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
@@ -393,5 +446,54 @@ mod tests {
         assert_eq!(resp.gateways.iter().filter(|g| g.ok).count(), 2);
         assert_eq!(resp.gateways.iter().filter(|g| !g.ok).count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_remote_stats_accepts_single_and_fleet() {
+        let single = GatewayStats {
+            updated_at: 50,
+            gateway_address: Some("10.0.1".into()),
+            packets_heard: 4,
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&single).unwrap();
+        match parse_remote_stats(&bytes).unwrap() {
+            RemoteStats::Single(s) => assert_eq!(s.packets_heard, 4),
+            _ => panic!("expected single"),
+        }
+        let fleet = FleetResponse {
+            now: 100,
+            gateways: vec![FleetGatewayRow {
+                label: "gw".into(),
+                path: "http://127.0.0.1:8787/summary".into(),
+                local: false,
+                ok: true,
+                online: Some(true),
+                updated_at: Some(90),
+                port: Some("COM9".into()),
+                address: Some("10.0.2".into()),
+                packets_heard: Some(7),
+                tx_broadcast: Some(1),
+                tx_failed: Some(0),
+                outbox: Some(2),
+                error: None,
+            }],
+            summary: FleetSummary {
+                gateways: 1,
+                online: 1,
+                packets_heard: 7,
+                ..Default::default()
+            },
+        };
+        let bytes = serde_json::to_vec(&fleet).unwrap();
+        match parse_remote_stats(&bytes).unwrap() {
+            RemoteStats::Fleet(r) => {
+                assert_eq!(r.gateways.len(), 1);
+                let s = stats_from_gateway_row(&r.gateways[0], 100);
+                assert_eq!(s.packets_heard, 7);
+                assert_eq!(s.outbox_broadcasts, 2);
+            }
+            _ => panic!("expected fleet"),
+        }
     }
 }
