@@ -9,8 +9,6 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Waiting on hardware validation before merge: firmware REST route authentication (#40)._
-
 ## [0.3.58] - 2026-11-03
 
 ### Security
