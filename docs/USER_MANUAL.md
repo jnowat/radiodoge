@@ -205,7 +205,7 @@ app nudges you: *"Your saved wallet uses an old unencrypted format — click Sav
 
 Open the **Send** tab (needs a connection *and* a loaded wallet).
 
-1. **Recipient Address** - paste a Dogecoin address or a BIP21 dogecoin: payment URI (Paste button or Ctrl+V), or pick a saved contact with **Book**. A URI fills address, amount, and memo when those query params are present. Live validation still requires a 34-character D… address.
+1. **Recipient Address** - paste a Dogecoin address or a BIP21 dogecoin: payment URI (Paste button or Ctrl+V), or pick a saved contact with **Book**. A URI fills address, amount, and memo when those query params are present. Live validation still requires a 34-character D… address, or **Save** the current recipient into the Address Book (Memo becomes the label when set).
 2. **Amount (DOGE)** — any amount > 0 (step `0.00000001`).
 3. **Memo** *(optional)* — up to 100 characters. *(The memo rides in the LoRa packet; it is ignored when the CLI
    signs a real transaction with `--wif`.)*

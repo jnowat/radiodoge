@@ -22,6 +22,8 @@
   let toAddress = $state('');
   let addressBook = $state<AddressBookEntry[]>([]);
   let bookOpen = $state(false);
+  let bookSaveNote = $state<string | null>(null);
+  let bookSaving = $state(false);
 
   async function refreshAddressBook() {
     try {
@@ -36,6 +38,40 @@
     toAddress = entry.address;
     if (entry.label && !memo) memo = entry.label;
     bookOpen = false;
+  }
+
+  async function saveRecipientToBook() {
+    bookSaveNote = null;
+    const addr = toAddress.trim();
+    if (!looksLikeDogeAddress(addr)) {
+      bookSaveNote = 'Enter a valid Dogecoin address first.';
+      return;
+    }
+    const label = (memo.trim() || `Saved ${addr.slice(0, 6)}…${addr.slice(-4)}`).slice(0, 64);
+    bookSaving = true;
+    try {
+      const raw = await invoke<AddressBookEntry[]>('load_address_book');
+      const entries = raw ?? [];
+      if (entries.some((e) => e.address === addr)) {
+        bookSaveNote = 'Already in the Address Book.';
+        await refreshAddressBook();
+        return;
+      }
+      const entry: AddressBookEntry = {
+        id: String(Date.now()),
+        label,
+        address: addr,
+        createdAt: Math.floor(Date.now() / 1000),
+        notes: memo.trim() || undefined,
+      };
+      await invoke('save_address_book', { entries: [entry, ...entries] });
+      addressBook = [entry, ...entries];
+      bookSaveNote = `Saved as "${label}".`;
+    } catch (e: unknown) {
+      bookSaveNote = errorMessage(e);
+    } finally {
+      bookSaving = false;
+    }
   }
 
   let amountDoge = $state('');
@@ -410,6 +446,16 @@
           Book
         </button>
         <button
+          type="button"
+          onclick={() => void saveRecipientToBook()}
+          disabled={bookSaving || !isValidAddress()}
+          class="btn-ghost"
+          style="padding: 10px 14px; flex-shrink: 0;"
+          title="Save this recipient to the Address Book (uses Memo as the label when set)"
+        >
+          {bookSaving ? 'Saving…' : 'Save'}
+        </button>
+        <button
           onclick={openQrPicker}
           disabled={scanning}
           class="btn-ghost"
@@ -444,6 +490,9 @@
         </p>
       {/if}
     
+      {#if bookSaveNote}
+        <p style="font-size: var(--fs-xs); margin: 6px 0 0 0; color: var(--doge-muted);">{bookSaveNote}</p>
+      {/if}
       {#if bookOpen}
         <div
           class="card-doge"
