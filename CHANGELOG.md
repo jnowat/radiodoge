@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.73] - 2026-11-03
+
+### Changed
+- Mesh tab disconnected view uses the shared `EmptyState` card instead of a one-line centered note, matching Dashboard / Receive / Gateways.
+
 ## [0.3.72] - 2026-11-03
 
 ### Fixed
