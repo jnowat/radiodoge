@@ -1,10 +1,16 @@
 param(
     [switch]$Release,
+    [switch]$AllAbis,
     [string]$OutDir = ""
 )
 # Build a RadioDoge Android debug (default) or release APK on a developer machine.
 # Mirrors .github/workflows/build-android.yml: icon gen → android init → JitPack +
-# BLE manifest patches → tauri android build. Does not commit gen/android.
+# BLE + release-signing patches → tauri android build. Does not commit gen/android.
+#
+# -Release builds a minified release APK. Without ANDROID_KEY_STORE_* env vars the
+# release build is signed with the Android debug keystore (sideload/testing only;
+# no secrets in the repo). Set the env vars to use a real keystore.
+# Default is arm64-only (phones); pass -AllAbis for every ABI Tauri builds.
 #
 # Prerequisites: JDK 17+, Android SDK + NDK 27.x, ANDROID_HOME, Rust android targets.
 # Run from the repo root:  powershell -File scripts/build-android.ps1
@@ -35,6 +41,11 @@ if (-not $env:ANDROID_NDK_HOME -or -not (Test-Path $env:ANDROID_NDK_HOME)) {
 Write-Host "ANDROID_HOME=$env:ANDROID_HOME"
 Write-Host "ANDROID_NDK_HOME=$env:ANDROID_NDK_HOME"
 
+$arm64Only = -not $AllAbis
+$pkgVer = (Get-Content (Join-Path $repo "radiodoge-gui/package.json") -Raw |
+    ConvertFrom-Json).version
+Write-Host "RadioDoge version=$pkgVer  Release=$Release  Arm64Only=$arm64Only"
+
 Push-Location radiodoge-gui
 try {
     if (-not (Test-Path node_modules)) { npm ci }
@@ -44,9 +55,10 @@ try {
     npm run tauri -- android init --ci
 } finally { Pop-Location }
 
-Write-Host "== patch JitPack + BLE permissions =="
+Write-Host "== patch JitPack + BLE permissions + release signing fallback =="
 python .github/scripts/patch_jitpack.py
 python .github/scripts/patch_manifest.py
+python .github/scripts/patch_android_release_signing.py
 
 # Cargo android target dir (shared Bohr cache or default).
 $cargoTarget = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo "target" }
@@ -60,6 +72,9 @@ function Install-JniLibsFromCargo {
         "i686-linux-android"      = "x86"
         "x86_64-linux-android"    = "x86_64"
     }
+    if ($arm64Only) {
+        $map = @{ "aarch64-linux-android" = "arm64-v8a" }
+    }
     $profile = if ($Release) { "release" } else { "debug" }
     $jniRoot = Join-Path $repo "radiodoge-gui/src-tauri/gen/android/app/src/main/jniLibs"
     $copied = 0
@@ -72,7 +87,7 @@ function Install-JniLibsFromCargo {
         # Remove a broken symlink left by tauri, then copy.
         if (Test-Path $dest) { Remove-Item -Force $dest }
         Copy-Item -Force $src $dest
-        Write-Host "Copied JNI lib $($map[$triple]) from $src"
+        Write-Host "Copied JNI lib $($map[$triple]) from $src ($([math]::Round((Get-Item $src).Length/1MB, 2)) MiB)"
         $copied++
     }
     if ($copied -eq 0) { throw "No libradiodoge_gui_lib.so found under $cargoTarget for android triples." }
@@ -82,13 +97,17 @@ Push-Location radiodoge-gui
 $tauriExit = 0
 try {
     $env:CARGO_INCREMENTAL = "0"
-    if ($Release) {
-        Write-Host "== tauri android build --apk (release) =="
-        npm run tauri -- android build --apk --verbose
-    } else {
-        Write-Host "== tauri android build --apk --debug =="
-        npm run tauri -- android build --apk --debug --verbose
+    $tauriArgs = @("android", "build", "--apk", "--verbose")
+    if (-not $Release) { $tauriArgs += "--debug" }
+    if ($arm64Only) {
+        $tauriArgs += @("--target", "aarch64", "--split-per-abi")
     }
+    if ($Release) {
+        Write-Host "== tauri android build --apk (release$(if ($arm64Only) { ', arm64' })) =="
+    } else {
+        Write-Host "== tauri android build --apk --debug$(if ($arm64Only) { ' (arm64)' }) =="
+    }
+    & npm.cmd run tauri -- @tauriArgs
     $tauriExit = $LASTEXITCODE
 } finally { Pop-Location }
 
@@ -118,13 +137,25 @@ if ($tauriExit -ne 0 -or $apks.Count -eq 0) {
 }
 
 if ($apks.Count -eq 0) { throw "Build finished but no APK was found under gen/android." }
-$apks | ForEach-Object { Write-Host "APK: $($_.FullName) ($([math]::Round($_.Length/1MB, 2)) MiB)" }
+
+# Prefer arm64 APKs when several ABIs were produced.
+$preferred = @($apks | Where-Object { $_.FullName -match 'arm64|aarch64' })
+if ($preferred.Count -eq 0) { $preferred = $apks }
+$preferred | ForEach-Object { Write-Host "APK: $($_.FullName) ($([math]::Round($_.Length/1MB, 2)) MiB)" }
 
 if ($OutDir) {
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-    foreach ($a in $apks) {
-        Copy-Item -Force $a.FullName (Join-Path $OutDir $a.Name)
-        Write-Host "Copied $($a.Name) -> $OutDir"
+    $kind = if ($Release) { "release" } else { "debug" }
+    foreach ($a in $preferred) {
+        $abi = if ($a.FullName -match 'arm64|aarch64') { "arm64" }
+               elseif ($a.FullName -match 'armeabi|armv7') { "armv7" }
+               elseif ($a.FullName -match '[\\/]x86_64[\\/]|x86_64') { "x86_64" }
+               elseif ($a.FullName -match '[\\/]x86[\\/]') { "x86" }
+               else { "android" }
+        $destName = "RadioDoge_${pkgVer}_${abi}-${kind}.apk"
+        $destPath = Join-Path $OutDir $destName
+        Copy-Item -Force $a.FullName $destPath
+        Write-Host "Copied $($a.Name) -> $destPath"
     }
 }
 
