@@ -122,6 +122,154 @@ pub fn aggregate(members: &[FleetMember], now: u64) -> FleetSummary {
     out
 }
 
+/// Max size accepted for one gateway stats JSON file (4 MiB).
+pub const MAX_STATS_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// One source row for a fleet response (file path + online bit + counters).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetGatewayRow {
+    pub label: String,
+    pub path: String,
+    pub local: bool,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub online: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packets_heard: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_broadcast: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_failed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outbox: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Full fleet JSON payload (`now` + per-gateway rows + merged summary).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetResponse {
+    pub now: u64,
+    pub gateways: Vec<FleetGatewayRow>,
+    pub summary: FleetSummary,
+}
+
+/// Read one stats file; errors if missing, too large, or not JSON GatewayStats.
+pub fn read_stats_file(path: &std::path::Path) -> Result<GatewayStats, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_STATS_FILE_BYTES {
+        return Err("file is larger than 4 MB".into());
+    }
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("not a stats file: {e}"))
+}
+
+/// Pick a unique display label for a gateway, preferring a stored address.
+pub fn label_for(
+    path: &std::path::Path,
+    stats: Option<&GatewayStats>,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    let base = stats
+        .and_then(|s| s.gateway_address.clone())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| path.file_stem().map(|f| f.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "gateway".into());
+    let mut label = base.clone();
+    let mut n = 2;
+    while !used.insert(label.clone()) {
+        label = format!("{base} #{n}");
+        n += 1;
+    }
+    label
+}
+
+/// Load every `*.json` in `dir` (non-recursive) into fleet members + rows.
+pub fn load_stats_dir(
+    dir: &std::path::Path,
+    now: u64,
+) -> Result<(Vec<FleetMember>, Vec<FleetGatewayRow>), String> {
+    if !dir.is_dir() {
+        return Err(format!("not a directory: {}", dir.display()));
+    }
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("json"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    paths.sort();
+    let mut used = std::collections::HashSet::new();
+    let mut members = Vec::new();
+    let mut rows = Vec::new();
+    for path in paths {
+        match read_stats_file(&path) {
+            Ok(stats) => {
+                let label = label_for(&path, Some(&stats), &mut used);
+                rows.push(FleetGatewayRow {
+                    label: label.clone(),
+                    path: path.to_string_lossy().into_owned(),
+                    local: false,
+                    ok: true,
+                    online: Some(is_online(&stats, now)),
+                    updated_at: Some(stats.updated_at),
+                    port: Some(stats.port.clone()).filter(|s| !s.is_empty()),
+                    address: stats.gateway_address.clone(),
+                    packets_heard: Some(stats.packets_heard),
+                    tx_broadcast: Some(stats.tx_broadcast),
+                    tx_failed: Some(stats.tx_failed),
+                    outbox: Some(stats.outbox_broadcasts + stats.outbox_replies),
+                    error: None,
+                });
+                members.push(FleetMember { label, stats });
+            }
+            Err(e) => {
+                let label = label_for(&path, None, &mut used);
+                rows.push(FleetGatewayRow {
+                    label,
+                    path: path.to_string_lossy().into_owned(),
+                    local: false,
+                    ok: false,
+                    online: None,
+                    updated_at: None,
+                    port: None,
+                    address: None,
+                    packets_heard: None,
+                    tx_broadcast: None,
+                    tx_failed: None,
+                    outbox: None,
+                    error: Some(e),
+                });
+            }
+        }
+    }
+    Ok((members, rows))
+}
+
+/// Aggregate a stats directory into the same JSON shape the GUI fleet view uses.
+pub fn response_from_dir(dir: &std::path::Path, now: u64) -> Result<FleetResponse, String> {
+    let (members, rows) = load_stats_dir(dir, now)?;
+    Ok(FleetResponse {
+        now,
+        gateways: rows,
+        summary: aggregate(&members, now),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +351,47 @@ mod tests {
         assert_eq!(v["gateway"], "a");
         assert_eq!(v["kind"], "ackSent");
         assert_eq!(v["node"], "1.1.1");
+    }
+
+    #[test]
+    fn load_stats_dir_aggregates_and_skips_bad_json() {
+        let dir = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "rd-fleet-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+        let a = GatewayStats {
+            updated_at: 90,
+            gateway_address: Some("10.0.1".into()),
+            packets_heard: 5,
+            tx_broadcast: 4,
+            tx_failed: 1,
+            ..Default::default()
+        };
+        let b = GatewayStats {
+            updated_at: 100,
+            gateway_address: Some("10.0.2".into()),
+            packets_heard: 3,
+            ..Default::default()
+        };
+        std::fs::write(dir.join("gw-a.json"), serde_json::to_vec(&a).unwrap()).unwrap();
+        std::fs::write(dir.join("gw-b.json"), serde_json::to_vec(&b).unwrap()).unwrap();
+        std::fs::write(dir.join("junk.json"), b"not-json").unwrap();
+        let resp = response_from_dir(&dir, 100).unwrap();
+        assert_eq!(resp.gateways.len(), 3);
+        assert_eq!(resp.summary.gateways, 2);
+        assert_eq!(resp.summary.online, 2);
+        assert_eq!(resp.summary.packets_heard, 8);
+        assert_eq!(resp.gateways.iter().filter(|g| g.ok).count(), 2);
+        assert_eq!(resp.gateways.iter().filter(|g| !g.ok).count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

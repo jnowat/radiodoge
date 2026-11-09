@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.97] - 2026-11-09
+
+### Added
+- `radiodoge-cli fleet serve --dir <stats> [--bind 127.0.0.1:8787]`: local HTTP dashboard that aggregates every gateway `--stats-file` JSON in a folder (`GET /health`, `GET /summary`). Same `{ now, gateways, summary }` shape as the GUI fleet view; CORS open for local collectors.
+- `radiodoge_core::fleet::{read_stats_file, load_stats_dir, response_from_dir}` helpers with unit coverage.
+
 ## [0.3.96] - 2026-11-09
 
 ### Fixed
