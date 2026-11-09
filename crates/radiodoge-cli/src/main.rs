@@ -145,6 +145,9 @@ async fn main() -> Result<()> {
         Commands::Fleet {
             cmd: cli::FleetCommands::Serve { dir, bind },
         } => fleet_cmd::cmd_fleet_serve(dir, bind).await,
+        Commands::Fleet {
+            cmd: cli::FleetCommands::Summary { dir },
+        } => fleet_cmd::cmd_fleet_summary(dir),
         Commands::Daemon {
             port,
             stats_file,

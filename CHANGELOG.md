@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.100] - 2026-11-09
+
+### Added
+- `radiodoge-cli fleet summary --dir <stats>`: print one aggregated `{ now, gateways, summary }` JSON to stdout (same shape as `fleet serve` / the GUI) without starting an HTTP server.
+
 ## [0.3.99] - 2026-11-09
 
 ### Added
