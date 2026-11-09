@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.99] - 2026-11-09
+
+### Added
+- Fleet dashboard accepts **http(s) URLs** alongside local stats-file paths: a single `GatewayStats` JSON or a `fleet serve` `/summary` response. Core helpers `parse_remote_stats` / `fetch_stats_url` back the GUI command.
+
 ## [0.3.98] - 2026-11-09
 
 ### Added

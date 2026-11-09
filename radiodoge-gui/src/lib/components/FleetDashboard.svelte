@@ -3,7 +3,7 @@
 
   Aggregates this PC's gateway snapshot with any other gateways' `--stats-file`
   snapshots the user points at (e.g. a shared/synced folder each daemon writes to).
-  Read-only: nothing here talks to a board or the network.
+  Read-only toward boards; file paths stay local, http(s) URLs fetch a stats JSON or fleet /summary.
 -->
 <script lang="ts">
   import { errorMessage } from '$lib/errors';
@@ -73,20 +73,20 @@
   <div class="head">
     <div>
       <div class="title">🛰️ Gateway Fleet</div>
-      <div class="sub">Combine several gateways' stats files. Point each daemon's <code>--stats-file</code> at a shared folder, then add the files here.</div>
+      <div class="sub">Combine several gateways' stats files or a <code>fleet serve</code> URL. Point each daemon's <code>--stats-file</code> at a shared folder, or paste <code>http://host:8787/summary</code>.</div>
     </div>
     {#if summary}<span class="pill" class:off={summary.online === 0}>{summary.online}/{summary.gateways} online</span>{/if}
   </div>
 
   <div class="add">
-    <input class="input-doge" bind:value={draft} placeholder="Path to another gateway's gateway-stats.json"
-      onkeydown={(e) => e.key === 'Enter' && add()} aria-label="Stats file path" />
+    <input class="input-doge" bind:value={draft} placeholder="Stats path or http(s)://…/summary"
+      onkeydown={(e) => e.key === 'Enter' && add()} aria-label="Stats file path or URL" />
     <button class="btn-ghost" onclick={add} disabled={!draft.trim()}>Add</button>
   </div>
   {#if error}<div class="err" role="alert">❌ {error}</div>{/if}
 
   {#if rows.length === 0}
-    <EmptyState icon="🛰️" title="No gateways in the fleet yet" hint="Start the gateway on this PC, or paste another gateway's gateway-stats.json path above and press Add." />
+    <EmptyState icon="🛰️" title="No gateways in the fleet yet" hint="Start the gateway on this PC, or paste a stats file path / fleet HTTP URL above and press Add." />
   {:else}
     <table>
       <thead><tr><th>Gateway</th><th>Status</th><th>Pkts</th><th>TX ok/fail</th><th>Outbox</th><th></th></tr></thead>
