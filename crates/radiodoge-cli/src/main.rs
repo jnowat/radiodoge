@@ -22,6 +22,7 @@ mod cli;
 use cli::*;
 
 mod daemon;
+mod fleet_cmd;
 use daemon::*;
 
 mod meshtastic_cmd;
@@ -141,6 +142,9 @@ async fn main() -> Result<()> {
             fee,
         } => cmd_sign_tx(&to_address, amount, &out, fee).await,
         Commands::Connect { port } => cmd_connect(&port).await,
+        Commands::Fleet {
+            cmd: cli::FleetCommands::Serve { dir, bind },
+        } => fleet_cmd::cmd_fleet_serve(dir, bind).await,
         Commands::Daemon {
             port,
             stats_file,

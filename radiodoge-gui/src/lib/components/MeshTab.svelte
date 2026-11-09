@@ -72,7 +72,7 @@
     const a = (2 * Math.PI * i) / Math.max(1, all.length) - Math.PI / 2;
     const r = mapRadius(n.rssi);
     const label = nodeAddressToString(n.address);
-    return { label, rssi: n.rssi, x: C + r * Math.cos(a), y: C + r * Math.sin(a), fresh: lastScanFound.has(label) };
+    return { label, rssi: n.rssi, snr: n.snr ?? null, x: C + r * Math.cos(a), y: C + r * Math.sin(a), fresh: lastScanFound.has(label) };
   }));
   function rssiColor(rssi: number): string {
     if (rssi === 0) return 'var(--doge-muted)';

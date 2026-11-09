@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.97 · Heltec V3 firmware v0.3.8*
+*App v0.3.99 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.97`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.99`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
@@ -282,6 +282,11 @@ The **Gateways** tab is read-only and works without a board. When gateway mode i
 the live relay stats (packets heard, transactions relayed, errors); otherwise it shows a short note pointing you to
 **Settings**, where the gateway is started and stopped. On desktop it also holds the **Gateway Fleet** view: add
 the path of another gateway's `--stats-file` to see every gateway you run side by side. (Both views used to live in
+
+### Fleet HTTP (`radiodoge-cli fleet serve`)
+
+Point several gateways' `--stats-file` JSON into one folder, then run `radiodoge-cli fleet serve --dir <folder>` (default bind `127.0.0.1:8787`). Collectors can `GET /summary` for the same aggregated view as the app's Fleet dashboard, or `GET /health` for a liveness check.
+
 Settings; they moved here in v0.3.48.)
 
 ---
