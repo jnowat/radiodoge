@@ -354,7 +354,7 @@
   <div class="card-doge" style="display: flex; flex-direction: column; gap: 20px;">
     <!-- Recipient address -->
     <div>
-      <label for="send-to-address" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+      <label for="send-to-address" class="field-label">
         Recipient Address
       </label>
       <div style="display: flex; gap: 8px;">
@@ -406,7 +406,7 @@
 
     <!-- Amount -->
     <div>
-      <label for="send-amount" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+      <label for="send-amount" class="field-label">
         Amount (DOGE)
       </label>
       <div style="position: relative;">
@@ -441,7 +441,7 @@
 
     <!-- Memo (optional) -->
     <div>
-      <label for="send-memo" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+      <label for="send-memo" class="field-label">
         Memo <span style="color: var(--doge-subtle); text-transform: none; font-size: var(--fs-xs);">(optional)</span>
       </label>
       <input

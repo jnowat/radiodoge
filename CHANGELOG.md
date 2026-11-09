@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.57] - 2026-11-03
+
+### Changed
+- Forms: Connect and Send tabs now use a shared `.field-label` class (uppercase muted labels) from `app.css` instead of repeating the same long inline style on every field.
+
 ## [0.3.56] - 2026-11-03
 
 ### Docs
