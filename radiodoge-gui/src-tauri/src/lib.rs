@@ -1806,6 +1806,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             tray::setup_tray(app)?;
+            #[cfg(not(desktop))]
+            let _ = app;
             log::info!("RadioDoge GUI v{} started", env!("CARGO_PKG_VERSION"));
             Ok(())
         })
@@ -1818,6 +1820,10 @@ pub fn run() {
                 api.prevent_close();
                 let _ = window.hide();
                 log::info!("Window hidden to tray (use tray Quit to exit)");
+            }
+            #[cfg(not(desktop))]
+            {
+                let _ = (&window, &event);
             }
         })
         .build(tauri::generate_context!())

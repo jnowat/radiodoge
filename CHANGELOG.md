@@ -11,10 +11,30 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.87] - 2026-11-03
+## [0.3.90] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.89] - 2026-11-03
+
+### Fixed
+- Silence unused `app` / `window` / `event` bindings in the Tauri builder on Android (`cfg(not(desktop))`), so release APK builds stay warning-clean.
+
+## [0.3.88] - 2026-11-03
+
+### Added
+- Send tab **Save** button: add the current recipient to the Address Book (Memo used as the label when set; skips duplicates).
+### Docs
+- USER_MANUAL Sending notes Save-to-Book.
+
+## [0.3.87] - 2026-11-03
+
+### Fixed
+- `patch_android_release_signing.py` handles current Tauri templates that omit `signingConfig` entirely (inserts debug signing) as well as legacy templates that pointed release at an env-backed keystore; still honors `ANDROID_KEY_STORE_*` when set.
+### Added
+- Fixture self-test `.github/scripts/test_patch_android_release_signing.py` + `scripts/fixtures/android-gradle/*`; Bohr gate runs it.
+- `build-android.ps1 -Release` refuses unsigned APKs and runs `apksigner verify` when build-tools are present.
 
 ## [0.3.86] - 2026-11-03
 

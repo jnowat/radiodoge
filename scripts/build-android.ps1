@@ -159,4 +159,30 @@ if ($OutDir) {
     }
 }
 
+
+# Release APKs must be signed (debug keystore fallback or real keystore). Refuse unsigned.
+if ($Release) {
+    $btRoot = Join-Path $env:ANDROID_HOME "build-tools"
+    $bt = Get-ChildItem $btRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+    $apksigner = if ($bt) { Join-Path $bt.FullName "apksigner.bat" } else { $null }
+    foreach ($a in $preferred) {
+        $check = if ($OutDir) {
+            $abi = if ($a.FullName -match 'arm64|aarch64') { 'arm64' } else { 'android' }
+            Join-Path $OutDir "RadioDoge_${pkgVer}_${abi}-release.apk"
+        } else { $a.FullName }
+        # Prefer the OutDir copy when present; else the gradle output.
+        if (-not (Test-Path $check)) { $check = $a.FullName }
+        if ($check -match 'unsigned') {
+            throw "Release APK is unsigned ($check). patch_android_release_signing.py should have wired debug signing."
+        }
+        if ($apksigner -and (Test-Path $apksigner)) {
+            & $apksigner verify --print-certs $check 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "apksigner verify failed for $check (exit $LASTEXITCODE)" }
+            Write-Host "apksigner verify OK: $check"
+        } else {
+            Write-Host "WARNING: apksigner not found; skipped signature verify for $check"
+        }
+    }
+}
+
 Write-Host "ANDROID_BUILD_OK"
