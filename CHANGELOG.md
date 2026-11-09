@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.94] - 2026-11-09
+
+### Added
+- Offline-signing fee UX: when a matching UTXO snapshot is loaded, Send requires an explicit fee (> 0), offers **Use 0.01**, and shows amount+fee vs snapshot balance before send.
+- Shared helpers `DEFAULT_OFFLINE_FEE_DOGE`, `parseRequiredFeeDoge`, `offlineSpendPreview` with unit tests.
+
 ## [0.3.93] - 2026-11-03
 
 ### Gateway

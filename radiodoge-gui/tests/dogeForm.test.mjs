@@ -5,6 +5,10 @@ import {
   parsePositiveDoge,
   parseOptionalFeeDoge,
   isValidOptionalFee,
+  parseRequiredFeeDoge,
+  isValidRequiredFee,
+  DEFAULT_OFFLINE_FEE_DOGE,
+  offlineSpendPreview,
   parsePayment,
   formatPaymentUri,
 } from '../src/lib/dogeForm.ts';
@@ -101,4 +105,27 @@ test('formatPaymentUri builds bare and query forms', () => {
   );
   assert.equal(formatPaymentUri('not-an-address'), null);
   assert.equal(formatPaymentUri(ADDR, { amount: 0 }), `dogecoin:${ADDR}`);
+});
+
+test('parseRequiredFeeDoge rejects empty and non-positive', () => {
+  assert.equal(parseRequiredFeeDoge('').ok, false);
+  assert.equal(parseRequiredFeeDoge('0').ok, false);
+  assert.equal(parseRequiredFeeDoge('-0.01').ok, false);
+  assert.deepEqual(parseRequiredFeeDoge('0.01'), { ok: true, fee: 0.01 });
+  assert.equal(isValidRequiredFee(''), false);
+  assert.equal(isValidRequiredFee(String(DEFAULT_OFFLINE_FEE_DOGE)), true);
+  assert.equal(DEFAULT_OFFLINE_FEE_DOGE, 0.01);
+});
+
+test('offlineSpendPreview totals amount+fee against snapshot', () => {
+  const ok = offlineSpendPreview(1, '0.01', 5);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.total, 1.01);
+  assert.equal(ok.shortfall, null);
+  const short = offlineSpendPreview(5, '0.01', 5);
+  assert.equal(short.ok, false);
+  assert.ok(short.shortfall != null && short.shortfall > 0);
+  const missingFee = offlineSpendPreview(1, '', 5);
+  assert.equal(missingFee.ok, false);
+  assert.equal(missingFee.fee, null);
 });

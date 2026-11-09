@@ -1,6 +1,6 @@
 <script lang="ts">
   import { errorMessage } from '$lib/errors';
-  import { looksLikeDogeAddress, parsePositiveDoge, isValidOptionalFee, parsePayment } from '$lib/dogeForm';
+  import { looksLikeDogeAddress, parsePositiveDoge, isValidOptionalFee, isValidRequiredFee, parseRequiredFeeDoge, DEFAULT_OFFLINE_FEE_DOGE, offlineSpendPreview, parsePayment } from '$lib/dogeForm';
   /**
    * Send tab — craft and broadcast a Dogecoin transaction over LoRa.
    */
@@ -196,8 +196,19 @@
   // Validation (shared helpers — Rust still re-checks on send)
   const isValidAddress = $derived(() => looksLikeDogeAddress(toAddress));
   const isValidAmount = $derived(() => parsePositiveDoge(amountDoge) != null);
-  /** Empty fee means "recommended"; otherwise a non-negative number. */
-  const isValidFee = $derived(() => isValidOptionalFee(feeDoge));
+  /** Online: empty fee means recommended. Offline snapshot: an explicit fee > 0 is required. */
+  const offlineFeeRequired = $derived(!!snapshotMatches);
+  const isValidFee = $derived(() =>
+    offlineFeeRequired ? isValidRequiredFee(feeDoge) : isValidOptionalFee(feeDoge)
+  );
+  const offlinePreview = $derived(
+    snapshotMatches && snapshot
+      ? offlineSpendPreview(parsePositiveDoge(amountDoge), feeDoge, snapshot.totalDoge)
+      : null
+  );
+  function useDefaultOfflineFee() {
+    feeDoge = String(DEFAULT_OFFLINE_FEE_DOGE);
+  }
 
   /** True only when ALL conditions are met — including a loaded wallet. */
   // ── Fee estimation ──────────────────────────────────────────────────────
@@ -234,6 +245,7 @@
     isValidAddress() &&
     isValidAmount() &&
     isValidFee() &&
+    !(offlineFeeRequired && offlinePreview != null && !offlinePreview.ok) &&
     !isSending
   );
 
@@ -648,8 +660,26 @@
           {/if}
         </p>
       {/if}
+      {#if offlineFeeRequired}
+        <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-muted);">
+          Offline snapshot loaded — enter a fee (suggested {DEFAULT_OFFLINE_FEE_DOGE} DOGE). No rate can be fetched without internet.
+          {#if !feeDoge.trim()}
+            <button type="button" class="btn-ghost" style="margin-left: 6px; padding: 2px 8px; font-size: var(--fs-xs);" onclick={useDefaultOfflineFee}>Use {DEFAULT_OFFLINE_FEE_DOGE}</button>
+          {/if}
+        </p>
+        {#if offlinePreview && offlinePreview.fee != null && offlinePreview.amount != null && offlinePreview.total != null}
+          <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-text);">
+            Spend preview: {offlinePreview.amount.toFixed(8)} + {offlinePreview.fee.toFixed(8)} fee =
+            <span style="font-family: var(--font-mono);">{offlinePreview.total.toFixed(8)} DOGE</span>
+            from {offlinePreview.available.toFixed(8)} available in snapshot.
+            {#if !offlinePreview.ok && offlinePreview.shortfall != null}
+              <span style="color: var(--doge-red);"> Short by {offlinePreview.shortfall.toFixed(8)} DOGE.</span>
+            {/if}
+          </p>
+        {/if}
+      {/if}
       {#if !isValidFee()}
-        <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-red);">⚠️ Fee must be 0 or more DOGE</p>
+        <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-red);">{offlineFeeRequired ? '⚠️ Offline signing needs a fee greater than 0 DOGE' : '⚠️ Fee must be 0 or more DOGE'}</p>
       {/if}
     {/if}
 
@@ -661,7 +691,7 @@
           No internet here? On a connected machine run
           <code>radiodoge-cli utxo-snapshot -a &lt;your address&gt; -o utxos.json</code>,
           copy the file to this device and import it. Signing then uses it instead of the network;
-          enter the fee by hand. The file holds only public chain data and is kept in memory only.
+          enter the fee by hand (Use 0.01 fills the usual default). The file holds only public chain data and is kept in memory only.
         </p>
         <div class="snap-row">
           <label class="btn-doge snap-btn">
@@ -698,6 +728,7 @@
         !wallet.isGenerated    ? 'Generate or import a wallet in the Wallet tab first' :
         !isValidAddress()      ? 'Enter a valid Dogecoin recipient address' :
         !isValidAmount()       ? 'Enter an amount greater than 0' :
+        !isValidFee()          ? (offlineFeeRequired ? 'Enter a network fee (offline signing cannot estimate one)' : 'Fee must be 0 or more DOGE') :
         'Sign & broadcast this transaction over LoRa 🚀'
       }
       style="
@@ -825,7 +856,7 @@
     <dt>Amount</dt>
     <dd><strong>{parseFloat(amountDoge || '0')} DOGE</strong></dd>
     <dt>Network fee</dt>
-    <dd>{feeDoge.trim() ? `${parseFloat(feeDoge)} DOGE` : 'Recommended (≈0.01 DOGE)'}</dd>
+    <dd>{feeDoge.trim() ? `${parseFloat(feeDoge)} DOGE` : (offlineFeeRequired ? 'Required — enter a fee' : 'Recommended (≈0.01 DOGE)')}</dd>
     {#if memo.trim()}
       <dt>Memo</dt>
       <dd>{memo.trim()}</dd>

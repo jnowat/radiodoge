@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.93 · Heltec V3 firmware v0.3.8*
+*App v0.3.94 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.93`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.94`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
@@ -211,7 +211,8 @@ Open the **Send** tab (needs a connection *and* a loaded wallet).
    signs a real transaction with `--wif`.)*
 4. The **From** row shows your loaded wallet address, and a **Network fee (DOGE)** field appears. Leave it
    empty for the recommended fee — **0.01 DOGE per started kB**, so 0.01 DOGE for a typical transaction — or type
-   your own. The total debit is `amount + fee`.
+   your own. The total debit is `amount + fee`. If you imported an **offline UTXO snapshot**, the fee is required
+   (no rate can be fetched); use **Use 0.01** and check the spend preview against the snapshot balance.
 5. Click **🚀 Sign & Broadcast via Radio**. The button is disabled until you're connected, have a wallet, and
    both fields are valid; its tooltip tells you what's missing.
 
