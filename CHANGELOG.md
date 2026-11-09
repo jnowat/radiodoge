@@ -11,10 +11,29 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.90] - 2026-11-03
+## [0.3.93] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.92] - 2026-11-03
+
+### Docs
+- ROADMAP Known Limitations: web/REST auth gap is no longer described as "by design"; it points at draft #71 and trusted-network guidance until hardware validation lands.
+
+## [0.3.91] - 2026-11-03
+
+### Added
+- History tab **Save** on each row: add that recipient to the Address Book (memo as label when set; skips duplicates).
+### Docs
+- USER_MANUAL History notes Save-to-Book.
+
+## [0.3.90] - 2026-11-03
+
+### Added
+- Frontend `hintFor` / `friendlyMessage` mirror `radiodoge_core::errors` so GUI banners get the same next-step hints as the CLI (wired through `errorMessage`).
+### Tests
+- Unit coverage for hint matching and Hint: de-duplication.
 
 ## [0.3.89] - 2026-11-03
 

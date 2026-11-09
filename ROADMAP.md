@@ -4,7 +4,7 @@
 
 **Much ambition. Very phases. Such plan. Wow.** 🐕
 
-*Current release: **v0.3.90** (app) · **v0.3.8** (Heltec V3 firmware)*
+*Current release: **v0.3.93** (app) · **v0.3.8** (Heltec V3 firmware)*
 
 [← Back to the README](README.md) · [User Manual](docs/USER_MANUAL.md) · [Changelog](CHANGELOG.md)
 
@@ -177,11 +177,13 @@ Honesty keeps the mesh healthy. These are real gaps in the current build, each a
   but the only real answer is the chain: use `radiodoge-cli verify-tx <txid>`, the History tab's inclusion
   check, or the Receive tab's **🔎 Check on-chain** button (v0.3.29, next to each incoming transaction, which
   now shows its txid) before treating anything as received.
-- **🟡 The web/REST interface has no authentication, by design.**
-  Any device that can reach the board's web server can call every `/api/*` route — and in dual-WiFi mode that
-  includes hosts on the upstream LAN, not only devices joined to the board's own access point. Treat a firmware
-  gateway as a device on a trusted network. `/proxy` is now gated on the internet bridge being explicitly
-  enabled and capped at 32 KB per response, but it remains a forward proxy for whoever can reach it.
+- **🟡 The firmware web/REST interface is still unauthenticated on default builds.**
+  Released firmware leaves every /api/* route open to anyone who can reach the board's web server (including
+  hosts on the upstream LAN in dual-WiFi mode). Treat a firmware gateway as trusted-network only until
+  authentication lands. /proxy is gated on the internet bridge being explicitly enabled and capped at 32 KB
+  per response, but it remains a forward proxy for whoever can reach it. **HTTP Basic auth is implemented in
+  draft PR #71** (replaces #40) and stays unmerged until hardware validation — see the Security/auth bullets
+  below rather than treating the gap as intentional forever.
 - **🟡 A LoRa frame lost in the air is not retransmitted.**
   A multipart transaction is several independent LoRa transmissions and boards do not acknowledge each other's
   data packets. If one part is lost, the gateway's reassembler discards the session after 30 s
