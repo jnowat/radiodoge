@@ -127,7 +127,6 @@ Rock-solid against real hardware, and now on your phone.
   aborted by the main loop. The host splits a payload over 192 bytes into frames and sends them one at a time,
   waiting for the board to acknowledge each, gated on the board reporting `FW11` or newer
 - ✅ **Fee estimation** — with no explicit fee, the desktop app, mobile send and CLI pay the configured chain backends' current rate (Core `estimatesmartfee`, BlockCypher, Blockbook) per started kB, floored at the recommended 0.01 DOGE/kB (also the fallback) and capped at 10 DOGE; `radiodoge-cli fee` shows it. *Gateway-reported rates over LoRa are still open.*
-  Today the fee is a flat 1 DOGE regardless of transaction size
 
 ---
 

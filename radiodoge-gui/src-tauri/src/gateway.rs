@@ -226,18 +226,20 @@ pub(crate) async fn get_fleet_stats(
     paths: Vec<String>,
     app: AppHandle,
 ) -> Result<serde_json::Value, String> {
-    use radiodoge_core::fleet::{aggregate, is_online, FleetMember};
+    use radiodoge_core::fleet::{
+        aggregate, fetch_stats_url, parse_remote_stats, stats_from_gateway_row, FleetMember,
+        RemoteStats, MAX_STATS_FILE_BYTES,
+    };
     use radiodoge_core::gateway_stats::GatewayStats;
-    pub(crate) const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-    let mut sources: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
+    let mut sources: Vec<(String, String)> = Vec::new();
     if let Some(p) = gateway_stats_path(&app) {
-        sources.push(("This PC".into(), Some(p)));
+        sources.push(("This PC".into(), p.to_string_lossy().into_owned()));
     }
     for raw in paths.iter().take(32) {
         let t = raw.trim();
         if !t.is_empty() {
-            sources.push((String::new(), Some(std::path::PathBuf::from(t))));
+            sources.push((String::new(), t.to_string()));
         }
     }
 
@@ -245,62 +247,146 @@ pub(crate) async fn get_fleet_stats(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let mut members = Vec::new();
-    let mut rows = Vec::new();
+    let mut members: Vec<FleetMember> = Vec::new();
+    let mut rows: Vec<serde_json::Value> = Vec::new();
     let mut used = std::collections::HashSet::new();
-    for (i, (fixed, path)) in sources.into_iter().enumerate() {
-        let Some(path) = path else { continue };
-        let read = async {
-            let meta = tokio::fs::metadata(&path)
-                .await
-                .map_err(radiodoge_core::errors::friendly)?;
-            if meta.len() > MAX_BYTES {
-                return Err("file is larger than 4 MB".to_string());
-            }
-            let bytes = tokio::fs::read(&path)
-                .await
-                .map_err(radiodoge_core::errors::friendly)?;
-            serde_json::from_slice::<GatewayStats>(&bytes)
-                .map_err(|e| format!("not a stats file: {e}"))
-        }
-        .await;
-        let is_local = i == 0 && fixed == "This PC";
-        let base = if !fixed.is_empty() {
-            fixed
-        } else if let Ok(s) = &read {
-            s.gateway_address.clone().unwrap_or_else(|| {
-                path.file_stem()
-                    .map(|f| f.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "gateway".into())
-            })
-        } else {
-            path.file_name()
-                .map(|f| f.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "gateway".into())
-        };
+
+    fn take_label(base: String, used: &mut std::collections::HashSet<String>) -> String {
         let mut label = base.clone();
         let mut n = 2;
         while !used.insert(label.clone()) {
             label = format!("{base} #{n}");
             n += 1;
         }
-        match read {
-            Ok(stats) => {
-                rows.push(serde_json::json!({
-                    "label": label, "path": path.to_string_lossy(), "local": is_local,
-                    "ok": true, "online": is_online(&stats, now), "updatedAt": stats.updated_at,
-                    "port": stats.port, "address": stats.gateway_address,
-                    "packetsHeard": stats.packets_heard, "txBroadcast": stats.tx_broadcast,
-                    "txFailed": stats.tx_failed,
-                    "outbox": stats.outbox_broadcasts + stats.outbox_replies,
-                }));
-                members.push(FleetMember { label, stats });
+        label
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_ok(
+        label_base: String,
+        path_disp: String,
+        stats: GatewayStats,
+        local: bool,
+        now: u64,
+        members: &mut Vec<FleetMember>,
+        rows: &mut Vec<serde_json::Value>,
+        used: &mut std::collections::HashSet<String>,
+    ) {
+        let label = take_label(label_base, used);
+        rows.push(serde_json::json!({
+            "label": label, "path": path_disp, "local": local,
+            "ok": true, "online": radiodoge_core::fleet::is_online(&stats, now), "updatedAt": stats.updated_at,
+            "port": stats.port, "address": stats.gateway_address,
+            "packetsHeard": stats.packets_heard, "txBroadcast": stats.tx_broadcast,
+            "txFailed": stats.tx_failed,
+            "outbox": stats.outbox_broadcasts + stats.outbox_replies,
+        }));
+        members.push(FleetMember { label, stats });
+    }
+
+    for (i, (fixed, src)) in sources.into_iter().enumerate() {
+        let is_url = src.starts_with("http://") || src.starts_with("https://");
+        let is_local = i == 0 && fixed == "This PC";
+
+        let loaded: Result<RemoteStats, String> = if is_url {
+            fetch_stats_url(&src).await
+        } else {
+            let path = std::path::PathBuf::from(&src);
+            async {
+                let meta = tokio::fs::metadata(&path)
+                    .await
+                    .map_err(radiodoge_core::errors::friendly)?;
+                if meta.len() > MAX_STATS_FILE_BYTES {
+                    return Err("file is larger than 4 MB".to_string());
+                }
+                let bytes = tokio::fs::read(&path)
+                    .await
+                    .map_err(radiodoge_core::errors::friendly)?;
+                parse_remote_stats(&bytes)
             }
-            // A missing local snapshot just means this PC is not running a gateway.
+            .await
+        };
+
+        match loaded {
+            Ok(RemoteStats::Single(stats)) => {
+                let base = if !fixed.is_empty() {
+                    fixed
+                } else {
+                    stats.gateway_address.clone().unwrap_or_else(|| {
+                        if is_url {
+                            src.clone()
+                        } else {
+                            std::path::Path::new(&src)
+                                .file_stem()
+                                .map(|f| f.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "gateway".into())
+                        }
+                    })
+                };
+                push_ok(
+                    base,
+                    src,
+                    stats,
+                    is_local,
+                    now,
+                    &mut members,
+                    &mut rows,
+                    &mut used,
+                );
+            }
+            Ok(RemoteStats::Fleet(resp)) => {
+                for g in resp.gateways {
+                    if !g.ok {
+                        let base = if g.label.is_empty() {
+                            src.clone()
+                        } else {
+                            g.label.clone()
+                        };
+                        let label = take_label(base, &mut used);
+                        rows.push(serde_json::json!({
+                            "label": label,
+                            "path": format!("{src}#{label}"),
+                            "local": false,
+                            "ok": false,
+                            "error": g.error.unwrap_or_else(|| "remote gateway error".into()),
+                        }));
+                        continue;
+                    }
+                    let stats = stats_from_gateway_row(&g, now);
+                    let base = if !g.label.is_empty() {
+                        g.label
+                    } else {
+                        g.address.clone().unwrap_or_else(|| src.clone())
+                    };
+                    push_ok(
+                        base,
+                        format!("{src}#{}", g.path),
+                        stats,
+                        false,
+                        now,
+                        &mut members,
+                        &mut rows,
+                        &mut used,
+                    );
+                }
+            }
             Err(_) if is_local => {}
-            Err(e) => rows.push(serde_json::json!({
-                "label": label, "path": path.to_string_lossy(), "local": false, "ok": false, "error": e,
-            })),
+            Err(e) => {
+                let base = if !fixed.is_empty() {
+                    fixed
+                } else if is_url {
+                    src.clone()
+                } else {
+                    std::path::Path::new(&src)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "gateway".into())
+                };
+                let label = take_label(base, &mut used);
+                rows.push(serde_json::json!({
+                    "label": label, "path": src, "local": false, "ok": false, "error": e,
+                }));
+            }
         }
     }
     let summary = aggregate(&members, now);

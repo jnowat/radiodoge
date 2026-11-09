@@ -11,10 +11,30 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.99] - unreleased (draft #71)
+## [0.3.103] - 2026-11-09
 
-### Changed
-- Renumbered above default after v0.3.98 mesh SNR; firmware HTTP Basic auth still awaiting hardware validation.
+### Fixed
+- ROADMAP: remove the stale "flat 1 DOGE" fee line that contradicted the completed network fee-estimation work.
+
+## [0.3.102] - 2026-11-09
+
+### Added
+- Send tab **Use estimate** button fills the fee field from the live network fee estimate (online), mirroring the offline **Use 0.01** affordance.
+
+## [0.3.101] - 2026-11-09
+
+### Added
+- End-to-end (no hardware) coverage that FW13 `ACK_SIGNAL` discover replies keep **RSSI + SNR** through host serial ingest (`discover_ack_signal_snr_survives_host_ingest`).
+
+## [0.3.100] - 2026-11-09
+
+### Added
+- `radiodoge-cli fleet summary --dir <stats>`: print one aggregated `{ now, gateways, summary }` JSON to stdout (same shape as `fleet serve` / the GUI) without starting an HTTP server.
+
+## [0.3.99] - 2026-11-09
+
+### Added
+- Fleet dashboard accepts **http(s) URLs** alongside local stats-file paths: a single `GatewayStats` JSON or a `fleet serve` `/summary` response. Core helpers `parse_remote_stats` / `fetch_stats_url` back the GUI command.
 
 ## [0.3.98] - 2026-11-09
 

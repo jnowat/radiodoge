@@ -7,6 +7,11 @@
 //! Endpoints (JSON):
 //! - `GET /health` — liveness
 //! - `GET /` and `GET /summary` — `{ now, gateways, summary }` (same shape as the GUI)
+//!
+//! One-shot (no server):
+//! ```text
+//! radiodoge-cli fleet summary --dir /var/radiodoge/stats
+//! ```
 
 use anyhow::{bail, Context, Result};
 use radiodoge_core::fleet;
@@ -113,6 +118,20 @@ async fn handle_client(mut stream: TcpStream, dir: &std::path::Path) -> Result<(
     stream.write_all(header.as_bytes()).await?;
     stream.write_all(&body).await?;
     stream.flush().await?;
+    Ok(())
+}
+
+/// Print one fleet JSON snapshot to stdout and exit.
+pub fn cmd_fleet_summary(dir: PathBuf) -> Result<()> {
+    if !dir.is_dir() {
+        bail!("stats directory does not exist: {}", dir.display());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let resp = fleet::response_from_dir(&dir, now).map_err(|e| anyhow::anyhow!(e))?;
+    println!("{}", serde_json::to_string_pretty(&resp)?);
     Ok(())
 }
 

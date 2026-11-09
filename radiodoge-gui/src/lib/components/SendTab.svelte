@@ -209,6 +209,12 @@
   function useDefaultOfflineFee() {
     feeDoge = String(DEFAULT_OFFLINE_FEE_DOGE);
   }
+  function useNetworkFeeEstimate() {
+    if (feeEstimate) {
+      // Pin the live estimate into the field (8 dp matches chain koinus precision display).
+      feeDoge = feeEstimate.feeDoge.toFixed(8).replace(/\.?0+$/, '') || '0';
+    }
+  }
 
   /** True only when ALL conditions are met — including a loaded wallet. */
   // ── Fee estimation ──────────────────────────────────────────────────────
@@ -655,9 +661,15 @@
           {:else if feeEstimate}
             Will pay ≈ <span style="font-family: var(--font-mono); color: var(--doge-text);">{feeEstimate.feeDoge.toFixed(8)} DOGE</span>
             ({(feeEstimate.rateKoinusPerKb / 1e8).toFixed(4)} DOGE/kB, ~{feeEstimate.sizeBytes} B)
+            <button type="button" class="btn-ghost" style="margin-left: 6px; padding: 2px 8px; font-size: var(--fs-xs);" onclick={useNetworkFeeEstimate}>Use estimate</button>
           {:else if feeError}
             <span title={feeError}>Network estimate unavailable — 0.01 DOGE per kB will be used.</span>
           {/if}
+        </p>
+      {:else if feeEstimate && !offlineFeeRequired}
+        <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-muted); text-align: right;">
+          Network estimate ≈ <span style="font-family: var(--font-mono);">{feeEstimate.feeDoge.toFixed(8)}</span> DOGE
+          <button type="button" class="btn-ghost" style="margin-left: 6px; padding: 2px 8px; font-size: var(--fs-xs);" onclick={useNetworkFeeEstimate}>Use estimate</button>
         </p>
       {/if}
       {#if offlineFeeRequired}
