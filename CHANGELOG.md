@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.54] - 2026-11-03
+
+### Added
+- Windows/desktop: clicking the window X hides RadioDoge to the system tray instead of quitting, so a connected Heltec and the gateway daemon keep running. Left-click the tray icon (or **Open RadioDoge**) to restore the window; **Quit** on the tray menu is the real exit (and still stops the gateway).
+- User manual: documents the close-to-tray behavior.
+
 ## [0.3.52] - 2026-11-03
 
 ### Docs
