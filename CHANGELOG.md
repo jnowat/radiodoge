@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.101] - 2026-11-09
+
+### Added
+- End-to-end (no hardware) coverage that FW13 `ACK_SIGNAL` discover replies keep **RSSI + SNR** through host serial ingest (`discover_ack_signal_snr_survives_host_ingest`).
+
 ## [0.3.100] - 2026-11-09
 
 ### Added
