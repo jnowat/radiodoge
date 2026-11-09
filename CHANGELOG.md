@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.102] - 2026-11-09
+
+### Added
+- Send tab **Use estimate** button fills the fee field from the live network fee estimate (online), mirroring the offline **Use 0.01** affordance.
+
 ## [0.3.101] - 2026-11-09
 
 ### Added
