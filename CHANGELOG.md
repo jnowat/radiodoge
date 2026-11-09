@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.79] - 2026-11-03
+
+### Added
+- `scripts/build-android.ps1`: local Bohr/dev Android APK build that mirrors CI (`tauri icon` → `android init --ci` → JitPack + BLE manifest patches → `tauri android build --apk --debug`). Optional `-OutDir` copies the APK(s); does not commit `gen/android`.
+### Docs
+- CONTRIBUTING mentions the Android build script.
+
 ## [0.3.78] - 2026-11-03
 
 ### Changed
