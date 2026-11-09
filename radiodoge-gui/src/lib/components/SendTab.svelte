@@ -10,7 +10,7 @@
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
-  import type { FeeEstimate, IncomingPacket, ParsedPayment, SendOutcome } from '$lib/types';
+  import type { AddressBookEntry, FeeEstimate, IncomingPacket, ParsedPayment, SendOutcome } from '$lib/types';
   import { open } from '@tauri-apps/plugin-shell';
   import DogeSpinner from './DogeSpinner.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
@@ -20,6 +20,24 @@
   let { onTriggerConfetti }: Props = $props();
 
   let toAddress = $state('');
+  let addressBook = $state<AddressBookEntry[]>([]);
+  let bookOpen = $state(false);
+
+  async function refreshAddressBook() {
+    try {
+      const raw = await invoke<AddressBookEntry[]>('load_address_book');
+      addressBook = raw ?? [];
+    } catch {
+      addressBook = [];
+    }
+  }
+
+  function pickBookEntry(entry: AddressBookEntry) {
+    toAddress = entry.address;
+    if (entry.label && !memo) memo = entry.label;
+    bookOpen = false;
+  }
+
   let amountDoge = $state('');
   let memo = $state('');
   let feeDoge = $state('');  // empty = network-estimated rate (min 0.01 DOGE per started kB)
@@ -49,7 +67,7 @@
     snapshotError = null;
   }
 
-  onMount(() => { invoke<SnapshotInfo | null>('utxo_snapshot_info').then((s) => (snapshot = s)).catch(() => {}); });
+  onMount(() => { void refreshAddressBook(); invoke<SnapshotInfo | null>('utxo_snapshot_info').then((s) => (snapshot = s)).catch(() => {}); });
 
   function snapshotAge(s: SnapshotInfo): string {
     const h = Math.max(0, (Date.now() / 1000 - s.fetchedAt) / 3600);
@@ -382,6 +400,16 @@
           📋 Paste
         </button>
         <button
+          type="button"
+          onclick={() => { bookOpen = !bookOpen; if (bookOpen) void refreshAddressBook(); }}
+          class="btn-ghost"
+          style="padding: 10px 14px; flex-shrink: 0;"
+          title="Pick a saved address from the Address Book"
+          aria-expanded={bookOpen}
+        >
+          Book
+        </button>
+        <button
           onclick={openQrPicker}
           disabled={scanning}
           class="btn-ghost"
@@ -415,6 +443,35 @@
           ✅ Valid Dogecoin address
         </p>
       {/if}
+    
+      {#if bookOpen}
+        <div
+          class="card-doge"
+          style="margin-top: 8px; padding: 8px; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;"
+          role="listbox"
+          aria-label="Address book"
+        >
+          {#if addressBook.length === 0}
+            <p style="margin: 8px; color: var(--doge-muted); font-size: var(--fs-sm);">
+              No saved addresses yet. Add some in the Address Book tab.
+            </p>
+          {:else}
+            {#each addressBook as entry (entry.id)}
+              <button
+                type="button"
+                role="option"
+                class="btn-ghost"
+                style="text-align: left; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px;"
+                onclick={() => pickBookEntry(entry)}
+              >
+                <span style="color: var(--doge-yellow); font-weight: 600;">{entry.label}</span>
+                <span class="mono" style="font-size: var(--fs-xs); color: var(--doge-muted);">{entry.address}</span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+
     </div>
 
     <!-- Amount -->
@@ -616,6 +673,9 @@
       {/if}
     </button>
   </div>
+        </div>
+      {/if}
+
 
   <!-- Success message -->
   {#if success}
