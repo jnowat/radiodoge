@@ -412,3 +412,13 @@ button[title] {
 .tab-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-6); }
 .tab-title { margin: 0 0 var(--sp-1); font-size: var(--fs-xl); font-weight: 700; color: var(--doge-text); }
 .tab-sub { margin: 0; font-size: var(--fs-base); color: var(--doge-muted); }
+/* Shared uppercase field label used on Connect / Send / Settings forms. */
+.field-label {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--doge-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--sp-2);
+}
+.field-label.tight { margin-bottom: 0; }

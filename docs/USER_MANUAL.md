@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.53 · Heltec V3 firmware v0.3.8*
+*App v0.3.58 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -95,9 +95,13 @@ pills for **🌐 GATEWAY** (board gateway mode on) and **▶ Daemon** (the `radi
 
 On phone-width screens (≤640 px) the tab labels and logo text collapse to **icons only**, with 48 px touch targets.
 
+### Closing the window (desktop)
+
+On Windows and other desktop builds, clicking the window **X** hides RadioDoge to the system tray instead of quitting — so a connected board and the gateway daemon keep running. Left-click the tray icon (or choose **Open RadioDoge**) to bring the window back. Choose **Quit** from the tray menu when you want a full exit.
+
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.53`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.58`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 

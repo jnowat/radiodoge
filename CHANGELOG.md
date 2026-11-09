@@ -9,10 +9,34 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.53] - 2026-11-03
+_Waiting on hardware validation before merge: firmware REST route authentication (#40)._
+
+## [0.3.58] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.57] - 2026-11-03
+
+### Changed
+- Forms: Connect and Send tabs now use a shared `.field-label` class (uppercase muted labels) from `app.css` instead of repeating the same long inline style on every field.
+
+## [0.3.56] - 2026-11-03
+
+### Docs
+- CHANGELOG [Unreleased] now correctly names draft #71 (replacing #40) as the firmware REST auth change awaiting hardware validation — #82's notes claimed this, but `finish.ps1`/`resolve.py` restored the base Unreleased text.
+- ROADMAP open item for the unauthenticated firmware web UI now points at draft PR #71.
+
+## [0.3.55] - 2026-11-03
+
+### Changed
+- Connect tab: the hero (logo, title, tagline) moved from a long stack of inline styles to scoped `.connect-hero*` classes, and both the Android and desktop "Connect to Heltec Device" headings use the shared `.tab-title` class so they match every other tab.
+
+## [0.3.54] - 2026-11-03
+
+### Added
+- Windows/desktop: clicking the window X hides RadioDoge to the system tray instead of quitting, so a connected Heltec and the gateway daemon keep running. Left-click the tray icon (or **Open RadioDoge**) to restore the window; **Quit** on the tray menu is the real exit (and still stops the gateway).
+- User manual: documents the close-to-tray behavior.
 
 ## [0.3.52] - 2026-11-03
 

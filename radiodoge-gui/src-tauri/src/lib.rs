@@ -1817,6 +1817,17 @@ pub fn run() {
             log::info!("RadioDoge GUI v{} started", env!("CARGO_PKG_VERSION"));
             Ok(())
         })
+        // Windows/desktop: the window X button hides to the tray so a connected
+        // board and the gateway daemon keep running. Quit from the tray menu
+        // (or Task Manager) still exits fully and kills the gateway below.
+        .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                log::info!("Window hidden to tray (use tray Quit to exit)");
+            }
+        })
         .build(tauri::generate_context!())
         .expect("Error running RadioDoge GUI")
         .run(|app, event| {

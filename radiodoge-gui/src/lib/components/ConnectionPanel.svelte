@@ -360,47 +360,23 @@
 <div class="tab-page narrow">
 
   <!-- ── Hero ─────────────────────────────────────────────────────────────── -->
-  <div style="text-align: center; margin-bottom: clamp(20px, 5vw, 40px);">
-    <div style="
-      margin-bottom: clamp(12px, 3vw, 20px);
-      display: inline-block;
-      animation: bounce-doge 3s ease-in-out infinite;
-      filter: drop-shadow(0 0 24px rgba(245, 197, 24, 0.45));
-    ">
+  <div class="connect-hero">
+    <div class="connect-hero-art">
       <img
         src="/doge-radio.png"
         alt="Doge holding a boombox radio with glowing Dogecoins"
-        style="
-          border-radius: 24px;
-          display: block;
-          width: clamp(80px, 28vw, 180px);
-          height: auto;
-        "
+        class="connect-hero-img"
       />
     </div>
-    <h1 style="
-      font-size: clamp(1.4rem, 5vw, 2rem);
-      font-weight: 800;
-      background: linear-gradient(135deg, var(--doge-yellow), var(--doge-orange));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin: 0 0 6px 0;
-    ">
-      RadioDoge
-    </h1>
-    <p style="color: var(--doge-muted); margin: 0; font-size: clamp(0.8rem, 2.5vw, 0.95rem);">
-      Wireless P2P Dogecoin — no internet required 🌐✖️
-    </p>
-    <p style="color: var(--doge-subtle); margin: 4px 0 0 0; font-size: clamp(0.68rem, 2vw, 0.78rem); font-style: italic;">
-      Much radio. Very LoRa. Such decentralize. Wow. 🐕🌙
-    </p>
+    <h1 class="connect-hero-title">RadioDoge</h1>
+    <p class="connect-hero-sub">Wireless P2P Dogecoin — no internet required 🌐✖️</p>
+    <p class="connect-hero-tag">Much radio. Very LoRa. Such decentralize. Wow. 🐕🌙</p>
   </div>
 
   <!-- ── Android USB/BT connection card (v0.3.10) ─────────────────────────── -->
   {#if isAndroidPlatform}
     <div class="card-doge {connection.isConnected ? 'card-connected' : ''}" style="margin-bottom: 16px;">
-      <h2 style="margin: 0 0 16px 0; font-size: var(--fs-lg); font-weight: 600; color: var(--doge-text);">
+      <h2 class="tab-title" style="margin-bottom: var(--sp-4);">
         📱 Connect to Heltec Device
       </h2>
 
@@ -491,7 +467,7 @@
         <!-- ── Device list ─────────────────────────────────────────────── -->
         <div style="margin-bottom: 14px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <div style="font-size: var(--fs-sm); color: var(--doge-muted); text-transform: uppercase; letter-spacing: 0.05em;">
+            <div class="field-label tight">
               {mobileConnectTab === 'bluetooth' ? 'Bluetooth Devices' : 'USB Serial Devices'}
             </div>
             <button
@@ -731,13 +707,13 @@
   <!-- ── Connection card (Desktop) ──────────────────────────────────────────── -->
   {#if !isAndroidPlatform}
   <div class="card-doge {connection.isConnected ? 'card-connected' : ''}">
-    <h2 style="margin: 0 0 20px 0; font-size: var(--fs-lg); font-weight: 600; color: var(--doge-text);">
+    <h2 class="tab-title" style="margin-bottom: var(--sp-5);">
       🔌 Connect to Heltec Device
     </h2>
 
     <!-- Port selection -->
     <div style="margin-bottom: 16px;">
-      <label for="serial-port-select" style="display: block; font-size: var(--fs-sm); color: var(--doge-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">
+      <label for="serial-port-select" class="field-label">
         Serial Port
       </label>
       <div style="display: flex; gap: 8px; min-width: 0;">
@@ -1123,3 +1099,31 @@
     </div>
   {/if}
 </div>
+
+<style>
+
+  .connect-hero { text-align: center; margin-bottom: clamp(20px, 5vw, 40px); }
+  .connect-hero-art {
+    margin-bottom: clamp(12px, 3vw, 20px);
+    display: inline-block;
+    animation: bounce-doge 3s ease-in-out infinite;
+    filter: drop-shadow(0 0 24px rgba(245, 197, 24, 0.45));
+  }
+  .connect-hero-img {
+    border-radius: 24px;
+    display: block;
+    width: clamp(80px, 28vw, 180px);
+    height: auto;
+  }
+  .connect-hero-title {
+    font-size: clamp(1.4rem, 5vw, 2rem);
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--doge-yellow), var(--doge-orange));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin: 0 0 6px 0;
+  }
+  .connect-hero-sub { color: var(--doge-muted); margin: 0; font-size: clamp(0.8rem, 2.5vw, 0.95rem); }
+  .connect-hero-tag { color: var(--doge-subtle); margin: 4px 0 0 0; font-size: clamp(0.68rem, 2vw, 0.78rem); font-style: italic; }
+</style>

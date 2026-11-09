@@ -2,9 +2,10 @@
 //!
 //! The tray icon:
 //!   - Shows a Dogecoin-branded icon in the system tray
-//!   - Displays connection status in the menu
+//!   - Displays connection status in the tooltip
 //!   - Left-click shows/hides the main window
-//!   - Menu has "Open", "Status", and "Quit" items
+//!   - Closing the window hides to the tray (keeps the radio session alive)
+//!   - Menu has "Open RadioDoge" and "Quit" (Quit is the real exit)
 
 use tauri::{
     menu::{Menu, MenuItem},
