@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.103] - 2026-11-09
+
+### Fixed
+- ROADMAP: remove the stale "flat 1 DOGE" fee line that contradicted the completed network fee-estimation work.
+
 ## [0.3.102] - 2026-11-09
 
 ### Added
