@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.81] - 2026-11-03
+
+### Fixed
+- `scripts/build-android.ps1`: after copying JNI `.so` files, Gradle runs `:app:assembleArm64Debug` (or release) with every `rustBuild*` task excluded (`-x`), so packaging no longer re-invokes Tauri's symlink step. Works on Windows without Developer Mode.
+
 ## [0.3.80] - 2026-11-03
 
 ### Fixed

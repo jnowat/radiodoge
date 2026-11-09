@@ -94,14 +94,24 @@ try {
 
 $apks = @(Get-ChildItem "radiodoge-gui/src-tauri/gen/android" -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue)
 if ($tauriExit -ne 0 -or $apks.Count -eq 0) {
-    Write-Host "== symlink fallback: copy .so into jniLibs + gradle assemble =="
+    Write-Host "== Windows fallback: copy .so into jniLibs + gradle assemble (skip rustBuild*) =="
     Install-JniLibsFromCargo
     $gradlew = Join-Path $repo "radiodoge-gui/src-tauri/gen/android/gradlew.bat"
     if (-not (Test-Path $gradlew)) { throw "gradlew.bat missing; tauri android init may have failed." }
     Push-Location (Join-Path $repo "radiodoge-gui/src-tauri/gen/android")
     try {
-        $task = if ($Release) { ":app:assembleRelease" } else { ":app:assembleDebug" }
-        & .\gradlew.bat $task --no-daemon
+        # Prefer arm64 (phones). Skip every rustBuild* task: tauri already compiled
+        # the .so (or we copied it into jniLibs). Re-running rustBuild tries to
+        # symlink into jniLibs and fails without Windows Developer Mode.
+        $task = if ($Release) { ":app:assembleArm64Release" } else { ":app:assembleArm64Debug" }
+        $skip = @(
+            '-x', 'rustBuildUniversalDebug', '-x', 'rustBuildArm64Debug',
+            '-x', 'rustBuildArmDebug', '-x', 'rustBuildX86Debug', '-x', 'rustBuildX86_64Debug',
+            '-x', 'rustBuildUniversalRelease', '-x', 'rustBuildArm64Release',
+            '-x', 'rustBuildArmRelease', '-x', 'rustBuildX86Release', '-x', 'rustBuildX86_64Release'
+        )
+        Write-Host "gradle $task (rustBuild* excluded)"
+        & .\gradlew.bat $task @skip --no-daemon
         if ($LASTEXITCODE -ne 0) { throw "gradle $task failed with exit $LASTEXITCODE" }
     } finally { Pop-Location }
     $apks = @(Get-ChildItem "radiodoge-gui/src-tauri/gen/android" -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue)
