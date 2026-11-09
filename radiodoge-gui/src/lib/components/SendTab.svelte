@@ -673,9 +673,6 @@
       {/if}
     </button>
   </div>
-        </div>
-      {/if}
-
 
   <!-- Success message -->
   {#if success}
