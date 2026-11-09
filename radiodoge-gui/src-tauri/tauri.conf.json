@@ -1,16 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RadioDoge",
-  "version": "0.3.65",
+  "version": "0.3.67",
   "identifier": "com.jnowat.radiodoge",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "windows": {
-      "staticVCRuntime": true
-    }
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
