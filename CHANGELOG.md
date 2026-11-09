@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.84] - 2026-11-03
+
+### Added
+- `scripts/build-android.ps1 -Release`: builds a minified release APK; without `ANDROID_KEY_STORE_*` env vars, `.github/scripts/patch_android_release_signing.py` points the release buildType at the debug keystore so local/sideload release APKs need no secrets in the repo.
+- Default arm64-only (`-t aarch64 --split-per-abi`); pass `-AllAbis` for every ABI. `-OutDir` copies versioned `RadioDoge_<ver>_arm64-{debug|release}.apk` names.
+### Docs
+- CONTRIBUTING documents `-Release` / `-AllAbis` / versioned OutDir names.
+
 ## [0.3.83] - 2026-11-03
 
 ### Added
