@@ -11,10 +11,27 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.71] - 2026-11-03
+## [0.3.74] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.73] - 2026-11-03
+
+### Changed
+- Mesh tab disconnected view uses the shared `EmptyState` card instead of a one-line centered note, matching Dashboard / Receive / Gateways.
+
+## [0.3.72] - 2026-11-03
+
+### Fixed
+- Gateways tab: removed unused `.tab-head h2` / `.tab-head p` CSS (leftover after the shared `.tab-header` migration) that svelte-check / Vite flagged every build.
+
+## [0.3.71] - 2026-11-03
+
+### Added
+- Pre-push gate (`scripts/check.ps1`) now validates `tauri.conf.json` via `npx tauri inspect wix-upgrade-code` (~2–3s). Same schema load path as `tauri build`, so invalid keys like `build.windows` (which broke installers after #88) fail the gate without a full release build.
+### Docs
+- CONTRIBUTING lists the tauri.conf schema step in the gate description.
 
 ## [0.3.70] - 2026-11-03
 
