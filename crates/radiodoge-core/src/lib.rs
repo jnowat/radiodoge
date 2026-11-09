@@ -32,6 +32,7 @@ pub mod meshtastic;
 #[cfg(feature = "native")]
 pub mod qr;
 pub mod radio;
+pub mod reconnect;
 #[cfg(feature = "native")]
 pub mod scan;
 #[cfg(feature = "native")]

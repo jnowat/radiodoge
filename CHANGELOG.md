@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.78] - 2026-11-03
+
+### Changed
+- Desktop auto-reconnect backoff (5→10→20→40→60 s) lives in `radiodoge-core::reconnect` and the GUI watchdog uses those helpers, so the schedule cannot drift from the docs.
+### Added
+- Unit tests for `next_reconnect_backoff_secs` (165 workspace tests).
+
 ## [0.3.77] - 2026-11-03
 
 ### Fixed
