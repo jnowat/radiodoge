@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.92] - 2026-11-03
+
+### Docs
+- ROADMAP Known Limitations: web/REST auth gap is no longer described as "by design"; it points at draft #71 and trusted-network guidance until hardware validation lands.
+
 ## [0.3.91] - 2026-11-03
 
 ### Added
