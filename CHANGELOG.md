@@ -11,10 +11,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.80] - 2026-11-03
+## [0.3.81] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.80] - 2026-11-03
+
+### Fixed
+- `scripts/build-android.ps1`: if `tauri android build` fails on Windows because creating JNI symlinks needs Developer Mode, copy `libradiodoge_gui_lib.so` into `jniLibs` and finish with `gradlew :app:assembleDebug` (or release).
 
 ## [0.3.79] - 2026-11-03
 
