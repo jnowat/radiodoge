@@ -290,8 +290,7 @@ Settings; they moved here in v0.3.48.)
 ### History 📜
 
 Every send is recorded (last 50) in `tx_history.json` and shown here — status icon (✅ sent / ❌ failed), amount
-to 8 decimals, timestamp, recipient (with copy), and any memo. It reloads automatically after each send; use
-**↺ Refresh** to reload manually.
+to 8 decimals, timestamp, recipient (with copy), and any memo. It reloads automatically after each send; use **↺ Refresh** to reload manually. Each row can **Save** the recipient into the Address Book.
 
 ### Address Book 📒
 
