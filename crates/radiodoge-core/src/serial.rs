@@ -1118,6 +1118,9 @@ pub async fn record_neighbor(neighbors: &TokioMutex<Vec<NeighborEntry>>, packet:
     let mut nbrs = neighbors.lock().await;
     if let Some(existing) = nbrs.iter_mut().find(|n| n.address == *src) {
         existing.rssi = packet.rssi;
+        if packet.snr.is_some() {
+            existing.snr = packet.snr;
+        }
         existing.last_seen = now;
         if shared_pos.is_some() {
             existing.position = shared_pos;
@@ -1127,6 +1130,7 @@ pub async fn record_neighbor(neighbors: &TokioMutex<Vec<NeighborEntry>>, packet:
         nbrs.push(NeighborEntry {
             address: src.clone(),
             rssi: packet.rssi,
+            snr: packet.snr,
             last_seen: now,
             position: shared_pos,
             position_at: shared_pos.map(|_| now),
@@ -1302,6 +1306,7 @@ mod discovery_tests {
         let n = |node, rssi, last_seen| NeighborEntry {
             address: NodeAddress::new(10, 0, node),
             rssi,
+            snr: None,
             last_seen,
             position: None,
             position_at: None,
@@ -1317,5 +1322,39 @@ mod discovery_tests {
         );
         let nodes: Vec<u8> = out.iter().map(|e| e.address.node).collect();
         assert_eq!(nodes, vec![3, 5, 2]);
+    }
+    #[test]
+    fn ack_signal_neighbor_keeps_snr() {
+        use crate::radio::{self, parse_incoming, CMD_RECEIVED_ACK_SIGNAL};
+        let pkt = [
+            CMD_RECEIVED_ACK_SIGNAL,
+            0,
+            10,
+            0,
+            2,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xB5,
+            0x07,
+        ];
+        let p = parse_incoming(&pkt, 0).expect("parses");
+        assert_eq!(p.command, radio::CMD_RECEIVED_ACK);
+        assert_eq!(p.rssi, -75);
+        assert_eq!(p.snr, Some(7));
+        let neighbors = tokio::sync::Mutex::new(Vec::new());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            record_neighbor(&neighbors, &p).await;
+            let v = neighbors.lock().await;
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0].rssi, -75);
+            assert_eq!(v[0].snr, Some(7));
+            assert_eq!(v[0].address.node, 2);
+        });
     }
 }
