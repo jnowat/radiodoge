@@ -15,6 +15,7 @@
   import { radio, clearPackets, type PacketEntry } from '$lib/stores/radio.svelte';
   import { formatTimestamp, commandName, type TxInclusion } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
+  import EmptyState from './EmptyState.svelte';
 
   // ── On-chain check for incoming transactions ─────────────────────────────
   // A DOGE_TX heard over LoRa is unauthenticated: anyone in range can forge
@@ -237,33 +238,24 @@
 
   <!-- ── Empty / disconnected states ────────────────────────────────────── -->
   {#if !connection.isConnected}
-    <div style="text-align: center; padding: 60px 20px; color: var(--doge-muted);">
-      <div style="font-size: 3rem; margin-bottom: 16px; animation: bounce-doge 2s ease-in-out infinite; display: inline-block;">🐕</div>
-      <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">Ears down</h3>
-      <p style="margin: 0; font-size: var(--fs-base);">
-        Connect to a Heltec device to monitor LoRa traffic.<br/>
-        <span style="font-style: italic;">Such listen. Very wait. Wow.</span>
-      </p>
-    </div>
+    <EmptyState
+      size="lg"
+      icon="🐕"
+      title="Ears down"
+      hint="Connect to a Heltec device to monitor LoRa traffic. Such listen. Very wait. Wow."
+    />
 
   {:else if filteredPackets().length === 0}
-    <div style="text-align: center; padding: 60px 20px; color: var(--doge-muted);">
-      <div style="font-size: 3rem; margin-bottom: 16px; display: inline-block; animation: bounce-doge 1.5s ease-in-out infinite;">🐕</div>
-      <h3 style="margin: 0 0 8px 0; color: var(--doge-text);">
-        {filter === 'all' ? 'Listening for packets...' : filter === 'tx' ? 'No TX packets yet' : 'No RX packets yet'}
-      </h3>
-      <p style="margin: 0; font-size: var(--fs-base);">
-        {#if filter === 'tx'}
-          Send a transaction to see TX packets here. 🐕
-        {:else if filter === 'rx'}
-          🐕 Ears up! Waiting for incoming LoRa transmissions.<br/>
-          <span style="font-style: italic;">Such patience. Very radio. Wow.</span>
-        {:else}
-          🐕 Ears up! Waiting for LoRa traffic...<br/>
-          <span style="font-style: italic;">Such patience. Very radio. Wow.</span>
-        {/if}
-      </p>
-    </div>
+    <EmptyState
+      size="lg"
+      icon="🐕"
+      title={filter === 'all' ? 'Listening for packets...' : filter === 'tx' ? 'No TX packets yet' : 'No RX packets yet'}
+      hint={filter === 'tx'
+        ? 'Send a transaction to see TX packets here.'
+        : filter === 'rx'
+          ? 'Ears up! Waiting for incoming LoRa transmissions. Such patience. Very radio. Wow.'
+          : 'Ears up! Waiting for LoRa traffic... Such patience. Very radio. Wow.'}
+    />
 
   {:else}
     <!-- ── Packet list ────────────────────────────────────────────────── -->
