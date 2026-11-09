@@ -227,7 +227,7 @@
         </text>
         {#each mapNodes as n}
           <circle cx={n.x} cy={n.y} r="7" fill={rssiColor(n.rssi)} stroke={n.fresh ? 'var(--doge-yellow)' : 'none'} stroke-width="2">
-            <title>{n.label} · {n.rssi === 0 ? 'RSSI n/a' : `${n.rssi} dBm`}</title>
+            <title>{n.label} · {n.rssi === 0 ? 'RSSI n/a' : `${n.rssi} dBm`}{n.snr == null ? '' : ` · SNR ${n.snr} dB`}</title>
           </circle>
           <text x={n.x} y={n.y - 11} text-anchor="middle" font-size="9" fill="var(--doge-muted)">{n.label}</text>
         {/each}
@@ -252,6 +252,7 @@
             <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Node Address</th>
             <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Signal</th>
             <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">RSSI</th>
+            <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">SNR</th>
             <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Last Heard</th>
             <th style="padding: 10px 14px; text-align: left; font-size: var(--fs-xs); color: var(--doge-muted); font-weight: 600;">Position</th>
           </tr>
@@ -264,6 +265,7 @@
               </td>
               <td style="padding: 10px 14px; font-size: var(--fs-sm);">{nbr.rssi === 0 ? '⚪ Unknown' : rssiQuality(nbr.rssi)}</td>
               <td style="padding: 10px 14px; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--doge-muted);">{nbr.rssi === 0 ? 'n/a' : `${nbr.rssi} dBm`}</td>
+              <td style="padding: 10px 14px; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--doge-muted);">{nbr.snr == null ? '—' : `${nbr.snr} dB`}</td>
               <td style="padding: 10px 14px; font-size: var(--fs-sm); color: var(--doge-muted);">{relativeTime(nbr.lastSeen)}</td>
               <td style="padding: 10px 14px; font-size: var(--fs-sm);">
                 {#if nbr.position}
