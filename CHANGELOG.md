@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.77] - 2026-11-03
+
+### Fixed
+- Error hint for invalid addresses now says RadioDoge expects mainnet P2PKH `D…` addresses (not "D, A or 9").
+### Added
+- Actionable hints for common Windows USB/serial failures (semaphore timeout / os error 121, device not functioning / os error 31, vanished COM port) and gateway-daemon exit, matched *before* the generic "timeout" hint so they are not swallowed.
+- Unit tests covering the new hints.
+
 ## [0.3.76] - 2026-11-03
 
 ### Changed
