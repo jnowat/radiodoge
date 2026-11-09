@@ -192,6 +192,20 @@ pub struct IncomingPacket {
     pub snr: Option<i8>,
 }
 
+/// `true` when a `CMD_DOGE_TX` packet is an actual incoming transaction rather
+/// than the board's own acknowledgement of one we just sent.
+///
+/// The board answers every `0x10` the host writes with an 8-byte reply carrying
+/// the same command byte and no payload. Treating that as an arrival would pop a
+/// "DOGE Transaction Received!" desktop notification on the *sender* after every
+/// send — and once per frame, so a multipart transaction produced a burst of them.
+/// A real transaction always decodes to something; the bare acknowledgement cannot.
+pub fn is_incoming_doge_tx(packet: &IncomingPacket) -> bool {
+    packet.command == crate::radio::CMD_DOGE_TX
+        && !packet.payload_hex.is_empty()
+        && packet.decoded.is_some()
+}
+
 /// v0.3.6 — Board-is-source-of-truth: live state reported by the Heltec device
 /// on CMD_GET_SETTINGS (0x22) response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -417,5 +431,44 @@ mod tests {
             .message
             .unwrap()
             .contains("boom"));
+    }
+
+    #[test]
+    fn incoming_doge_tx_ignores_bare_ack() {
+        let ack = IncomingPacket {
+            timestamp: 0,
+            source: NodeAddress::new(10, 0, 1),
+            destination: NodeAddress::new(10, 0, 2),
+            command: crate::radio::CMD_DOGE_TX,
+            payload_hex: String::new(),
+            decoded: None,
+            rssi: -70,
+            hops: 0,
+            snr: None,
+        };
+        assert!(!is_incoming_doge_tx(&ack));
+    }
+
+    #[test]
+    fn incoming_doge_tx_requires_payload_and_decode() {
+        let mut pkt = IncomingPacket {
+            timestamp: 0,
+            source: NodeAddress::new(10, 0, 2),
+            destination: NodeAddress::new(10, 0, 1),
+            command: crate::radio::CMD_DOGE_TX,
+            payload_hex: "dead".into(),
+            decoded: None,
+            rssi: -70,
+            hops: 0,
+            snr: None,
+        };
+        assert!(
+            !is_incoming_doge_tx(&pkt),
+            "payload without decode is not an arrival"
+        );
+        pkt.decoded = Some("DOGE TX".into());
+        assert!(is_incoming_doge_tx(&pkt));
+        pkt.command = crate::radio::CMD_PING;
+        assert!(!is_incoming_doge_tx(&pkt), "non-DOGE_TX ignored");
     }
 }
