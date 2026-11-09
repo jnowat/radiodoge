@@ -84,6 +84,22 @@
       0x10: 'DOGE TX — Dogecoin transaction over LoRa 🐕',
       0x11: 'BALANCE — UTXO balance request',
       0x20: 'FW VERSION — firmware version query',
+      0x21: 'SET LORA — change SF/BW/CR/frequency/power',
+      0x22: 'GET SETTINGS — board live state',
+      0x23: 'SET GATEWAY — enable/disable gateway mode',
+      0x24: 'WIFI TOGGLE — enable/disable WiFi AP',
+      0x25: 'ADDR CONFLICT — duplicate node address',
+      0x26: 'GET BATTERY — battery voltage',
+      0x27: 'GET MAC — board MAC address',
+      0x28: 'BLE TOGGLE — enable/disable BLE',
+      0x29: 'RX ACK — over-the-air ACK from remote node',
+      0x2A: 'RX PING — over-the-air Ping heard',
+      0x2B: 'RAW TX — raw LoRa frame transmit',
+      0x2C: 'RAW RX MODE — enter/leave raw receive',
+      0x2D: 'RAW RX — raw frame received',
+      0x2E: 'DISCOVER — mesh discovery ping',
+      0x2F: 'RX ACK SIGNAL — ACK with RSSI/SNR',
+      0x30: 'RX SIGNAL — signal of next forwarded frame',
     };
     return map[cmd] ?? `Unknown command 0x${cmd.toString(16).toUpperCase()}`;
   }
