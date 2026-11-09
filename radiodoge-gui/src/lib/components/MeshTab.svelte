@@ -237,9 +237,11 @@
 
   <!-- ── Neighbors Table ──────────────────────────────────────────────────── -->
   {#if !connection.isConnected}
-    <div class="card-doge" style="text-align: center; padding: 32px; color: var(--doge-muted);">
-      🔌 Connect to a board to see mesh neighbors.
-    </div>
+    <EmptyState
+      icon="🔌"
+      title="Connect a Heltec to see mesh neighbors"
+      hint="Neighbors appear here once the board is connected and other RadioDoge nodes transmit on the mesh."
+    />
   {:else if connection.neighbors.length === 0}
     <EmptyState icon="🦴" title="No neighbors heard yet" hint="Waiting for other RadioDoge nodes to transmit on the mesh…" />
   {:else}
