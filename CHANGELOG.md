@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.105] - 2026-11-09
+
+### Added
+- `radiodoge-cli discover` prints an **SNR** column when the board reported it, and accepts `--json` for machine-readable neighbor rows (`address`, `rssi`, `snr`, `lastSeen`).
+
 ## [0.3.104] - 2026-11-09
 
 ### Added
