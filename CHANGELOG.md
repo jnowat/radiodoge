@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.89] - 2026-11-03
+
+### Fixed
+- Silence unused `app` / `window` / `event` bindings in the Tauri builder on Android (`cfg(not(desktop))`), so release APK builds stay warning-clean.
+
 ## [0.3.88] - 2026-11-03
 
 ### Added
