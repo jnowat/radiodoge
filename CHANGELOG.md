@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.60] - 2026-11-03
+
+### Fixed
+- Windows build: declare `build.windows.staticVCRuntime` in `tauri.conf.json` and set it through `tauri_build::WindowsAttributes::static_vc_runtime` in `build.rs`, the supported replacements for the deprecated `STATIC_VCRUNTIME` env var (tauri-cli may still set that env; the config/API path is now explicit).
+### Docs
+- ROADMAP's open firmware-auth item now points at draft #71 as **v0.3.58** (was a stale v0.3.53 label).
+
 ## [0.3.59] - 2026-11-03
 
 ### Added
