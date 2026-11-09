@@ -11,10 +11,22 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.95] - 2026-11-09
+
+### Tests
+- Mocked serial/LoRa end-to-end coverage for `CMD_PING` and `CMD_REQUEST_BALANCE` (host→board→air→gateway, BAL reply framing, interleaved streams).
+
+## [0.3.94] - 2026-11-09
+
+### Added
+- Offline-signing fee UX: when a matching UTXO snapshot is loaded, Send requires an explicit fee (> 0), offers **Use 0.01**, and shows amount+fee vs snapshot balance before send.
+- Shared helpers `DEFAULT_OFFLINE_FEE_DOGE`, `parseRequiredFeeDoge`, `offlineSpendPreview` with unit tests.
+
 ## [0.3.93] - 2026-11-03
 
-### Security
-- Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+### Gateway
+- Outbox retries now classify broadcast failures the same way as the live path: duplicates ACK as success, permanent rejections drop with TX_NACK (no more burning the 48h TTL on doomed txs), and only transient errors keep backoff.
+- Shared `classify_broadcast_error` / `BroadcastErrorKind` live in `radiodoge-core::tx_reply` with unit coverage.
 
 ## [0.3.92] - 2026-11-03
 

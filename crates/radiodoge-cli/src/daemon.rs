@@ -316,21 +316,8 @@ pub(crate) async fn cmd_daemon(
 /// `true` if a broadcast error means the network already has this transaction.
 ///
 /// Every node worth talking to rejects a duplicate, and each phrases it
-/// differently. A duplicate is a *success* from the sender's point of view — the
-/// transaction is on the network — so it must produce an acknowledgement rather
-/// than a retry loop that ends in "broadcast failed".
-pub(crate) fn is_duplicate_broadcast_error(err: &str) -> bool {
-    let e = err.to_ascii_lowercase();
-    e.contains("already in block chain")
-        || e.contains("already in the mempool")
-        || e.contains("already in mempool")
-        || e.contains("already known")
-        || e.contains("txn-already-known")
-        || e.contains("txn-already-in-mempool")
-        || e.contains("transaction already exists")
-        || e.contains("already exists")
-        || e.contains("duplicate transaction")
-}
+/// Re-export: duplicates are treated as success (see `tx_reply::is_duplicate_broadcast_error`).
+pub(crate) use radiodoge_core::tx_reply::is_duplicate_broadcast_error;
 
 /// Broadcast a signed transaction to the Dogecoin network with exponential-backoff
 /// retry (up to 3 attempts), then radio an ACK back to the originating node.
@@ -506,21 +493,8 @@ pub(crate) async fn outbox_tick(
     }
     for b in due {
         let node = parse_node(&b.source).unwrap_or_default();
-        let accepted = match wallet::broadcast_raw_tx(&b.raw_hex).await {
-            Ok(id) => Some(id),
-            Err(e) if is_duplicate_broadcast_error(&e.to_string()) => Some(b.txid.clone()),
-            Err(e) => {
-                log::info!(
-                    "GATEWAY  outbox retry {} for txid={} failed: {}",
-                    b.attempts + 1,
-                    b.txid,
-                    e
-                );
-                None
-            }
-        };
-        match accepted {
-            Some(id) => {
+        match wallet::broadcast_raw_tx(&b.raw_hex).await {
+            Ok(id) => {
                 log::info!(
                     "GATEWAY  outbox: txid={} broadcast on retry {}",
                     id,
@@ -533,9 +507,57 @@ pub(crate) async fn outbox_tick(
                 stats_record(stats, GatewayEventKind::TxBroadcast, &node, id.clone());
                 daemon_send_tx_ack(&id, mgr, &node, stats, outbox).await;
             }
-            None => {
-                if let Ok(mut o) = outbox.lock() {
-                    o.broadcast_failed(&b.txid, unix_now());
+            Err(e) => {
+                let msg = e.to_string();
+                match tx_reply::classify_broadcast_error(&msg) {
+                    tx_reply::BroadcastErrorKind::DuplicateAsSuccess => {
+                        log::info!(
+                            "GATEWAY  outbox: txid={} already on network - acknowledging",
+                            b.txid
+                        );
+                        if let Ok(mut o) = outbox.lock() {
+                            o.broadcast_done(&b.txid);
+                        }
+                        seen.lock().await.insert(b.txid.clone(), b.txid.clone());
+                        stats_record(
+                            stats,
+                            GatewayEventKind::TxBroadcast,
+                            &node,
+                            format!("{} (already on network)", b.txid),
+                        );
+                        daemon_send_tx_ack(&b.txid, mgr, &node, stats, outbox).await;
+                    }
+                    tx_reply::BroadcastErrorKind::Permanent => {
+                        // Same contract as the live broadcast path: do not burn
+                        // the 48 h outbox TTL retrying bytes the network rejected.
+                        log::warn!(
+                            "GATEWAY  outbox: txid={} permanently rejected ({}) - TX_NACK",
+                            b.txid,
+                            msg
+                        );
+                        if let Ok(mut o) = outbox.lock() {
+                            o.broadcast_done(&b.txid);
+                        }
+                        stats_record(stats, GatewayEventKind::TxFailed, &node, msg.clone());
+                        let nack = TxReply::Nack {
+                            txid: b.txid.clone(),
+                            reason: msg,
+                        }
+                        .to_text();
+                        send_reply(&nack, mgr, &node, stats, outbox, GatewayEventKind::AckSent)
+                            .await;
+                    }
+                    tx_reply::BroadcastErrorKind::Transient => {
+                        log::info!(
+                            "GATEWAY  outbox retry {} for txid={} failed: {}",
+                            b.attempts + 1,
+                            b.txid,
+                            msg
+                        );
+                        if let Ok(mut o) = outbox.lock() {
+                            o.broadcast_failed(&b.txid, unix_now());
+                        }
+                    }
                 }
             }
         }
