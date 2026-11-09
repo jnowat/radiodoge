@@ -281,6 +281,14 @@ pub(crate) enum Commands {
         outbox_file: Option<std::path::PathBuf>,
     },
 
+    /// Multi-gateway fleet HTTP dashboard (aggregates `--stats-file` JSON)
+    ///
+    /// Example: radiodoge-cli fleet serve --dir C:\\stats --bind 127.0.0.1:8787
+    Fleet {
+        #[command(subcommand)]
+        cmd: FleetCommands,
+    },
+
     /// Query the confirmed Dogecoin balance for an address via the configured chain backends (Core RPC, then BlockCypher)
     ///
     /// Requires an internet connection.
@@ -459,5 +467,22 @@ pub(crate) enum WalletCommands {
     Validate {
         /// Dogecoin address to validate
         address: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum FleetCommands {
+    /// Serve aggregated gateway stats over HTTP (local collectors / dashboards)
+    ///
+    /// Reads every `*.json` in `--dir` on each request and returns the same
+    /// `{ now, gateways, summary }` shape the GUI fleet view uses.
+    Serve {
+        /// Directory of gateway `--stats-file` JSON snapshots
+        #[arg(long)]
+        dir: std::path::PathBuf,
+
+        /// Bind address (default 127.0.0.1:8787)
+        #[arg(long, default_value = "127.0.0.1:8787")]
+        bind: String,
     },
 }
