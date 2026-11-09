@@ -50,6 +50,65 @@
     }
   }
 
+  let importInput: HTMLInputElement | undefined = $state();
+  let ioBusy = $state(false);
+  let ioMsg = $state<string | null>(null);
+
+  function exportBook() {
+    ioMsg = null;
+    const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'radiodoge-address-book.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    ioMsg = `Exported ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}.`;
+  }
+
+  async function importBook(file: File | null) {
+    if (!file) return;
+    ioBusy = true;
+    ioMsg = null;
+    formError = null;
+    try {
+      const text = await file.text();
+      const raw = JSON.parse(text) as unknown;
+      if (!Array.isArray(raw)) throw new Error('File must be a JSON array of address-book entries.');
+      const next: AddressBookEntry[] = [];
+      for (const row of raw) {
+        if (!row || typeof row !== 'object') throw new Error('Each entry must be an object.');
+        const e = row as Record<string, unknown>;
+        const address = String(e.address ?? '').trim();
+        const label = String(e.label ?? '').trim();
+        if (!label) throw new Error('Every entry needs a label.');
+        if (!looksLikeDogeAddress(address) && !(address.startsWith('D') && address.length >= 25 && address.length <= 35)) {
+          throw new Error(`Invalid address in import: ${address || '(empty)'}`);
+        }
+        next.push({
+          id: String(e.id ?? Date.now() + Math.random()),
+          label,
+          address,
+          createdAt: typeof e.createdAt === 'number' ? e.createdAt : Math.floor(Date.now() / 1000),
+          notes: typeof e.notes === 'string' && e.notes.trim() ? e.notes.trim() : undefined,
+        });
+      }
+      const previous = entries;
+      entries = next;
+      if (!await persist()) {
+        entries = previous;
+        ioMsg = persistError;
+      } else {
+        ioMsg = `Imported ${next.length} entr${next.length === 1 ? 'y' : 'ies'}.`;
+      }
+    } catch (e: unknown) {
+      ioMsg = e instanceof Error ? e.message : errorMessage(e);
+    } finally {
+      ioBusy = false;
+      if (importInput) importInput.value = '';
+    }
+  }
+
   async function addEntry() {
     const label = newLabel.trim();
     if (!label) { formError = 'Label is required.'; return; }
@@ -114,13 +173,39 @@
         Save labelled Dogecoin addresses · stored locally
       </p>
     </div>
-    <button
-      onclick={() => { showForm = !showForm; formError = null; }}
-      style="padding: 7px 16px; border: 1px solid var(--doge-yellow); background: rgba(245,197,24,0.08); color: var(--doge-yellow); border-radius: 8px; cursor: pointer; font-size: var(--fs-sm);"
-    >
-      {showForm ? '✕ Cancel' : '+ Add Address'}
-    </button>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
+      <button
+        type="button"
+        class="btn-ghost"
+        style="padding: 7px 12px; font-size: var(--fs-sm);"
+        onclick={exportBook}
+        disabled={entries.length === 0 || ioBusy}
+      >Export JSON</button>
+      <button
+        type="button"
+        class="btn-ghost"
+        style="padding: 7px 12px; font-size: var(--fs-sm);"
+        onclick={() => importInput?.click()}
+        disabled={ioBusy}
+      >Import JSON</button>
+      <input
+        bind:this={importInput}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onchange={(e) => importBook(e.currentTarget.files?.[0] ?? null)}
+      />
+      <button
+        onclick={() => { showForm = !showForm; formError = null; }}
+        style="padding: 7px 16px; border: 1px solid var(--doge-yellow); background: rgba(245,197,24,0.08); color: var(--doge-yellow); border-radius: 8px; cursor: pointer; font-size: var(--fs-sm);"
+      >
+        {showForm ? '✕ Cancel' : '+ Add Address'}
+      </button>
+    </div>
   </div>
+  {#if ioMsg}
+    <p style="margin: 0 0 8px; font-size: var(--fs-xs); color: var(--doge-muted);" role="status">{ioMsg}</p>
+  {/if}
 
   <!-- ── Add form ───────────────────────────────────────────────────────── -->
   {#if showForm}
