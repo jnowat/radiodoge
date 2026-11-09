@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
+import { normalizeBackendSpec, validateBackendSpec, backendSpecErrorMessage } from './chainBackendSpec';
+export { normalizeBackendSpec, validateBackendSpec, backendSpecErrorMessage, KNOWN_BACKENDS } from './chainBackendSpec';
 
 /** localStorage key for the user's chain-backend spec (empty = app default). */
 const KEY = 'radiodoge.chainBackends';
@@ -20,7 +22,12 @@ export function loadBackendSpec(): string {
 
 /** Validate + apply a spec in the Rust side, then persist it. Throws the backend's error text. */
 export async function applyBackendSpec(spec: string): Promise<void> {
-  const trimmed = spec.trim();
+  const trimmed = normalizeBackendSpec(spec);
+  const issue = validateBackendSpec(trimmed);
+  // Empty means "use the app default" and is sent as "" to Rust (clears override).
+  if (issue && issue.kind !== 'empty') {
+    throw new Error(backendSpecErrorMessage(issue));
+  }
   await invoke('set_chain_backends', { spec: trimmed });
   try {
     if (trimmed) localStorage.setItem(KEY, trimmed);

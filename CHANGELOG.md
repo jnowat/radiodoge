@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#40)._
 
+## [0.3.59] - 2026-11-03
+
+### Added
+- Frontend unit tests for chain-backend spec parsing (`normalizeBackendSpec` / `validateBackendSpec`), covering aliases (`core`/`rpc`/`dogecoind`), unknown names, and `blockbook=` URL requirements — 7 new cases (13 unit tests total).
+### Changed
+- Settings: applying a chain-backend spec now normalizes and validates locally (same rules as Rust `parse_backends`) before calling the backend, so typos surface immediately instead of as a vague invoke error.
+
 ## [0.3.57] - 2026-11-03
 
 ### Changed
