@@ -690,3 +690,47 @@ pub(crate) async fn daemon_fetch_and_send_balance(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use radiodoge_core::gateway_stats::GatewayStats;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn write_atomic_replaces_destination() {
+        let dir = std::env::temp_dir().join(format!("rd-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.json");
+        std::fs::write(&path, b"old").unwrap();
+        write_atomic(&path, "{\"ok\":true}");
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(got, "{\"ok\":true}");
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_stats_file_is_valid_gateway_stats_json() {
+        let dir = std::env::temp_dir().join(format!("rd-stats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("gateway-stats.json");
+        let stats: SharedStats = Arc::new(Mutex::new(GatewayStats::new("COM9", 42)));
+        {
+            let mut g = stats.lock().unwrap();
+            g.packets_heard = 3;
+            g.gateway_address = Some("10.0.1".into());
+        }
+        write_stats_file(&path, &stats);
+        let bytes = std::fs::read(&path).unwrap();
+        let parsed: GatewayStats = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.port, "COM9");
+        assert_eq!(parsed.packets_heard, 3);
+        assert_eq!(parsed.gateway_address.as_deref(), Some("10.0.1"));
+        assert!(parsed.updated_at >= 42);
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
