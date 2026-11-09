@@ -413,6 +413,30 @@ button[title] {
 .tab-title { margin: 0 0 var(--sp-1); font-size: var(--fs-xl); font-weight: 700; color: var(--doge-text); }
 .tab-sub { margin: 0; font-size: var(--fs-base); color: var(--doge-muted); }
 /* Shared uppercase field label used on Connect / Send / Settings forms. */
+
+/* Card section title inside .card-doge (Settings, etc.) */
+.card-heading {
+  margin: 0;
+  font-weight: 600;
+  font-size: var(--fs-base);
+  color: var(--doge-text);
+}
+.card-heading.clickable { cursor: pointer; }
+.card-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.card-heading-row.top { align-items: flex-start; margin-bottom: 4px; }
+.card-heading-value {
+  font-family: var(--font-mono);
+  color: var(--doge-yellow);
+  font-weight: 700;
+}
+
 .field-label {
   display: block;
   font-size: var(--fs-sm);

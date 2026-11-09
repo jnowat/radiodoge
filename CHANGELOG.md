@@ -9,10 +9,28 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.66] - 2026-11-03
+_Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
+
+## [0.3.71] - 2026-11-03
 
 ### Security
 - Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+## [0.3.70] - 2026-11-03
+
+### Docs
+- ROADMAP: both firmware-auth open items now point at draft **#71** (one still said #40; the other dropped a stale v0.3.58 label).
+
+## [0.3.69] - 2026-11-03
+
+### Changed
+- Shared `.card-heading` / `.card-heading-row` / `.card-heading-value` classes in `app.css`. Settings tab LoRa cards use them instead of repeating the same bold title + mono value inline styles.
+
+## [0.3.68] - 2026-11-03
+
+### Changed
+- Shared `EmptyState` now accepts an optional children snippet (action row under the hint).
+- Radio log (Receive) disconnected / listening empties and Wallet "No wallet yet" use `EmptyState` (with Generate Wallet as the action), matching Dashboard / History / Mesh / Gateways.
 
 ## [0.3.67] - 2026-11-03
 

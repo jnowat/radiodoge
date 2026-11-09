@@ -343,15 +343,15 @@
 
     <!-- ── Frequency ──────────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Frequency setting">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+      <div class="card-heading-row">
         <label
           for="settings-frequency"
-          style="font-weight: 600; font-size: var(--fs-base); cursor: pointer;"
+          class="card-heading clickable"
           title="LoRa carrier frequency in MHz. Must match all nodes in your mesh network. 915 = US/AU, 433 = EU/Asia."
         >
           📻 Frequency
         </label>
-        <span style="font-family: var(--font-mono); color: var(--doge-yellow); font-weight: 700;">
+        <span class="card-heading-value">
           {settings.frequencyMhz} MHz
         </span>
       </div>
@@ -373,15 +373,15 @@
 
     <!-- ── TX Power ───────────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="TX power setting">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+      <div class="card-heading-row">
         <label
           for="settings-tx-power"
-          style="font-weight: 600; font-size: var(--fs-base); cursor: pointer;"
+          class="card-heading clickable"
           title="Transmit power in dBm. Higher = more range but more current draw. 20 dBm = 100 mW = maximum."
         >
           ⚡ TX Power
         </label>
-        <span style="font-family: var(--font-mono); color: var(--doge-yellow); font-weight: 700;">
+        <span class="card-heading-value">
           {settings.powerDbm} dBm
         </span>
       </div>
@@ -404,7 +404,7 @@
 
     <!-- ── Spreading Factor ───────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Spreading factor setting">
-      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
+      <p class="card-heading" style="display: block; margin: 0 0 12px 0;"
          title="Spreading Factor controls range vs. data rate. SF7 = fastest, SF12 = longest range but very slow."
       >
         📶 Spreading Factor
@@ -438,7 +438,7 @@
 
     <!-- ── Bandwidth ─────────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Bandwidth setting">
-      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
+      <p class="card-heading" style="display: block; margin: 0 0 12px 0;"
          title="LoRa channel bandwidth. Narrower = longer range. 125 kHz is the standard worldwide."
       >
         〰️ Bandwidth
@@ -469,7 +469,7 @@
 
     <!-- ── Coding Rate ────────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Coding rate setting">
-      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
+      <p class="card-heading" style="display: block; margin: 0 0 12px 0;"
          title="Forward error correction ratio. Higher denominator = more redundancy = better noise tolerance but slower."
       >
         🔢 Coding Rate
@@ -500,8 +500,8 @@
 
     <!-- ── Node Address ───────────────────────────────────────────────────── -->
     <div class="card-doge" aria-label="Node address setting">
-      <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 4px; flex-wrap: wrap; gap: 8px;">
-        <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0;"
+      <div class="card-heading-row top">
+        <p class="card-heading" style="display: block;"
            title="This node's unique address on the RadioDoge mesh. Format: Region.Community.Node (each 0–254). Address 255.255.255 is broadcast (all nodes)."
         >
           📍 Node Address
@@ -556,7 +556,7 @@
 
     <!-- ── v0.3.6 — Connection Type (USB / BLE) ─────────────────────────── -->
     <div class="card-doge" aria-label="Connection type">
-      <p style="display: block; font-weight: 600; font-size: var(--fs-base); margin: 0 0 12px 0;"
+      <p class="card-heading" style="display: block; margin: 0 0 12px 0;"
          title="Choose how to connect to your Heltec board. USB = wired serial (default). BLE = wireless Bluetooth LE (Heltec V3 only)."
       >
         🔌 Connection Type
