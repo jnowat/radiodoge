@@ -32,6 +32,4 @@
 <style>
   .gateways { display: flex; flex-direction: column; gap: var(--sp-4); }
   .gateways .tab-header { margin-bottom: 0; }
-  .tab-head h2 { margin: 0 0 4px; font-size: var(--fs-xl); color: var(--doge-yellow); }
-  .tab-head p { margin: 0; font-size: var(--fs-sm); color: var(--doge-muted); }
 </style>
