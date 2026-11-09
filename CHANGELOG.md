@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.72] - 2026-11-03
+
+### Fixed
+- Gateways tab: removed unused `.tab-head h2` / `.tab-head p` CSS (leftover after the shared `.tab-header` migration) that svelte-check / Vite flagged every build.
+
 ## [0.3.71] - 2026-11-03
 
 ### Added
