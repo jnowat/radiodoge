@@ -106,6 +106,41 @@ pub fn is_permanent_rejection(err: &str) -> bool {
     .any(|k| e.contains(k))
 }
 
+/// A network already knows this transaction: treat as success for the sender.
+pub fn is_duplicate_broadcast_error(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("already in block chain")
+        || e.contains("already in the mempool")
+        || e.contains("already in mempool")
+        || e.contains("already known")
+        || e.contains("txn-already-known")
+        || e.contains("txn-already-in-mempool")
+        || e.contains("transaction already exists")
+        || e.contains("already exists")
+        || e.contains("duplicate transaction")
+}
+
+/// How a gateway should treat a broadcast attempt error (or success).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BroadcastErrorKind {
+    /// Mempool/chain already has it — ACK as success.
+    DuplicateAsSuccess,
+    /// The transaction itself was rejected — drop and NACK; do not retry.
+    Permanent,
+    /// Likely transient (network/RPC) — keep queued and retry.
+    Transient,
+}
+
+pub fn classify_broadcast_error(err: &str) -> BroadcastErrorKind {
+    if is_duplicate_broadcast_error(err) {
+        BroadcastErrorKind::DuplicateAsSuccess
+    } else if is_permanent_rejection(err) {
+        BroadcastErrorKind::Permanent
+    } else {
+        BroadcastErrorKind::Transient
+    }
+}
+
 /// Txids this sender has radioed recently (persisted by the caller as JSON).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecentSends {
@@ -205,6 +240,39 @@ mod tests {
         assert_eq!(RecentSends::from_json("garbage"), RecentSends::default());
         r.record("other", 1000 + 90_000);
         assert_eq!(r.recently_sent(ID, 1000 + 90_000), None);
+    }
+
+    #[test]
+    fn classify_broadcast_error_kinds() {
+        assert_eq!(
+            classify_broadcast_error("txn-already-in-mempool"),
+            BroadcastErrorKind::DuplicateAsSuccess
+        );
+        assert_eq!(
+            classify_broadcast_error("Missing inputs"),
+            BroadcastErrorKind::Permanent
+        );
+        assert_eq!(
+            classify_broadcast_error("connection timed out"),
+            BroadcastErrorKind::Transient
+        );
+        assert_eq!(
+            classify_broadcast_error("HTTP 503"),
+            BroadcastErrorKind::Transient
+        );
+    }
+
+    #[test]
+    fn outbox_must_not_retry_permanent_rejections() {
+        // Documents the gateway outbox contract: permanent => drop, not backoff.
+        assert!(matches!(
+            classify_broadcast_error("mandatory-script-verify-flag-failed"),
+            BroadcastErrorKind::Permanent
+        ));
+        assert!(matches!(
+            classify_broadcast_error("Transaction already exists in the mempool"),
+            BroadcastErrorKind::DuplicateAsSuccess
+        ));
     }
 
     #[test]
