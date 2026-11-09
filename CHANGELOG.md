@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.74] - 2026-11-03
+
+### Changed
+- Moved `is_incoming_doge_tx` into `radiodoge-core` (next to `IncomingPacket`) so the desktop notification guard is shared and unit-tested. Bare board ACKs (empty payload / no decode) still do not count as arrivals.
+### Added
+- 2 unit tests covering the ACK false-positive and the payload+decode requirement (163 workspace tests).
+
 ## [0.3.73] - 2026-11-03
 
 ### Changed
