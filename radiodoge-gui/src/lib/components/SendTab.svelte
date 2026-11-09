@@ -1,6 +1,6 @@
 <script lang="ts">
   import { errorMessage } from '$lib/errors';
-  import { looksLikeDogeAddress, parsePositiveDoge, isValidOptionalFee } from '$lib/dogeForm';
+  import { looksLikeDogeAddress, parsePositiveDoge, isValidOptionalFee, parsePayment } from '$lib/dogeForm';
   /**
    * Send tab — craft and broadcast a Dogecoin transaction over LoRa.
    */
@@ -272,12 +272,34 @@
     }
   }
 
+  /** Apply bare address or BIP21 URI text to the send form (paste / QR / Ctrl+V). */
+  function applyPaymentText(text: string) {
+    const parsed = parsePayment(text);
+    if (parsed) {
+      toAddress = parsed.address;
+      if (parsed.amount != null) amountDoge = String(parsed.amount);
+      if (parsed.label && !memo) memo = parsed.label;
+      return;
+    }
+    toAddress = text;
+  }
+
   async function pasteAddress() {
     try {
-      toAddress = await navigator.clipboard.readText();
+      applyPaymentText(await navigator.clipboard.readText());
     } catch {
       // No clipboard permission
     }
+  }
+
+  /** Ctrl+V / context-menu paste into the address box also accepts BIP21 URIs. */
+  function onAddressPaste(event: ClipboardEvent) {
+    const text = event.clipboardData?.getData('text');
+    if (!text) return;
+    const parsed = parsePayment(text);
+    if (!parsed) return; // let the browser paste raw text
+    event.preventDefault();
+    applyPaymentText(text);
   }
 
   // ── QR code scanning (image file → Rust rqrr decoder) ─────────────────────
@@ -351,6 +373,7 @@
         <input
           id="send-to-address"
           bind:value={toAddress}
+          onpaste={onAddressPaste}
           placeholder="DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L"
           class="input-doge"
           style="flex: 1; border-color: {toAddress && !isValidAddress() ? 'var(--doge-red)' : 'var(--doge-border)'};"
