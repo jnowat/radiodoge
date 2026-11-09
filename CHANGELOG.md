@@ -11,6 +11,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.90] - 2026-11-03
+
+### Added
+- Frontend `hintFor` / `friendlyMessage` mirror `radiodoge_core::errors` so GUI banners get the same next-step hints as the CLI (wired through `errorMessage`).
+### Tests
+- Unit coverage for hint matching and Hint: de-duplication.
+
 ## [0.3.89] - 2026-11-03
 
 ### Fixed
