@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.111 · Heltec V3 firmware v0.3.8*
+*App v0.3.112 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.111`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.112`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
@@ -493,3 +493,21 @@ quit | exit | q              Leave
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
 </div>
+
+## Meshtastic bridge (optional)
+
+With firmware **FW12 or newer**, the Mesh tab's bridge card and
+`radiodoge-cli meshtastic bridge --port COMx` can listen/send on Meshtastic
+LongFast through the board's volatile raw-LoRa mode (your saved RadioDoge
+radio settings are not rewritten).
+
+To exercise the same protocol paths **without a board**:
+
+```text
+radiodoge-cli meshtastic sim --rounds 2 --text "much wow"
+```
+
+That spins two in-process LongFast peers, ships a RadioDoge PING inside a
+Meshtastic PRIVATE_APP frame, and returns a text reply. It does not flash
+firmware, open serial, or touch the chain.
+
