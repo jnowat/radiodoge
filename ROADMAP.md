@@ -4,7 +4,7 @@
 
 **Much ambition. Very phases. Such plan. Wow.** 🐕
 
-*Current release: **v0.3.108** (app) · **v0.3.8** (Heltec V3 firmware)*
+*Current release: **v0.3.109** (app) · **v0.3.8** (Heltec V3 firmware)*
 
 [← Back to the README](README.md) · [User Manual](docs/USER_MANUAL.md) · [Changelog](CHANGELOG.md)
 
@@ -135,7 +135,7 @@ Rock-solid against real hardware, and now on your phone.
 Bridge RadioDoge with the existing Meshtastic community.
 
 - ✅ **Meshtastic packet encoding** — wrap RadioDoge payloads in Meshtastic protobuf so standard nodes can relay them (v0.3.23; CLI `meshtastic wrap/decode`)
-- ✅ **Node discovery** — `CMD_DISCOVER` (0x2E) broadcasts a PING that discovery-capable firmware ACKs after a random jitter; Mesh tab *Scan network* button and radial network map, `radiodoge-cli discover`. *Host surfaces RSSI/SNR from FW13+ ACK_SIGNAL (v0.3.108); plain 0x29 ACKs still lack signal.* (v0.3.36)
+- ✅ **Node discovery** — `CMD_DISCOVER` (0x2E) broadcasts a PING that discovery-capable firmware ACKs after a random jitter; Mesh tab *Scan network* button and radial network map, `radiodoge-cli discover`. *Host surfaces RSSI/SNR from FW13+ ACK_SIGNAL (v0.3.109); plain 0x29 ACKs still lack signal.* (v0.3.36)
 - 🔨 **Bridge mode** _(v0.3.25, awaiting hardware test)_ — firmware FW12 raw LoRa TX/RX (`0x2B`/`0x2C`/`0x2D`), `radiodoge-cli meshtastic bridge`, and a Mesh-tab bridge card hear and send on Meshtastic LongFast. Still open: transparent relaying inside `daemon`
 - ✅ **Multi-channel scanning** — hop across frequencies/SFs to reach different Meshtastic presets (v0.3.22)
 - ✅ **GPS location embedding** — POS: position broadcasts + neighbor positions (v0.3.19 desktop, v0.3.20 Android)
@@ -149,7 +149,7 @@ Bridge RadioDoge with the existing Meshtastic community.
 - 🔜 **Linux AppImage + macOS .dmg** in CI — Tauri already supports these targets
 - ✅ **WebAssembly packet inspector** — `crates/radiodoge-inspector`: paste hex, get framed and decoded packets in the browser, using the app's own framing code (protocol-only `radiodoge-core` build)
 - ✅ **Gateway dashboard (v0.3.17)** — `radiodoge-cli daemon --stats-file` writes live counters (packets, relayed-in, transactions in/broadcast/failed/repeats, ACKs, balance replies, per-node RSSI/hops, recent activity); the Settings tab shows them while the app's gateway daemon runs
-- ✅ **Multi-gateway dashboard** — aggregate several gateways' stats files in one view (v0.3.21); HTTP `radiodoge-cli fleet serve` for remote/local collectors (v0.3.108)
+- ✅ **Multi-gateway dashboard** — aggregate several gateways' stats files in one view (v0.3.21); HTTP `radiodoge-cli fleet serve` for remote/local collectors (v0.3.109)
 - 🔜 **Lightning over LoRa** — forward BOLT-11 invoices and HTLC state through the mesh
 
 ---
