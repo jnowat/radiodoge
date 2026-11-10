@@ -11,14 +11,34 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.109] - unreleased (draft #71)
+## [0.3.113] - unreleased (draft #71)
 
 ### Security
-- Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user 
-adiodoge, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+- Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
 
 ### Changed
-- Renumbered above default after v0.3.108 batch; firmware HTTP Basic auth still awaiting hardware validation.
+- Renumbered above default after v0.3.112 Meshtastic bridge-sim batch; firmware HTTP Basic auth still awaiting hardware validation.
+
+## [0.3.112] - 2026-11-09
+
+### Docs
+- PROTOCOL + USER_MANUAL: Meshtastic bridge raw commands (`0x2B`/`0x2C`/`0x2D`), PRIVATE_APP carriage, and the offline `meshtastic sim` runner; ROADMAP notes what still needs live boards.
+
+## [0.3.111] - 2026-11-09
+
+### Added
+- `radiodoge-cli meshtastic sim [--rounds N] [--text ...]`: offline bridge simulator exchanging RadioDoge PRIVATE_APP pings and Meshtastic text between two in-process LongFast radios (no serial, no board).
+
+## [0.3.110] - 2026-11-09
+
+### Added
+- End-to-end (no hardware) Meshtastic bridge suite: PING and balance-request bytes over PRIVATE_APP, listen-timeout miss, and text events that do not queue as app packets (	ests/end_to_end_meshtastic_bridge.rs).
+
+## [0.3.109] - 2026-11-09
+
+### Added
+- In-process **Meshtastic bridge simulator** (
+adiodoge_core::bridge): RawLink trait, SimulatedAir/SimulatedRadio, BridgeSession, and BridgeRelay exercise real wrap/decode/raw-profile paths with no hardware — text + RadioDoge PRIVATE_APP exchange, wrong-channel / profile-mismatch, TX NACK, RX-mode refusal, listen timeout, and bidirectional app-packet relay.
 
 ## [0.3.108] - 2026-11-09
 
