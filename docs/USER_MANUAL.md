@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.112 · Heltec V3 firmware v0.3.8*
+*App v0.3.113 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.112`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.113`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 

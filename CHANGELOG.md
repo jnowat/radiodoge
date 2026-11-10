@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.113] - unreleased (draft #71)
+
+### Security
+- Firmware: the web UI and REST API on the board's Wi-Fi access point now require HTTP Basic auth (user `radiodoge`, password = the AP password). Unauthenticated requests get 401. Replaces draft #40, carried forward onto the current base (FW13, offline signing branch not included). Not yet hardware-tested.
+
+### Changed
+- Renumbered above default after v0.3.112 Meshtastic bridge-sim batch; firmware HTTP Basic auth still awaiting hardware validation.
+
 ## [0.3.112] - 2026-11-09
 
 ### Docs
