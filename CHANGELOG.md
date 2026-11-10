@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.110] - 2026-11-09
+
+### Added
+- End-to-end (no hardware) Meshtastic bridge suite: PING and balance-request bytes over PRIVATE_APP, listen-timeout miss, and text events that do not queue as app packets (	ests/end_to_end_meshtastic_bridge.rs).
+
 ## [0.3.109] - 2026-11-09
 
 ### Added
