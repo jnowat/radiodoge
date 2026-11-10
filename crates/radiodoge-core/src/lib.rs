@@ -8,6 +8,7 @@
 //! - [`serial`] — cross-platform serial port management with async Tokio runtime
 //! - [`backend`] — chain data sources (Dogecoin Core RPC, BlockCypher, Blockbook) with fallback
 //! - [`spv`] — lightweight SPV header-chain and merkle-proof verification
+//! - [`fee_query`] - gateway fee-rate query/reply over LoRa (`FEE?` / `FEE:<koinus>`)
 //!
 //! This crate has **no Tauri dependency** — it is shared between:
 //! - `radiodoge-gui` (Tauri 2 desktop GUI)
@@ -23,6 +24,7 @@ pub mod backend;
 #[cfg(feature = "native")]
 pub mod bridge;
 pub mod errors;
+pub mod fee_query;
 #[cfg(feature = "native")]
 pub mod fleet;
 #[cfg(feature = "native")]

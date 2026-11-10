@@ -4,7 +4,7 @@
 
 **Everything you can do with the app — one tab at a time.**
 
-*App v0.3.112 · Heltec V3 firmware v0.3.8*
+*App v0.3.113 · Heltec V3 firmware v0.3.8*
 
 [← README](../README.md) · [Roadmap](../ROADMAP.md) · [Protocol reference](PROTOCOL.md)
 
@@ -101,7 +101,7 @@ On Windows and other desktop builds, clicking the window **X** hides RadioDoge t
 
 ### The footer
 
-The bottom status bar always shows the app version (`RadioDoge v0.3.112`), your connection state (🟢 with port,
+The bottom status bar always shows the app version (`RadioDoge v0.3.113`), your connection state (🟢 with port,
 node address, and ↑sent/↓received counters, or 🔴 Not connected), a **🐛 Debug Console** button, and the slogan
 *"such decentralize. wow 🐕."*
 
@@ -212,7 +212,10 @@ Open the **Send** tab (needs a connection *and* a loaded wallet).
 4. The **From** row shows your loaded wallet address, and a **Network fee (DOGE)** field appears. Leave it
    empty for the recommended fee — **0.01 DOGE per started kB**, so 0.01 DOGE for a typical transaction — or type
    your own. The total debit is `amount + fee`. If you imported an **offline UTXO snapshot**, the fee is required
-   (no rate can be fetched); use **Use 0.01** and check the spend preview against the snapshot balance.
+   (no rate can be fetched from the internet); use **Use 0.01**, or type a gateway node (e.g. `10.0.1`) and click
+   **Ask for fee rate** to get that gateway's rate over LoRa. The gateway's answer is unverified: the app floors it at
+   0.01 DOGE/kB, ignores anything above 10 DOGE/kB, and falls back to 0.01 DOGE/kB if no gateway answers. Either way,
+   check the spend preview against the snapshot balance.
 5. Click **🚀 Sign & Broadcast via Radio**. The button is disabled until you're connected, have a wallet, and
    both fields are valid; its tooltip tells you what's missing.
 
@@ -412,6 +415,7 @@ Your **recovery phrase is never written to disk** — back it up yourself.
 | `lora-ping -p <PORT> -t <a.b.c>` | Over-the-air ping; waits for the other board's ACK |
 | `message -p <PORT> -t <a.b.c> "<TEXT>" [-T <SECS>]` | Text message over LoRa (multipart when long) |
 | `lora-balance -p <PORT> -a <ADDR> [-g <a.b.c>]` | Balance from a LoRa gateway (any gateway by default) |
+| `lora-fee -p <PORT> -g <a.b.c> [-T <SECS>] [--json]` | Ask a gateway for its fee rate over LoRa (unverified; floored/capped locally, 0.01 DOGE/kB if no answer) |
 | `sign-tx -t <ADDR> -a <DOGE> -o <FILE> [--fee <DOGE>]` | Sign to a hex file without broadcasting (`RADIODOGE_WIF` or `RADIODOGE_MNEMONIC_FILE`) |
 | `send-tx-hex -p <PORT> -f <FILE> [-g <a.b.c>]` | Radio a pre-signed transaction to a gateway; waits for `TX_ACK` |
 | `daemon -p <PORT>` | Run as a gateway daemon |

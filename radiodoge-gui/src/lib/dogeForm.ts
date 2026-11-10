@@ -46,6 +46,30 @@ export function isValidOptionalFee(raw: string): boolean {
   return parseOptionalFeeDoge(raw).ok;
 }
 
+/** Serialized size of a P2PKH transaction (mirrors `wallet::p2pkh_tx_size`). */
+export function p2pkhTxSize(inputs: number, outputs: number): number {
+  const i = Math.max(1, Math.floor(inputs));
+  const o = Math.max(1, Math.floor(outputs));
+  return 10 + 148 * i + 34 * o;
+}
+
+/**
+ * Fee in DOGE for `sizeBytes` at `rateKoinusPerKb`, charged per started kB and
+ * never below 0.01 DOGE/kB (mirrors `fee_query::fee_koinus_for_size`).
+ * Returns null for a non-finite or negative rate.
+ */
+export function feeDogeFromRate(rateKoinusPerKb: number, sizeBytes: number): number | null {
+  if (!Number.isFinite(rateKoinusPerKb) || rateKoinusPerKb < 0) return null;
+  const rate = Math.max(1_000_000, Math.round(rateKoinusPerKb));
+  const kb = Math.max(1, Math.ceil(Math.max(0, sizeBytes) / 1000));
+  return (kb * rate) / 1e8;
+}
+
+/** Format a DOGE amount for the fee box (8 dp, trailing zeros trimmed). */
+export function formatFeeDoge(doge: number): string {
+  return doge.toFixed(8).replace(/\.?0+$/, '') || '0';
+}
+
 /** Default network fee suggested when signing from a UTXO snapshot (no rate fetch). */
 export const DEFAULT_OFFLINE_FEE_DOGE = 0.01;
 

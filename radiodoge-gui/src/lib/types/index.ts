@@ -256,6 +256,18 @@ export interface AddressBookEntry {
   notes?: string;       // Optional free-text notes
 }
 
+/** Result of the `lora_fee_rate` command (gateway fee-rate query over LoRa). */
+export interface LoraFeeQuote {
+  /** Gateway that answered, or null when nobody did. */
+  gateway: string | null;
+  /** Rate to sign with, koinus per started kB (already floored/capped locally). */
+  rateKoinusPerKb: number;
+  /** What the gateway actually reported, if anything (unverified). */
+  reportedKoinusPerKb: number | null;
+  source: 'gateway' | 'gatewayFloored' | 'fallback';
+  note: string;
+}
+
 /** Result of the `estimate_fee` command. */
 export interface FeeEstimate {
   feeDoge: number;

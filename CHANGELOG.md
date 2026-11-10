@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.113] - 2026-11-09
+
+### Added
+- **Gateway fee rates over LoRa**: an offline sender radios `FEE?` to a gateway and the gateway daemon answers `FEE:<koinus per kB>` from its chain backends (cached 120 s, one reply per node per 10 s, silent when it cannot fetch a rate). The client floors the unverified rate at 0.01 DOGE/kB, refuses anything above 10 DOGE/kB, and falls back to the offline default on silence. New `radiodoge_core::fee_query`, `radiodoge-cli lora-fee -p <PORT> -g <a.b.c> [--json]`, a Send-tab *Ask for fee rate* control in the offline-snapshot fee section, dashboard events for fee queries, and decoded `FEE:` messages. Uses plain `MESSAGE` text, so no firmware change. Awaiting a two-board hardware test.
+
+### Fixed
+- ROADMAP feature notes for discovery signal and fleet HTTP point back at v0.3.108, where they shipped, and the v0.3.109 changelog entry no longer has a stray carriage return in `radiodoge_core::bridge`.
+
 ## [0.3.112] - 2026-11-09
 
 ### Docs
@@ -29,8 +37,7 @@ _Waiting on hardware validation before merge: firmware REST route authentication
 ## [0.3.109] - 2026-11-09
 
 ### Added
-- In-process **Meshtastic bridge simulator** (
-adiodoge_core::bridge): RawLink trait, SimulatedAir/SimulatedRadio, BridgeSession, and BridgeRelay exercise real wrap/decode/raw-profile paths with no hardware — text + RadioDoge PRIVATE_APP exchange, wrong-channel / profile-mismatch, TX NACK, RX-mode refusal, listen timeout, and bidirectional app-packet relay.
+- In-process **Meshtastic bridge simulator** (`radiodoge_core::bridge`): RawLink trait, SimulatedAir/SimulatedRadio, BridgeSession, and BridgeRelay exercise real wrap/decode/raw-profile paths with no hardware — text + RadioDoge PRIVATE_APP exchange, wrong-channel / profile-mismatch, TX NACK, RX-mode refusal, listen timeout, and bidirectional app-packet relay.
 
 ## [0.3.108] - 2026-11-09
 

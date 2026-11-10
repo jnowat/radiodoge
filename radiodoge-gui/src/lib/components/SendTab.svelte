@@ -1,6 +1,6 @@
 <script lang="ts">
   import { errorMessage } from '$lib/errors';
-  import { looksLikeDogeAddress, parsePositiveDoge, isValidOptionalFee, isValidRequiredFee, parseRequiredFeeDoge, DEFAULT_OFFLINE_FEE_DOGE, offlineSpendPreview, parsePayment } from '$lib/dogeForm';
+  import { looksLikeDogeAddress, parsePositiveDoge, isValidOptionalFee, isValidRequiredFee, parseRequiredFeeDoge, DEFAULT_OFFLINE_FEE_DOGE, offlineSpendPreview, parsePayment, feeDogeFromRate, formatFeeDoge, p2pkhTxSize } from '$lib/dogeForm';
   /**
    * Send tab — craft and broadcast a Dogecoin transaction over LoRa.
    */
@@ -10,7 +10,7 @@
   import { onMount } from 'svelte';
   import { connection } from '$lib/stores/connection.svelte';
   import { wallet } from '$lib/stores/wallet.svelte';
-  import type { AddressBookEntry, FeeEstimate, IncomingPacket, ParsedPayment, SendOutcome } from '$lib/types';
+  import type { AddressBookEntry, FeeEstimate, IncomingPacket, LoraFeeQuote, ParsedPayment, SendOutcome } from '$lib/types';
   import { open } from '@tauri-apps/plugin-shell';
   import DogeSpinner from './DogeSpinner.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
@@ -209,6 +209,36 @@
   function useDefaultOfflineFee() {
     feeDoge = String(DEFAULT_OFFLINE_FEE_DOGE);
   }
+  // ── Gateway fee rate over LoRa (FEE? / FEE:<koinus>) ──
+  // Offline only: ask a gateway that has internet for its rate. The answer is
+  // unverified, so Rust floors/caps it; silence falls back to 0.01 DOGE/kB.
+  const FEE_GATEWAY_KEY = 'radiodoge.feeGateway';
+  let feeGateway = $state(
+    (typeof localStorage !== 'undefined' && localStorage.getItem(FEE_GATEWAY_KEY)) || '10.0.1'
+  );
+  let feeQuote = $state<LoraFeeQuote | null>(null);
+  let feeQuerying = $state(false);
+  let feeQueryError = $state<string | null>(null);
+
+  async function askGatewayFee() {
+    feeQuerying = true;
+    feeQueryError = null;
+    feeQuote = null;
+    try {
+      try { localStorage.setItem(FEE_GATEWAY_KEY, feeGateway.trim()); } catch { /* private mode */ }
+      const q = await invoke<LoraFeeQuote>('lora_fee_rate', { gateway: feeGateway.trim() });
+      feeQuote = q;
+      // Worst case every snapshot UTXO is spent, plus payment and change outputs.
+      const size = p2pkhTxSize(snapshot?.utxoCount ?? 1, 2);
+      const fee = feeDogeFromRate(q.rateKoinusPerKb, size);
+      if (fee != null) feeDoge = formatFeeDoge(fee);
+    } catch (e: unknown) {
+      feeQueryError = errorMessage(e);
+    } finally {
+      feeQuerying = false;
+    }
+  }
+
   function useNetworkFeeEstimate() {
     if (feeEstimate) {
       // Pin the live estimate into the field (8 dp matches chain koinus precision display).
@@ -679,6 +709,20 @@
             <button type="button" class="btn-ghost" style="margin-left: 6px; padding: 2px 8px; font-size: var(--fs-xs);" onclick={useDefaultOfflineFee}>Use {DEFAULT_OFFLINE_FEE_DOGE}</button>
           {/if}
         </p>
+        <div class="fee-gw-row">
+          <label for="fee-gateway">Ask gateway over LoRa</label>
+          <input id="fee-gateway" class="input-doge" bind:value={feeGateway} placeholder="10.0.1" style="max-width: 90px; font-family: var(--font-mono);" />
+          <button type="button" class="btn-ghost" style="padding: 2px 8px; font-size: var(--fs-xs);" onclick={askGatewayFee} disabled={feeQuerying || !connection.isConnected}>
+            {feeQuerying ? 'Asking…' : 'Ask for fee rate'}
+          </button>
+        </div>
+        {#if feeQuote}
+          <p class="fee-gw-note" class:fallback={feeQuote.source === 'fallback'} role="status">
+            {feeQuote.note}{feeQuote.gateway ? ` (gateway ${feeQuote.gateway})` : ''} Fee box set for up to {snapshot?.utxoCount ?? 1} input(s).
+          </p>
+        {:else if feeQueryError}
+          <p class="fee-gw-note fallback" role="alert">{feeQueryError}</p>
+        {/if}
         {#if offlinePreview && offlinePreview.fee != null && offlinePreview.amount != null && offlinePreview.total != null}
           <p style="margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-text);">
             Spend preview: {offlinePreview.amount.toFixed(8)} + {offlinePreview.fee.toFixed(8)} fee =
@@ -890,6 +934,9 @@
   .offline-snap { font-size: var(--fs-sm); color: var(--doge-muted); border: 1px solid rgba(245, 197, 24, 0.15); border-radius: 8px; padding: 8px 14px; }
   .offline-snap summary { cursor: pointer; color: var(--doge-text); }
   .snap-help { margin: 8px 0; font-size: var(--fs-xs); }
+  .fee-gw-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: var(--fs-xs); color: var(--doge-muted); }
+  .fee-gw-note { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--doge-text); }
+  .fee-gw-note.fallback { color: var(--doge-yellow); }
   .snap-row { display: flex; gap: 8px; }
   .snap-btn { padding: 6px 12px; font-size: var(--fs-sm); cursor: pointer; }
   .snap-status { margin: 8px 0 0; font-size: var(--fs-xs); }

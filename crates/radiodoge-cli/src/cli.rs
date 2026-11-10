@@ -168,6 +168,25 @@ pub(crate) enum Commands {
         timeout: u64,
     },
 
+    /// Ask a LoRa gateway for its fee rate (FEE? / FEE:<koinus>) for offline signing
+    ///
+    /// The reply is unverified: it is floored at 0.01 DOGE/kB, refused above 10 DOGE/kB,
+    /// and if no gateway answers the offline default (0.01 DOGE/kB) is printed instead.
+    ///
+    /// Example: radiodoge-cli lora-fee -p COM3 -g 10.0.1
+    LoraFee {
+        #[arg(short, long)]
+        port: String,
+        /// Gateway node to ask, e.g. 10.0.1 (boards only hand a MESSAGE addressed to them to their host)
+        #[arg(short, long)]
+        gateway: String,
+        #[arg(short = 'T', long, default_value_t = fee_query::DEFAULT_FEE_QUERY_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Print JSON (rateKoinusPerKb, reportedKoinusPerKb, source, gateway, note)
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Radio an already-signed transaction (hex file) to a gateway and wait for TX_ACK
     ///
     /// Example: radiodoge-cli send-tx-hex -p COM3 -f tx.hex -g 10.0.1

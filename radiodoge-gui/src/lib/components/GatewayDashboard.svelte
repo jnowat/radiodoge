@@ -13,6 +13,7 @@
   type EventKind =
     | 'txReceived' | 'txBroadcast' | 'txFailed' | 'ackSent' | 'ackFailed'
     | 'balanceRequest' | 'balanceReplied' | 'balanceFailed'
+    | 'feeRequest' | 'feeReplied' | 'feeFailed'
     | 'txQueued' | 'replyQueued' | 'replyForwarded' | 'expired';
   interface NodeTraffic { packets: number; transactions: number; lastSeen: number; lastRssi: number; lastHops: number }
   interface GatewayEvent { at: number; kind: EventKind; node: string; detail: string }
@@ -60,6 +61,9 @@
     balanceRequest: { icon: '🔎', label: 'Balance request', tone: 'var(--doge-blue)' },
     balanceReplied: { icon: '💰', label: 'Balance replied', tone: 'var(--doge-yellow)' },
     balanceFailed: { icon: '⚠️', label: 'Balance failed', tone: 'var(--doge-red)' },
+    feeRequest: { icon: '⛽', label: 'Fee-rate query', tone: 'var(--doge-blue)' },
+    feeReplied: { icon: '⛽', label: 'Fee rate replied', tone: 'var(--doge-yellow)' },
+    feeFailed: { icon: '⛽', label: 'Fee rate failed', tone: 'var(--doge-red)' },
     txQueued: { icon: '📦', label: 'Queued for retry', tone: 'var(--doge-yellow)' },
     replyQueued: { icon: '📦', label: 'Reply held for node', tone: 'var(--doge-yellow)' },
     replyForwarded: { icon: '📨', label: 'Held reply delivered', tone: 'var(--doge-neon)' },

@@ -34,7 +34,7 @@ use radiodoge_core::types::{
     NeighborEntry, NodeAddress, PortInfo, RadioStats, SendOutcome, TransactionRequest,
     TxHistoryEntry, WalletInfo,
 };
-use radiodoge_core::{radio, tx_reply, wallet};
+use radiodoge_core::{fee_query, radio, tx_reply, wallet};
 
 mod gateway;
 
@@ -815,6 +815,98 @@ async fn estimate_fee(
     wallet::estimate_fee(&from_address, amount_doge)
         .await
         .map_err(radiodoge_core::errors::friendly)
+}
+
+/// Ask a LoRa gateway for its fee rate (`FEE?` -> `FEE:<koinus>`) for offline
+/// signing. The reply is unverified, so the local floor/cap is applied
+/// (`fee_query::apply_local_bounds`); silence returns the offline default with
+/// `source: "fallback"` rather than an error, so the Send tab can keep its
+/// existing 0.01 DOGE suggestion. Desktop serial only for now.
+#[tauri::command]
+async fn lora_fee_rate(
+    gateway: String,
+    timeout_secs: Option<u64>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<LoraFeeQuote, String> {
+    if js_bridge_owns_port(&state).await {
+        return Err(
+            "Asking a gateway for its fee rate is desktop-only for now - enter the fee by hand (0.01 DOGE is the usual default)."
+                .to_string(),
+        );
+    }
+    if !state.serial.is_connected() {
+        return Err("Not connected to a Heltec device.".to_string());
+    }
+    let dst = parse_gateway_addr(&gateway)?;
+    let timeout = timeout_secs
+        .unwrap_or(fee_query::DEFAULT_FEE_QUERY_TIMEOUT_SECS)
+        .clamp(3, 120);
+    let mut rx = state.serial.subscribe_packets();
+    let src = state.serial.get_node_address().await;
+    let pkt = radio::build_message(&src, &dst, fee_query::FEE_QUERY_TEXT);
+    emit_debug_traffic(
+        &app,
+        "TX",
+        &hex::encode(&pkt),
+        "CMD_MESSAGE FEE? (fee-rate query)",
+    );
+    state
+        .serial
+        .send_raw(pkt)
+        .await
+        .map_err(radiodoge_core::errors::friendly)?;
+    let heard = tokio::time::timeout(Duration::from_secs(timeout), async {
+        while let Ok(p) = rx.recv().await {
+            if p.command != radio::CMD_MESSAGE {
+                continue;
+            }
+            let raw = String::from_utf8_lossy(&hex::decode(&p.payload_hex).unwrap_or_default())
+                .to_string();
+            if let Some(rate) = fee_query::find_fee_reply(&raw) {
+                return Some((p.source.to_display_string(), rate));
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten();
+    let choice = fee_query::apply_local_bounds(heard.as_ref().map(|h| h.1));
+    Ok(LoraFeeQuote {
+        gateway: heard.map(|h| h.0),
+        choice,
+    })
+}
+
+/// Result of [`lora_fee_rate`]: which gateway answered (if any) plus the bounded choice.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoraFeeQuote {
+    gateway: Option<String>,
+    #[serde(flatten)]
+    choice: fee_query::FeeRateChoice,
+}
+
+/// Parse a gateway node address typed in the UI ("10.0.1"); broadcast is
+/// refused because a board only hands a MESSAGE addressed to it to its host.
+fn parse_gateway_addr(s: &str) -> Result<NodeAddress, String> {
+    let bad = || format!("'{}' is not a node address like 10.0.1", s.trim());
+    let parts: Vec<u8> = s
+        .trim()
+        .split('.')
+        .map(|p| p.trim().parse::<u8>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| bad())?;
+    if parts.len() != 3 {
+        return Err(bad());
+    }
+    if parts == [255, 255, 255] {
+        return Err(
+            "Pick one gateway (e.g. 10.0.1) - a broadcast fee query is never answered.".to_string(),
+        );
+    }
+    Ok(NodeAddress::new(parts[0], parts[1], parts[2]))
 }
 
 /// v0.4.3 — Override the chain backend list for this session, e.g.
@@ -1744,6 +1836,7 @@ pub fn run() {
             import_mnemonic_wallet,
             get_balance,
             estimate_fee,
+            lora_fee_rate,
             verify_tx_inclusion,
             set_chain_backends,
             scan_qr_from_image,
@@ -1848,4 +1941,19 @@ pub fn run() {
                 });
             }
         })
+}
+
+#[cfg(test)]
+mod fee_query_tests {
+    use super::parse_gateway_addr;
+
+    #[test]
+    fn gateway_addr_parses_and_refuses_broadcast() {
+        let a = parse_gateway_addr(" 10.0.1 ").unwrap();
+        assert_eq!((a.region, a.community, a.node), (10, 0, 1));
+        assert!(parse_gateway_addr("255.255.255").is_err());
+        assert!(parse_gateway_addr("10.0").is_err());
+        assert!(parse_gateway_addr("10.0.300").is_err());
+        assert!(parse_gateway_addr("gateway").is_err());
+    }
 }

@@ -16,7 +16,7 @@ use radiodoge_core::serial::SerialManager;
 use radiodoge_core::store_forward::{parse_node, Outbox, PendingBroadcast};
 use radiodoge_core::tx_reply::{self, RecentSends, TxReply};
 use radiodoge_core::types::{IncomingPacket, NodeAddress};
-use radiodoge_core::{radio, spv, wallet};
+use radiodoge_core::{fee_query, radio, spv, wallet};
 
 mod cli;
 use cli::*;
@@ -128,6 +128,12 @@ async fn main() -> Result<()> {
             gateway,
             timeout,
         } => cmd_lora_balance(&port, &address, gateway.as_deref(), timeout).await,
+        Commands::LoraFee {
+            port,
+            gateway,
+            timeout,
+            json,
+        } => cmd_lora_fee(&port, &gateway, timeout, json).await,
         Commands::SendTxHex {
             port,
             file,
@@ -626,6 +632,67 @@ async fn cmd_lora_ping(port: &str, to: &str, timeout: u64) -> Result<()> {
             timeout
         ),
     }
+}
+
+/// Ask a gateway for its fee rate over LoRa (`FEE?` -> `FEE:<koinus>`), apply
+/// the local floor/cap, and fall back to the offline default on silence.
+async fn cmd_lora_fee(port: &str, gateway: &str, timeout: u64, json: bool) -> Result<()> {
+    let dst = parse_node_addr(gateway)?;
+    let manager = open_board(port).await?;
+    let mut rx = manager.subscribe_packets();
+    let src = manager.get_node_address().await;
+    manager
+        .send_raw(radio::build_message(&src, &dst, fee_query::FEE_QUERY_TEXT))
+        .await?;
+    if !json {
+        println!(
+            "⛽ Fee-rate query sent to gateway {} over LoRa; waiting up to {} s.",
+            dst.to_display_string(),
+            timeout
+        );
+    }
+    let reply = tokio::time::timeout(Duration::from_secs(timeout), async {
+        while let Ok(pkt) = rx.recv().await {
+            if pkt.command != radio::CMD_MESSAGE {
+                continue;
+            }
+            let raw = String::from_utf8_lossy(&hex::decode(&pkt.payload_hex).unwrap_or_default())
+                .to_string();
+            if let Some(rate) = fee_query::find_fee_reply(&raw) {
+                return Some((pkt.source.clone(), rate, signal_text(pkt.rssi, pkt.snr)));
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten();
+    manager.disconnect().await.ok();
+    let choice = fee_query::apply_local_bounds(reply.as_ref().map(|r| r.1));
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "gateway": reply.as_ref().map(|r| r.0.to_display_string()),
+                "reportedKoinusPerKb": choice.reported_koinus_per_kb,
+                "rateKoinusPerKb": choice.rate_koinus_per_kb,
+                "rateDogePerKb": choice.rate_koinus_per_kb as f64 / 1e8,
+                "source": choice.source,
+                "note": choice.note,
+            }))?
+        );
+    } else {
+        if let Some((gw, _, sig)) = &reply {
+            println!("Reply from {}{}", gw.to_display_string(), sig);
+        }
+        println!("{}", choice.note);
+        println!(
+            "Use: {:.8} DOGE per started kB  (e.g. radiodoge-cli sign-tx ... --fee {:.8} for a tx under 1 kB)",
+            choice.rate_koinus_per_kb as f64 / 1e8,
+            choice.rate_koinus_per_kb as f64 / 1e8
+        );
+    }
+    Ok(())
 }
 
 /// Request a balance from a gateway over LoRa.
