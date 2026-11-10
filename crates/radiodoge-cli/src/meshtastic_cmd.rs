@@ -144,10 +144,75 @@ pub(crate) async fn cmd_meshtastic_bridge(
     result
 }
 
+pub(crate) fn cmd_meshtastic_sim(rounds: u32, text: Option<String>) -> Result<()> {
+    use radiodoge_core::bridge::paired_longfast_relays;
+    use radiodoge_core::meshtastic::BridgeEvent;
+    use radiodoge_core::radio;
+    use radiodoge_core::types::NodeAddress;
+
+    let rounds = rounds.clamp(1, 20);
+    let (a, b) = paired_longfast_relays(0x5244_0001, 0x5244_0002);
+    a.listen(30).map_err(|e| anyhow::anyhow!("{e}"))?;
+    b.listen(30).map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!("🐕 Meshtastic bridge simulator (no hardware)");
+    println!(
+        "   LongFast peers !52440001 <-> !52440002, {} round(s)",
+        rounds
+    );
+
+    let src = NodeAddress::new(10, 0, 1);
+    let dst = NodeAddress::new(10, 0, 2);
+    for i in 1..=rounds {
+        let ping = radio::build_ping(&src, &dst);
+        a.forward_to_mesh(&ping)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut got = None;
+        for _ in 0..200 {
+            let _ = b.poll();
+            if let Some(p) = b.take_app_packet() {
+                got = Some(p);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let p = got.ok_or_else(|| anyhow::anyhow!("sim: peer B missed RadioDoge ping"))?;
+        println!(
+            "  [{i}] PRIVATE_APP ping  {} B  rssi={} snr={}  ok",
+            p.packet.len(),
+            p.rssi,
+            p.snr
+        );
+
+        let msg = text.clone().unwrap_or_else(|| format!("sim-round-{i}"));
+        b.session()
+            .send_text(&msg)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut saw = false;
+        for _ in 0..200 {
+            if let Some(ev) = a.poll() {
+                if matches!(ev, BridgeEvent::Text { .. }) {
+                    saw = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        if !saw {
+            anyhow::bail!("sim: peer A missed text reply");
+        }
+        println!("  [{i}] text reply ok: {msg}");
+    }
+    a.stop_listen().ok();
+    b.stop_listen().ok();
+    println!("✅ Simulator finished {rounds} round(s) with no hardware.");
+    Ok(())
+}
+
 pub(crate) fn cmd_meshtastic(cmd: MeshtasticCommands) -> Result<()> {
     use radiodoge_core::meshtastic as mt;
     match cmd {
         MeshtasticCommands::Bridge { .. } => unreachable!("bridge is async; dispatched in main"),
+        MeshtasticCommands::Sim { rounds, text } => return cmd_meshtastic_sim(rounds, text),
         MeshtasticCommands::Wrap {
             packet_hex,
             from,

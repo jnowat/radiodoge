@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.111] - 2026-11-09
+
+### Added
+- `radiodoge-cli meshtastic sim [--rounds N] [--text ...]`: offline bridge simulator exchanging RadioDoge PRIVATE_APP pings and Meshtastic text between two in-process LongFast radios (no serial, no board).
+
 ## [0.3.110] - 2026-11-09
 
 ### Added
