@@ -1410,6 +1410,16 @@ pub fn decode_payload(command: u8, payload: &[u8]) -> Option<String> {
                         return format!("💰 Balance: {:.8} DOGE", koinus as f64 / 1e8);
                     }
                 }
+                // Gateway fee-rate reply / query (see fee_query).
+                if let Some(rate) = crate::fee_query::parse_fee_reply(text) {
+                    return format!(
+                        "⛽ Gateway fee rate: {:.8} DOGE/kB (unverified)",
+                        rate as f64 / 1e8
+                    );
+                }
+                if crate::fee_query::is_fee_query(text) {
+                    return "⛽ Fee rate request".to_string();
+                }
                 // Shared GPS position: "POS:lat,lon[,acc]"
                 if let Some(pos) = crate::geo::Position::from_message(text) {
                     return pos.describe();

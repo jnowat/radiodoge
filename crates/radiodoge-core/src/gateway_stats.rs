@@ -36,6 +36,12 @@ pub enum GatewayEventKind {
     BalanceReplied,
     /// The balance lookup or reply failed.
     BalanceFailed,
+    /// A `FEE?` fee-rate query arrived.
+    FeeRequest,
+    /// A `FEE:<koinus>` fee-rate reply was radioed back.
+    FeeReplied,
+    /// The fee-rate lookup or reply failed.
+    FeeFailed,
     /// Broadcast failed for now; the transaction is held for retry (store-and-forward).
     TxQueued,
     /// A reply could not be sent; it is held until the node is heard again.
@@ -161,7 +167,7 @@ impl GatewayStats {
             BalanceFailed => self.balance_failures += 1,
             TxQueued => self.tx_queued += 1,
             ReplyForwarded => self.replies_forwarded += 1,
-            ReplyQueued | Expired => {}
+            ReplyQueued | Expired | FeeRequest | FeeReplied | FeeFailed => {}
         }
         self.events.insert(
             0,

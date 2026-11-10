@@ -251,9 +251,16 @@ real lengths so the stream stays aligned; neither yields a packet.
   The app strips the `RadioDoge ` prefix for display.
 - **`REQUEST_BALANCE` (`0x11`)** — payload is the ASCII Dogecoin address. A gateway replies with a `MESSAGE`
   containing `BAL:<koinus>`, which the app renders as `💰 Balance: N DOGE`.
+- **Fee-rate query** (`MESSAGE` text, no new command byte) — a sender radios `FEE?` to one gateway (a board
+  only hands a `MESSAGE` addressed to it to its host, so a broadcast query is never answered). The gateway
+  daemon answers `FEE:<koinus per started kB>` from its chain backends (cached 120 s, at most one reply per node
+  per 10 s, floored at 0.01 DOGE/kB, never above 10 DOGE/kB) and stays **silent** if it cannot fetch a rate.
+  The rate is **unverified**: the client floors it at 0.01 DOGE/kB, refuses anything above 10 DOGE/kB, and on
+  silence or refusal falls back to the offline default (0.01 DOGE/kB). See `radiodoge_core::fee_query`.
 - **Gateway acknowledgements** arrive as `MESSAGE` text:
   - `TX_ACK:<txid>` → `✅ TX confirmed: txid=…`
   - `BAL:<koinus>` → `💰 Balance: … DOGE`
+  - `FEE:<koinus>` → `⛽ Gateway fee rate: … DOGE/kB (unverified)`
 
 ---
 

@@ -19,6 +19,9 @@ use super::*;
 pub(crate) type SharedStats = Arc<std::sync::Mutex<GatewayStats>>;
 pub(crate) type SharedOutbox = Arc<std::sync::Mutex<Outbox>>;
 /// Transactions already broadcast this run: local txid → network txid.
+/// Gateway fee-rate cache and per-node reply limiter (see `radiodoge_core::fee_query`).
+pub(crate) type SharedFeeState =
+    Arc<std::sync::Mutex<(fee_query::FeeRateCache, fee_query::FeeReplyLimiter)>>;
 pub(crate) type SeenTxs = Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>;
 
 /// Write `contents` to `path` through a temporary file so a reader never sees half a file.
@@ -110,6 +113,13 @@ pub(crate) async fn cmd_daemon(
     let seen_txs: SeenTxs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let seen_for_outbox = Arc::clone(&seen_txs);
 
+    // Fee-rate queries (`FEE?`): one cached rate for everyone, and at most one
+    // reply per node every few seconds so a chatty node cannot hog the channel.
+    let fee_state: SharedFeeState = Arc::new(std::sync::Mutex::new((
+        fee_query::FeeRateCache::new(),
+        fee_query::FeeReplyLimiter::new(),
+    )));
+
     let on_packet = Arc::new(move |pkt: IncomingPacket| {
         log::info!(
             "PACKET  {} → {}  cmd=0x{:02X}  rssi={}{}{}  payload={}{}",
@@ -186,6 +196,20 @@ pub(crate) async fn cmd_daemon(
                     daemon_broadcast_and_ack(raw_hex, txid, mgr, source, seen, st, ob).await;
                 });
             }
+        }
+
+        // A fee-rate query: answer from the cache, or fetch then answer.
+        if pkt.command == radio::CMD_MESSAGE {
+            let text = String::from_utf8_lossy(&hex::decode(&pkt.payload_hex).unwrap_or_default())
+                .to_string();
+            handle_fee_query(
+                &text,
+                &pkt.source,
+                &fee_state,
+                &manager_for_ack,
+                &stats_for_packets,
+                &outbox_for_packets,
+            );
         }
 
         // When a balance request arrives, query the chain backends and send the result back.
@@ -607,6 +631,8 @@ pub(crate) fn reply_detail(text: &str) -> String {
             TxReply::Queued { txid } => format!("{} (queued)", txid),
             TxReply::Nack { txid, reason } => format!("{} (NACK: {})", txid, reason),
         }
+    } else if let Some(r) = fee_query::parse_fee_reply(text) {
+        format!("{:.8} DOGE/kB", r as f64 / 1e8)
     } else if let Some(k) = text
         .strip_prefix("BAL:")
         .and_then(|k| k.parse::<u64>().ok())
@@ -641,6 +667,83 @@ pub(crate) async fn daemon_send_tx_ack(
     {
         stats_record(stats, GatewayEventKind::AckFailed, source, "held for retry");
     }
+}
+
+/// Handle a MESSAGE that may be a `FEE?` query: ignore anything else, drop a
+/// rate-limited repeat, answer from the cache, or fetch a fresh rate and answer.
+pub(crate) fn handle_fee_query(
+    text: &str,
+    source: &NodeAddress,
+    fee_state: &SharedFeeState,
+    mgr: &Arc<SerialManager>,
+    stats: &SharedStats,
+    outbox: &SharedOutbox,
+) {
+    let node = source.to_display_string();
+    let action = match fee_state.lock() {
+        Ok(mut g) => {
+            let (cache, limiter) = &mut *g;
+            fee_query::gateway_fee_action(text, &node, unix_now(), cache, limiter)
+        }
+        Err(_) => return,
+    };
+    let reply = match action {
+        fee_query::GatewayFeeAction::NotAQuery => return,
+        fee_query::GatewayFeeAction::RateLimited => {
+            log::info!("GATEWAY  fee query from {} dropped (rate limited)", node);
+            return;
+        }
+        fee_query::GatewayFeeAction::Reply(t) => Some(t),
+        fee_query::GatewayFeeAction::FetchThenReply => None,
+    };
+    stats_record(stats, GatewayEventKind::FeeRequest, source, "");
+    log::info!("GATEWAY  fee-rate query from {}", node);
+    let mgr = Arc::clone(mgr);
+    let source = source.clone();
+    let st = Arc::clone(stats);
+    let ob = Arc::clone(outbox);
+    let fs = Arc::clone(fee_state);
+    tokio::spawn(async move {
+        let text = match reply {
+            Some(t) => t,
+            None => match daemon_fetch_fee_rate(&fs).await {
+                Ok(rate) => fee_query::format_fee_reply(rate),
+                Err(e) => {
+                    // Silence is the protocol's "no answer": the sender falls
+                    // back to its offline default rather than a guessed rate.
+                    log::warn!("GATEWAY  fee-rate fetch failed: {}", e);
+                    stats_record(&st, GatewayEventKind::FeeFailed, &source, e.to_string());
+                    return;
+                }
+            },
+        };
+        if !send_reply(&text, &mgr, &source, &st, &ob, GatewayEventKind::FeeReplied).await {
+            stats_record(
+                &st,
+                GatewayEventKind::FeeFailed,
+                &source,
+                "reply held for retry",
+            );
+        }
+    });
+}
+
+/// Fetch the network fee rate from the chain backends, floor it at the
+/// recommended rate, refuse an absurd one, and cache it.
+pub(crate) async fn daemon_fetch_fee_rate(fee_state: &SharedFeeState) -> Result<u64> {
+    let raw = radiodoge_core::backend::fetch_fee_rate().await?;
+    let rate = raw.max(fee_query::MIN_GATEWAY_FEE_RATE_KOINUS_PER_KB);
+    if rate > fee_query::MAX_GATEWAY_FEE_RATE_KOINUS_PER_KB {
+        anyhow::bail!(
+            "backend fee rate {} koinus/kB is above the {} cap - not radioed",
+            rate,
+            fee_query::MAX_GATEWAY_FEE_RATE_KOINUS_PER_KB
+        );
+    }
+    if let Ok(mut g) = fee_state.lock() {
+        g.0.put(rate, unix_now());
+    }
+    Ok(rate)
 }
 
 /// Fetch the balance for `address` from the chain backends and send it back to `source` via radio.
@@ -696,6 +799,12 @@ mod tests {
     use super::*;
     use radiodoge_core::gateway_stats::GatewayStats;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn reply_detail_shows_fee_rate() {
+        assert_eq!(reply_detail("FEE:2000000"), "0.02000000 DOGE/kB");
+        assert_eq!(reply_detail("FEE?"), "");
+    }
 
     #[test]
     fn write_atomic_replaces_destination() {

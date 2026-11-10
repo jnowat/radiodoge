@@ -11,6 +11,9 @@ import {
   offlineSpendPreview,
   parsePayment,
   formatPaymentUri,
+  p2pkhTxSize,
+  feeDogeFromRate,
+  formatFeeDoge,
 } from '../src/lib/dogeForm.ts';
 
 const ADDR = 'DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L';
@@ -128,4 +131,26 @@ test('offlineSpendPreview totals amount+fee against snapshot', () => {
   const missingFee = offlineSpendPreview(1, '', 5);
   assert.equal(missingFee.ok, false);
   assert.equal(missingFee.fee, null);
+});
+
+test('p2pkhTxSize mirrors the Rust estimate', () => {
+  assert.equal(p2pkhTxSize(1, 2), 226);
+  assert.equal(p2pkhTxSize(3, 2), 522);
+  assert.equal(p2pkhTxSize(0, 0), 192); // clamped to 1 in / 1 out
+});
+
+test('feeDogeFromRate charges per started kB with the 0.01 floor', () => {
+  assert.equal(feeDogeFromRate(2_000_000, 226), 0.02);
+  assert.equal(feeDogeFromRate(2_000_000, 1001), 0.04);
+  assert.equal(feeDogeFromRate(10, 226), 0.01);
+  assert.equal(feeDogeFromRate(0, 0), 0.01);
+  assert.equal(feeDogeFromRate(-1, 226), null);
+  assert.equal(feeDogeFromRate(Number.NaN, 226), null);
+});
+
+test('formatFeeDoge trims trailing zeros', () => {
+  assert.equal(formatFeeDoge(0.01), '0.01');
+  assert.equal(formatFeeDoge(10), '10');
+  assert.equal(formatFeeDoge(0.12345678), '0.12345678');
+  assert.equal(formatFeeDoge(0), '0');
 });
