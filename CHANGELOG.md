@@ -11,6 +11,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.112] - 2026-11-09
+
+### Docs
+- PROTOCOL + USER_MANUAL: Meshtastic bridge raw commands (`0x2B`/`0x2C`/`0x2D`), PRIVATE_APP carriage, and the offline `meshtastic sim` runner; ROADMAP notes what still needs live boards.
+
 ## [0.3.111] - 2026-11-09
 
 ### Added
