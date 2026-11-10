@@ -11,13 +11,28 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
-## [0.3.110] - 2026-11-09
+## [0.3.113] - 2026-11-09
 
 ### Added
 - **Gateway fee rates over LoRa**: an offline sender radios `FEE?` to a gateway and the gateway daemon answers `FEE:<koinus per kB>` from its chain backends (cached 120 s, one reply per node per 10 s, silent when it cannot fetch a rate). The client floors the unverified rate at 0.01 DOGE/kB, refuses anything above 10 DOGE/kB, and falls back to the offline default on silence. New `radiodoge_core::fee_query`, `radiodoge-cli lora-fee -p <PORT> -g <a.b.c> [--json]`, a Send-tab *Ask for fee rate* control in the offline-snapshot fee section, dashboard events for fee queries, and decoded `FEE:` messages. Uses plain `MESSAGE` text, so no firmware change. Awaiting a two-board hardware test.
 
 ### Fixed
 - ROADMAP feature notes for discovery signal and fleet HTTP point back at v0.3.108, where they shipped, and the v0.3.109 changelog entry no longer has a stray carriage return in `radiodoge_core::bridge`.
+
+## [0.3.112] - 2026-11-09
+
+### Docs
+- PROTOCOL + USER_MANUAL: Meshtastic bridge raw commands (`0x2B`/`0x2C`/`0x2D`), PRIVATE_APP carriage, and the offline `meshtastic sim` runner; ROADMAP notes what still needs live boards.
+
+## [0.3.111] - 2026-11-09
+
+### Added
+- `radiodoge-cli meshtastic sim [--rounds N] [--text ...]`: offline bridge simulator exchanging RadioDoge PRIVATE_APP pings and Meshtastic text between two in-process LongFast radios (no serial, no board).
+
+## [0.3.110] - 2026-11-09
+
+### Added
+- End-to-end (no hardware) Meshtastic bridge suite: PING and balance-request bytes over PRIVATE_APP, listen-timeout miss, and text events that do not queue as app packets (	ests/end_to_end_meshtastic_bridge.rs).
 
 ## [0.3.109] - 2026-11-09
 

@@ -397,6 +397,19 @@ pub(crate) enum MeshtasticCommands {
         #[command(flatten)]
         channel: ChannelArgs,
     },
+    /// Offline bridge simulator (no serial / no board): exchange PRIVATE_APP
+    /// RadioDoge packets and Meshtastic text between two in-process radios.
+    ///
+    /// Example: radiodoge-cli meshtastic sim --rounds 3
+    Sim {
+        /// How many ping/text rounds to run (1-20)
+        #[arg(long, default_value_t = 1)]
+        rounds: u32,
+        /// Optional text payload for the reply leg
+        #[arg(long)]
+        text: Option<String>,
+    },
+
     /// Bridge mode: listen to (and optionally send on) a Meshtastic channel
     /// through the board's raw LoRa mode. Needs firmware v0.4.4 (FW12).
     ///

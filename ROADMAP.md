@@ -4,7 +4,7 @@
 
 **Much ambition. Very phases. Such plan. Wow.** 🐕
 
-*Current release: **v0.3.110** (app) · **v0.3.8** (Heltec V3 firmware)*
+*Current release: **v0.3.113** (app) · **v0.3.8** (Heltec V3 firmware)*
 
 [← Back to the README](README.md) · [User Manual](docs/USER_MANUAL.md) · [Changelog](CHANGELOG.md)
 
@@ -126,7 +126,7 @@ Rock-solid against real hardware, and now on your phone.
   length so they are self-delimiting on a byte stream, and transmissions wait for `TxDone` instead of being
   aborted by the main loop. The host splits a payload over 192 bytes into frames and sends them one at a time,
   waiting for the board to acknowledge each, gated on the board reporting `FW11` or newer
-- ✅ **Fee estimation** — with no explicit fee, the desktop app, mobile send and CLI pay the configured chain backends' current rate (Core `estimatesmartfee`, BlockCypher, Blockbook) per started kB, floored at the recommended 0.01 DOGE/kB (also the fallback) and capped at 10 DOGE; `radiodoge-cli fee` shows it. Offline senders can ask a gateway for its rate over LoRa (`FEE?` → `FEE:<koinus>`; `radiodoge-cli lora-fee`, Send tab *Ask for fee rate*), bounded locally and falling back to 0.01 DOGE/kB (v0.3.110; awaiting hardware test).
+- ✅ **Fee estimation** — with no explicit fee, the desktop app, mobile send and CLI pay the configured chain backends' current rate (Core `estimatesmartfee`, BlockCypher, Blockbook) per started kB, floored at the recommended 0.01 DOGE/kB (also the fallback) and capped at 10 DOGE; `radiodoge-cli fee` shows it. Offline senders can ask a gateway for its rate over LoRa (`FEE?` → `FEE:<koinus>`; `radiodoge-cli lora-fee`, Send tab *Ask for fee rate*), bounded locally and falling back to 0.01 DOGE/kB (v0.3.113; awaiting hardware test).
 
 ---
 
@@ -136,7 +136,7 @@ Bridge RadioDoge with the existing Meshtastic community.
 
 - ✅ **Meshtastic packet encoding** — wrap RadioDoge payloads in Meshtastic protobuf so standard nodes can relay them (v0.3.23; CLI `meshtastic wrap/decode`)
 - ✅ **Node discovery** — `CMD_DISCOVER` (0x2E) broadcasts a PING that discovery-capable firmware ACKs after a random jitter; Mesh tab *Scan network* button and radial network map, `radiodoge-cli discover`. *Host surfaces RSSI/SNR from FW13+ ACK_SIGNAL (v0.3.108); plain 0x29 ACKs still lack signal.* (v0.3.36)
-- 🔨 **Bridge mode** _(v0.3.25, awaiting hardware test)_ — firmware FW12 raw LoRa TX/RX (`0x2B`/`0x2C`/`0x2D`), `radiodoge-cli meshtastic bridge`, and a Mesh-tab bridge card hear and send on Meshtastic LongFast. Still open: transparent relaying inside `daemon`
+- 🔨 **Bridge mode** _(v0.3.25, awaiting hardware test; offline sim in v0.3.109–v0.3.112)_ — firmware FW12 raw LoRa TX/RX (`0x2B`/`0x2C`/`0x2D`), `radiodoge-cli meshtastic bridge`, and a Mesh-tab bridge card hear and send on Meshtastic LongFast. Still open: transparent relaying inside `daemon`
 - ✅ **Multi-channel scanning** — hop across frequencies/SFs to reach different Meshtastic presets (v0.3.22)
 - ✅ **GPS location embedding** — POS: position broadcasts + neighbor positions (v0.3.19 desktop, v0.3.20 Android)
 - ✅ **Store-and-forward (v0.3.18)** — the gateway queues transactions it cannot broadcast (internet down) and retries them for 48 h, persisting the queue with `--outbox-file`; replies the board would not take are re-sent when the node is next heard. Still open: holding *node-to-node* messages for an absent destination (needs a firmware-side cache)

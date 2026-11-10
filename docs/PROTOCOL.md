@@ -315,3 +315,33 @@ The firmware's compile-time LoRa configuration (identical on V2 and V3):
 *Such protocol. Very framing. Much wow.* 🐕🌙
 
 </div>
+
+## Meshtastic bridge (FW12+ raw LoRa)
+
+RadioDoge can share a channel with Meshtastic LongFast without changing the
+board's saved RadioDoge radio settings. Firmware **FW12+** adds:
+
+| CMD | Name | Role |
+|-----|------|------|
+| `0x2B` | `CMD_RAW_TX` | Host → board: transmit one raw LoRa frame on an explicit profile |
+| `0x2C` | `CMD_RAW_RX_MODE` | Enter/leave volatile raw receive (auto-exits on timeout) |
+| `0x2D` | `CMD_RAW_RX` | Board → host: one overheard raw frame + RSSI/SNR |
+
+App packets ride Meshtastic **PRIVATE_APP** (portnum 256) via
+`radiodoge_core::meshtastic::wrap_radiodoge` / `bridge_decode`. Plain chat uses
+TEXT_MESSAGE_APP (portnum 1).
+
+### Offline simulator
+
+`radiodoge_core::bridge` provides an in-process `SimulatedAir` + `BridgeSession` /
+`BridgeRelay` that exercise the same wrap/decode/profile paths with **no serial
+and no board**. CLI entry point:
+
+```text
+radiodoge-cli meshtastic sim --rounds 3
+```
+
+Hardware validation is still required before treating on-air bridge mode as
+production-ready; the simulator covers framing, channel mismatch, timeouts, and
+bidirectional app-packet relay only.
+

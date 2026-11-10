@@ -1,6 +1,6 @@
 [package]
 name = "radiodoge-gui"
-version = "0.3.110"
+version = "0.3.113"
 description = "RadioDoge — Wireless P2P Dogecoin Over LoRa (Tauri 2 GUI)"
 authors = ["RadioDoge Contributors"]
 license = "MIT"
