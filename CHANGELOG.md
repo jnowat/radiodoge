@@ -11,6 +11,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Waiting on hardware validation before merge: firmware REST route authentication (#71, which replaces #40)._
 
+## [0.3.109] - 2026-11-09
+
+### Added
+- In-process **Meshtastic bridge simulator** (
+adiodoge_core::bridge): RawLink trait, SimulatedAir/SimulatedRadio, BridgeSession, and BridgeRelay exercise real wrap/decode/raw-profile paths with no hardware — text + RadioDoge PRIVATE_APP exchange, wrong-channel / profile-mismatch, TX NACK, RX-mode refusal, listen timeout, and bidirectional app-packet relay.
+
 ## [0.3.108] - 2026-11-09
 
 ### Added

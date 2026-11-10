@@ -20,6 +20,8 @@
 
 #[cfg(feature = "native")]
 pub mod backend;
+#[cfg(feature = "native")]
+pub mod bridge;
 pub mod errors;
 #[cfg(feature = "native")]
 pub mod fleet;
